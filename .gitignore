@@ -1,0 +1,6 @@
+nyawa
+*.db
+*.db-wal
+*.db-shm
+/tmp/gocache/
+/tmp/gopath/
