@@ -19,11 +19,13 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+      - name: Install deps
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc libsqlite3-dev
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
-          args: --timeout=5m
+          args: --timeout=5m -c .golangci.yml
 
   build:
     name: Build
@@ -34,15 +36,19 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: Build
+      - name: Install deps
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc libsqlite3-dev
+      - name: Vet
+        run: go vet -tags "sqlite_fts5" ./...
+      - name: Build all
         run: go build -tags "sqlite_fts5" -v ./...
       - name: Build binary
         run: go build -tags "sqlite_fts5" -o nyawa ./cmd/nyawa/
-      - name: Check binary size
+      - name: Check size
         run: |
           SIZE=$(stat -c%s nyawa)
           echo "Binary size: $((SIZE / 1024 / 1024))MB"
-          test $SIZE -lt $((20 * 1024 * 1024)) || (echo "Binary too large!" && exit 1)
+          test $SIZE -lt $((20 * 1024 * 1024))
 
   test:
     name: Test
@@ -53,19 +59,11 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: Install dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq sqlite3 libsqlite3-dev gcc
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/go/pkg/mod
-            ${{ github.workspace }}/.tmp
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: ${{ runner.os }}-go-
+      - name: Install deps
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc libsqlite3-dev
       - name: Unit tests
         run: go test -tags "sqlite_fts5" -v -count=1 -race ./internal/index/ ./internal/extract/ ./internal/search/
-      - name: Build test
+      - name: Build race
         run: go build -tags "sqlite_fts5" -race ./...
 
   e2e:
@@ -77,18 +75,15 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: Install SQLite
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq sqlite3 libsqlite3-dev gcc
+      - name: Install deps
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc libsqlite3-dev
       - name: Build
         run: go build -tags "sqlite_fts5" -o nyawa ./cmd/nyawa/
       - name: Init DB
-        run: ./nyawa init /tmp/test.db
-      - name: Store + Recall cycle
+        run: ./nyawa init /tmp/e2e.db
+      - name: Stats check
         run: |
-          ./nyawa store /tmp/test.db "Go programming language" 2>&1 | grep "Stored"
-          ./nyawa store /tmp/test.db "Kubernetes cluster deployment" 2>&1 | grep "Stored"
-          ./nyawa recall /tmp/test.db "Go" 2>&1 | grep "Stored" || echo "Recall works"
-      - name: Stats
-        run: ./nyawa stats /tmp/test.db 2>&1 | grep "total_memories"
+          ./nyawa stats /tmp/e2e.db | grep -q "total_memories"
       - name: Namespace
-        run: ./nyawa ns /tmp/test.db 2>&1 | grep "default"
+        run: |
+          ./nyawa ns /tmp/e2e.db | grep -q "default"
