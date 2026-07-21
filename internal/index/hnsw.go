@@ -1,16 +1,14 @@
 package index
 
 import (
+	"encoding/json"
 	"math"
 	"math/rand"
+	"os"
 	"sync"
 )
 
-type HNSWConfig struct {
-	M, Mmax, EfConstruction, EfSearch int
-	ML                               float64
-	Dim                              int
-}
+type HNSWConfig struct{ M, Mmax, EfConstruction, EfSearch int; ML float64; Dim int }
 
 func DefaultHNSWConfig(dim int) HNSWConfig {
 	m := 16
@@ -57,9 +55,7 @@ func (h *HNSW) Insert(id string, vec []float32) {
 	curr := h.entryPoint
 	for l := h.maxLevel; l > level; l-- { curr = h.searchLayer(vec, curr, 1, l)[0] }
 	for l := level; l >= 0; l-- {
-		ef := h.config.EfConstruction
-		if l == 0 { ef = h.config.EfConstruction }
-		candidates := h.searchLayer(vec, curr, ef, l)
+		candidates := h.searchLayer(vec, curr, h.config.EfConstruction, l)
 		neighbors := candidates
 		if len(neighbors) > h.config.M { neighbors = neighbors[:h.config.M] }
 		for _, nID := range neighbors {
@@ -85,9 +81,7 @@ func (h *HNSW) Search(query []float32, topK int) []SearchResult {
 	for l := h.maxLevel; l > 0; l-- { curr = h.searchLayer(query, curr, 1, l)[0] }
 	candidates := h.searchLayer(query, curr, ef, 0)
 	results := make([]SearchResult, 0, len(candidates))
-	for _, id := range candidates {
-		results = append(results, SearchResult{ID: id, Distance: h.distance(query, h.nodes[id].Vec)})
-	}
+	for _, id := range candidates { results = append(results, SearchResult{ID: id, Distance: h.distance(query, h.nodes[id].Vec)}) }
 	for i := 0; i < len(results); i++ {
 		for j := i + 1; j < len(results); j++ {
 			if results[j].Distance < results[i].Distance { results[i], results[j] = results[j], results[i] }
@@ -97,10 +91,9 @@ func (h *HNSW) Search(query []float32, topK int) []SearchResult {
 	return results
 }
 
-func (h *HNSW) searchLayer(q []float32, entry string, ef int, layer int) []string {
+func (h *HNSW) searchLayer(q []float32, entry string, ef, layer int) []string {
 	visited := make(map[string]bool)
-	candidates := newMinHeap()
-	results := newMaxHeap()
+	candidates, results := newMinHeap(), newMaxHeap()
 	dist := h.distance(q, h.nodes[entry].Vec)
 	candidates.push(candidate{id: entry, dist: dist})
 	results.push(candidate{id: entry, dist: dist})
@@ -165,6 +158,37 @@ func (h *HNSW) Delete(id string) {
 }
 
 func (h *HNSW) Size() int { h.mu.RLock(); defer h.mu.RUnlock(); return len(h.nodes) }
+
+func (h *HNSW) Save(path string) error {
+	h.mu.RLock(); defer h.mu.RUnlock()
+	b, err := json.Marshal(struct {
+		EntryPoint string                         `json:"ep"`
+		MaxLevel   int                            `json:"ml"`
+		Config     HNSWConfig                     `json:"c"`
+		Nodes      map[string]*Node               `json:"ns"`
+		Graph      []map[string]map[string]float64 `json:"g"`
+	}{h.entryPoint, h.maxLevel, h.config, h.nodes, h.graph})
+	if err != nil { return err }
+	return os.WriteFile(path, b, 0644)
+}
+
+func (h *HNSW) Load(path string) error {
+	h.mu.Lock(); defer h.mu.Unlock()
+	b, err := os.ReadFile(path)
+	if err != nil { return err }
+	var data struct {
+		EntryPoint string                         `json:"ep"`
+		MaxLevel   int                            `json:"ml"`
+		Config     HNSWConfig                     `json:"c"`
+		Nodes      map[string]*Node               `json:"ns"`
+		Graph      []map[string]map[string]float64 `json:"g"`
+	}
+	if err := json.Unmarshal(b, &data); err != nil { return err }
+	h.entryPoint = data.EntryPoint; h.maxLevel = data.MaxLevel; h.config = data.Config
+	h.nodes = data.Nodes; h.graph = data.Graph
+	h.rng = rand.New(rand.NewSource(42))
+	return nil
+}
 
 type candidate struct{ id string; dist float64 }
 
