@@ -13,51 +13,51 @@
 
 <p align="center">
   <strong>Offline-First AI Memory Engine</strong><br>
-  <em>Beri AI-mu ingatan yang bertahan tanpa cloud, tanpa Docker, tanpa vector database.</em>
+  <em>Give your AI a memory that lasts no cloud, no Docker, no vector database required.</em>
 </p>
 
 <p align="center">
-  <b>Bahasa Indonesia:</b> <i>"nyawa" = soul, spirit, life karena memory adalah jiwa dari intelligence.</i>
+  <i>"nyawa" means "soul" or "spirit" in Indonesian because memory is the soul of intelligence.</i>
 </p>
 
 <br>
 
 ---
 
-## Kenapa Nyawa?
+## Why Nyawa?
 
-Kebanyakan AI memory tools butuh:
-- Docker & Kubernetes
-- Vector database terpisah (Pinecone, Qdrant, Weaviate)
-- Cloud API / GPU
-- Ratusan MB dependency
+Most AI memory tools require:
+- Docker and Kubernetes
+- External vector databases (Pinecone, Qdrant, Weaviate)
+- Cloud APIs / GPU
+- Hundreds of MB of dependencies
 
-**Nyawa berbeda:**
-- **Single 14MB binary** cukup `go build` langsung jadi
-- **Zero dependencies** cukup SQLite
-- **100% offline** semua data di lokal
-- **Cepat** search 11ms, store 22 mem/detik
+**Nyawa is different:**
+- **Single 14MB binary** go build and you are done
+- **Zero dependencies** just SQLite
+- **100% offline** all data stays local
+- **Fast** 11ms search, 22 mems/sec throughput
 
-> "Nyawa is what happens when you ask 'what's the simplest thing that could work?' and refuse to add anything else."
-
----
-
-## Fitur Unggulan
-
-| Fitur | Apa yang Dilakukan | Teknologi |
-|-------|-------------------|-----------|
-| Hybrid Search | Semantic + keyword digabung dengan RRF fusion | HNSW (Go murni) + SQLite FTS5 |
-| Entity Graph | Ekstrak otomatis People, Tech, URLs, Locations | 18 regex patterns, zero LLM |
-| Dream Cycle | Maintenance 6 fase clean up, dedup, link, prioritaskan | Background goroutine |
-| Web Dashboard | UI real-time untuk store, search, browse, delete | Go HTTP handler, Chart.js |
-| Namespace | Isolasi memori per konteks | SQLite namespace column |
-| Time-Travel | Lihat masa lalu query memori pada tanggal tertentu | Superseded_at tracking |
-| Batch Import | Import ribuan memori dari JSON | Bulk insert |
-| MCP Protocol | Integrasi dengan AI agent manapun | MCP server built-in |
+> "Nyawa is what happens when you ask what the simplest thing that could work is and refuse to add anything else."
 
 ---
 
-## Quick Start (30 detik)
+## Features at a Glance
+
+| Feature | What It Does | Powered By |
+|---------|-------------|------------|
+| Hybrid Search | Semantic + keyword fused via RRF | HNSW (pure Go) + SQLite FTS5 |
+| Entity Graph | Auto-extract People, Tech, URLs, Locations | 18 regex patterns, zero LLM |
+| Dream Cycle | 6-phase autonomous memory maintenance | Background goroutine |
+| Web Dashboard | Real-time UI for store, search, browse, delete | Go HTTP handler + Chart.js |
+| Namespaces | Isolate memories by context | SQLite namespace column |
+| Time-Travel | Query memories as they existed at any date | Superseded_at tracking |
+| Batch Import | Import thousands of memories from JSON | Bulk insert |
+| MCP Protocol | Plug into any AI agent | Built-in MCP server |
+
+---
+
+## Quick Start (30 seconds)
 
 ```bash
 # 1. Clone and build
@@ -65,69 +65,68 @@ git clone https://github.com/rezkyauliapratama/nyawa.git
 cd nyawa
 make build
 
-# 2. Init database
+# 2. Initialize database
 ./nyawa init /tmp/nyawa.db
 
-# 3. Simpan memori
+# 3. Store memories
 ./nyawa store /tmp/nyawa.db "Go backend with PostgreSQL running on GKE"
 ./nyawa store /tmp/nyawa.db "Team decided to use microservices architecture"
-./nyawa store /tmp/nyawa.db "Deploy ke production pake GitHub Actions"
+./nyawa store /tmp/nyawa.db "Deploying to production via GitHub Actions"
 
-# 4. Cari secara semantic
+# 4. Semantic search
 ./nyawa recall /tmp/nyawa.db "infrastructure architecture"
 
-# 5. Dashboard!
+# 5. Launch the dashboard!
 ./nyawa serve /tmp/nyawa.db
-# Buka http://localhost:3300/dashboard
+# Open http://localhost:3300/dashboard
 ```
 
-**Hasil search:**
+**Search results:**
 ```
 #1 [0.9214] Team decided to use microservices architecture
 #2 [0.8732] Go backend with PostgreSQL running on GKE
-#3 [0.6541] Deploy ke production pake GitHub Actions
+#3 [0.6541] Deploying to production via GitHub Actions
 ```
 
 ---
 
 ## Performance
 
-| Metric | Nyawa | Alternatif (Qdrant + Docker) |
+| Metric | Nyawa | Alternative (Qdrant + Docker) |
 |--------|-------|------------------------------|
 | **Binary size** | **14 MB** | ~2 GB (Docker image) |
 | **Dependencies** | **0** (SQLite built-in) | Docker, Python, grpc, ... |
-| **Search latency** | **~11 ms** | ~5-20 ms (+ network) |
-| **Store throughput** | **22 mem/detik** | ~100 mem/detik (batch) |
+| **Search latency** | **~11 ms** | ~5-20 ms (+ network overhead) |
+| **Store throughput** | **22 mems/sec** | ~100 mems/sec (batched) |
 | **Memory per memory** | **~1.5 KB** | ~2-10 KB |
-| **Cold start** | **~2 detik** (load DB) | ~30 detik (start container) |
-| **Offline support** | **Native** | Butuh network |
+| **Cold start** | **~2 sec** (load DB) | ~30 sec (container start) |
+| **Offline support** | **Native** | Requires network |
 
 ---
 
 ## Dream Cycle
 
-Nyawa punya Dream Cycle proses background yang merawat memori secara mandiri:
+Nyawa runs a Dream Cycle a background process that maintains memory automatically:
 
 ```
 Dream Cycle running every 1h...
- [1/6] Evict      -> Hapus memori stale (>90d, jarang diakses)
- [2/6] Contra     -> Deteksi kontradiksi (suka vs tidak suka)
+ [1/6] Evict      -> Soft-delete stale memories (>90d, low access)
+ [2/6] Contra     -> Detect contradictions (like vs dislike)
  [3/6] Dedup      -> Merge near-duplicates (>92% overlap)
- [4/6] Link       -> Perkuat koneksi entity yang sering co-occur
- [5/6] Prioritize -> Boost memori populer, decay yang diabaikan
- [6/6] Snapshot   -> Kompres memori lama jadi ringkasan
+ [4/6] Link       -> Strengthen co-occurring entity connections
+ [5/6] Prioritize -> Boost popular memories, decay neglected ones
+ [6/6] Snapshot   -> Compress old memories into summaries
 ```
 
-Tanpa LLM. Tanpa API. Semua algorithmic 100% gratis dan private.
+No LLM calls. No API bills. All algorithmic 100% free and private.
 
 ---
 
-## Installasi
+## Installation
 
-### Linux / macOS
+### From source
 
 ```bash
-# Dari source (recommended)
 git clone https://github.com/rezkyauliapratama/nyawa.git
 cd nyawa && make build
 sudo make install   # -> /usr/local/bin/nyawa
@@ -135,35 +134,37 @@ sudo make install   # -> /usr/local/bin/nyawa
 
 ### Pre-built binary
 
-Download dari [Releases](https://github.com/rezkyauliapratama/nyawa/releases):
+Download from [Releases](https://github.com/rezkyauliapratama/nyawa/releases):
 
 ```bash
 curl -L https://github.com/rezkyauliapratama/nyawa/releases/latest/download/nyawa-linux-amd64.gz | gunzip > nyawa
 chmod +x ./nyawa
 ```
 
+> Requirements: Go 1.23+, gcc (for SQLite CGO)
+
 ---
 
 ## CLI Reference
 
-| Perintah | Fungsi |
-|----------|--------|
-| `nyawa init <db>` | Init database baru |
-| `nyawa store <db> <content>` | Simpan memori |
+| Command | Description |
+|---------|-------------|
+| `nyawa init <db>` | Initialize a new database |
+| `nyawa store <db> <content>` | Store a memory |
 | `nyawa recall <db> <query>` | Semantic search |
-| `nyawa import <db> <file.json>` | Batch import dari JSON |
-| `nyawa stats <db>` | Statistik engine |
+| `nyawa import <db> <file.json>` | Batch import from JSON |
+| `nyawa stats <db>` | Engine statistics |
 | `nyawa ns <db>` | List namespaces |
-| `nyawa serve <db>` | Start server + dashboard |
+| `nyawa serve <db>` | Start HTTP server + dashboard |
 | `nyawa mcp <db>` | Start MCP server |
-| `nyawa dream <db>` | Manual Dream Cycle |
-| `nyawa archive <db> <out>` | Archive memori lama |
-| `nyawa version` | Cek versi |
+| `nyawa dream <db>` | Run Dream Cycle manually |
+| `nyawa archive <db> <out>` | Archive old memories |
+| `nyawa version` | Check version |
 
-### API Endpoints
+### REST API
 
 ```
-POST   /v1/memories          Store memory
+POST   /v1/memories          Store a memory
 POST   /v1/memories/batch    Batch store
 GET    /v1/memories          List (paginated)
 GET    /v1/memories/:id      Get by ID
@@ -172,13 +173,13 @@ POST   /v1/recall            Search (query, namespace, time_travel)
 GET    /v1/stats             Statistics
 GET    /v1/health            Health check
 GET    /v1/namespaces        List namespaces
-DELETE /v1/forget/:id        Forget memory
+DELETE /v1/forget/:id        Forget a memory
 GET    /dashboard            Web dashboard
 ```
 
 ---
 
-## Arsitektur
+## Architecture
 
 ```
 +----------------------------------------------------------+
@@ -194,7 +195,7 @@ GET    /dashboard            Web dashboard
 |                    |  RRF Fusion |                        |
 |                    +-------------+                        |
 +----------------------------------------------------------+
-|                    Dream Cycle (bg)                       |
+|                    Dream Cycle (background)               |
 |            Evict -> Contra -> Dedup -> Link -> Prio -> Snap|
 +----------------------------------------------------------+
 |                    Embedder Chain                         |
@@ -209,20 +210,20 @@ GET    /dashboard            Web dashboard
 
 ## Roadmap
 
-| Fase | Status | Fitur |
-|------|--------|-------|
-| Phase 1 | Selesai | SQLite, FTS5, RRF, CLI, HTTP API, MCP |
-| Phase 2 | Selesai | HNSW, BGE embedder, entity extraction |
-| Phase 3 | Selesai | Entity graph, Dream Cycle |
-| Phase 4 | Selesai | Namespaces, time-travel, archival, dashboard |
-| Phase 5 | Coming | Metrics (Prometheus), auth, TLS, rate limiting |
+| Phase | Status | Features |
+|-------|--------|----------|
+| Phase 1 | Done | SQLite, FTS5, RRF, CLI, HTTP API, MCP |
+| Phase 2 | Done | HNSW, BGE embedder, entity extraction |
+| Phase 3 | Done | Entity graph, Dream Cycle |
+| Phase 4 | Done | Namespaces, time-travel, archival, dashboard |
+| Phase 5 | Coming | Prometheus metrics, auth, TLS, rate limiting |
 
 ---
 
 ## Testing
 
 ```bash
-# Unit tests + race detection
+# Unit tests with race detection
 make test
 
 # E2E test suite
@@ -231,22 +232,22 @@ make test-e2e
 # Build check
 make build
 
-# All in one
+# All checks before commit
 make commit
 ```
 
 ---
 
-## Kontribusi
+## Contributing
 
-Nyawa open-source dan welcoming! Lihat [CONTRIBUTING.md](CONTRIBUTING.md) untuk panduan.
+Nyawa is open source and welcoming! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-```
-1. Fork repository
-2. Buat branch: git checkout -b feat/keren-banget
-3. Commit: git commit -m 'feat: tambah fitur keren'
-4. Push: git push origin feat/keren-banget
-5. Buka Pull Request
+```bash
+1. Fork the repository
+2. Create a branch: git checkout -b feat/awesome-feature
+3. Commit: git commit -m feat add awesome feature
+4. Push: git push origin feat/awesome-feature
+5. Open a Pull Request
 ```
 
 ---
@@ -258,7 +259,7 @@ MIT (c) [Rezky Aulia Pratama](https://github.com/rezkyauliapratama)
 ---
 
 <p align="center">
-  <sub>Dibuat dengan hati pake <a href="https://go.dev/">Go</a> karena kadang solusi paling cerdas adalah yang paling sederhana.</sub>
+  <sub>Built with love in <a href="https://go.dev/">Go</a> because sometimes the smartest solution is the simplest one.</sub>
   <br>
   <sub>14MB | 11ms search | Dream Cycle | Zero LLM</sub>
 </p>
