@@ -122,6 +122,7 @@ func (s *Server) tools() []toolDefinition {
 
 func (s *Server) Run() error {
 	log.Println("Nyawa MCP server started (stdio)")
+	log.SetOutput(os.Stderr)
 	for s.reader.Scan() {
 		line := s.reader.Text()
 		if line == "" { continue }
@@ -136,6 +137,10 @@ func (s *Server) Run() error {
 }
 
 func (s *Server) handleRequest(req jsonRPCRequest) {
+	// Skip JSON-RPC notifications (no id) — never respond
+	if req.ID == nil {
+		return
+	}
 	switch req.Method {
 	case "initialize":
 		s.handleInitialize(req)
@@ -168,20 +173,14 @@ type callParams struct {
 func (s *Server) handleToolCall(req jsonRPCRequest) {
 	var params callParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		s.writeError(req.ID, -32602, "Invalid params")
-		return
+		s.writeError(req.ID, -32602, "Invalid params"); return
 	}
 	switch params.Name {
-	case "nyawa_store":
-		s.handleStore(req.ID, params.Arguments)
-	case "nyawa_recall":
-		s.handleRecall(req.ID, params.Arguments)
-	case "nyawa_stats":
-		s.handleStats(req.ID)
-	case "nyawa_forget":
-		s.handleForget(req.ID, params.Arguments)
-	default:
-		s.writeError(req.ID, -32601, fmt.Sprintf("Unknown tool: %s", params.Name))
+	case "nyawa_store":  s.handleStore(req.ID, params.Arguments)
+	case "nyawa_recall": s.handleRecall(req.ID, params.Arguments)
+	case "nyawa_stats":  s.handleStats(req.ID)
+	case "nyawa_forget": s.handleForget(req.ID, params.Arguments)
+	default: s.writeError(req.ID, -32601, fmt.Sprintf("Unknown tool: %s", params.Name))
 	}
 }
 
@@ -228,14 +227,11 @@ func (s *Server) handleRecall(id any, raw json.RawMessage) {
 	}
 	limit := int(args.Limit)
 	if limit <= 0 { limit = 10 }
-
-	q := types.StoreQuery{QueryText: args.Query, Namespace: args.Namespace, Limit: limit}
-	results, err := s.pipeline.Search(q)
+	results, err := s.pipeline.Search(types.StoreQuery{QueryText: args.Query, Namespace: args.Namespace, Limit: limit})
 	if err != nil {
 		s.writeError(id, -32603, fmt.Sprintf("search failed: %v", err)); return
 	}
 	defer s.pipeline.ReleaseResults(results)
-
 	type resultItem struct {
 		ID, Content, Type, Namespace, CreatedAt string
 		Score                                  float64
@@ -253,9 +249,7 @@ func (s *Server) handleRecall(id any, raw json.RawMessage) {
 
 func (s *Server) handleStats(id any) {
 	stats, err := s.store.Stats()
-	if err != nil {
-		s.writeError(id, -32603, fmt.Sprintf("stats failed: %v", err)); return
-	}
+	if err != nil { s.writeError(id, -32603, fmt.Sprintf("stats failed: %v", err)); return }
 	s.writeResult(id, stats)
 }
 
