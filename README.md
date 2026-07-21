@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>🧠 Nyawa</h1>
+  <h1>Nyawa</h1>
   <p><strong>Offline-First AI Memory Engine</strong></p>
   <p>
     <a href="https://github.com/rezkyauliapratama/nyawa/actions"><img src="https://img.shields.io/github/actions/workflow/status/rezkyauliapratama/nyawa/go-test.yml?branch=main&label=CI&logo=github" alt="CI"></a>
@@ -10,14 +10,14 @@
     <a href="https://github.com/rezkyauliapratama/nyawa/stargazers"><img src="https://img.shields.io/github/stars/rezkyauliapratama/nyawa?style=flat&logo=github" alt="Stars"></a>
   </p>
   <p>
-    <b>Indonesian</b> backu2014 <i>"nyawa" means "soul" or "spirit"</i>
+    <b>Indonesian</b> - <i>"nyawa" means "soul" or "spirit"</i>
   </p>
   <br>
 </div>
 
 ---
 
-**Nyawa** is a portable, offline-first memory engine for AI agents. It stores, searches, and maintains memories using hybrid search (semantic + keyword), entity graph traversal, and a proactive "Dream Cycle" that consolidates knowledge while idle.
+**Nyawa** is a portable, offline-first memory engine for AI agents. It stores, searches, and maintains memories using hybrid search (semantic + keyword), entity graph traversal, and a proactive Dream Cycle that consolidates knowledge while idle.
 
 > **Key Philosophy:** Zero external dependencies. No Docker. No external vector databases. Just a single 14MB Go binary with SQLite.
 
@@ -47,3 +47,25 @@ make build
 ./nyawa serve /tmp/nyawa.db
 # Open http://localhost:3300/dashboard
 ```
+
+---
+
+## Features
+
+### Hybrid Search
+Combines semantic (HNSW vector index) and keyword (SQLite FTS5) search with Reciprocal Rank Fusion (RRF) for best-in-class recall.
+
+### Entity Graph
+Automatically extracts entities (people, technologies, URLs) from memories and builds a traversable knowledge graph.
+
+### Dream Cycle
+Six-phase automatic memory maintenance that runs in the background: Evict, Contradiction, Dedup, Link, Prioritize, Snapshot.
+
+### Web Dashboard
+Built-in dashboard at /dashboard with stats, search, browse, and delete. No frontend framework needed.
+
+### Namespace Isolation
+Organize memories into isolated namespaces (backend, infra, personal).
+
+### Time-Travel Queries
+Query memories as they existed at any point in time.

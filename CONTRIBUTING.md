@@ -29,7 +29,7 @@ Thank you for your interest! Nyawa is an offline-first AI memory engine, and eve
 ## Code Style
 
 - Follow standard Go conventions (`gofmt -s`)
-- Organize imports: std backu2192 external backu2192 internal
+- Organize imports: std -> external -> internal
 - Use `_` for unused parameters instead of commenting them out
 - Prefer `sync.Pool` for hot-path allocations
 - Use `types.SearchConfig` for pipeline tuning parameters
@@ -38,20 +38,20 @@ Thank you for your interest! Nyawa is an offline-first AI memory engine, and eve
 ## Project Structure
 
 ```
-cmd/nyawa/          — CLI entry point
+cmd/nyawa/          - CLI entry point
 internal/
-  dream/            — Dream Cycle (memory maintenance)
-  embedder/         — Embedding (BGE, Ollama, priority chain)
-  extract/          — Entity and type extraction
-  graph/            — Entity graph (nodes, edges, traversal)
-  index/            — HNSW vector index
-  mcp/              — MCP protocol server
-  pool/             — Memory pools
-  search/           — Search pipeline (RRF, FTS5, post-processing)
-  security/         — Content security filter
-  server/           — HTTP API server + dashboard
-  store/            — SQLite store
-  types/            — Shared types
+  dream/            - Dream Cycle (memory maintenance)
+  embedder/         - Embedding (BGE, Ollama, priority chain)
+  extract/          - Entity and type extraction
+  graph/            - Entity graph (nodes, edges, traversal)
+  index/            - HNSW vector index
+  mcp/              - MCP protocol server
+  pool/             - Memory pools
+  search/           - Search pipeline (RRF, FTS5, post-processing)
+  security/         - Content security filter
+  server/           - HTTP API server + dashboard
+  store/            - SQLite store
+  types/            - Shared types
 ```
 
 ## Testing
