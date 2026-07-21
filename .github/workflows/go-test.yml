@@ -8,6 +8,7 @@ on:
 
 env:
   GO_VERSION: '1.23'
+  CGO_ENABLED: '1'
 
 jobs:
   build:
@@ -20,16 +21,21 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - name: Install SQLite
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc libsqlite3-dev
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc libsqlite3-dev pkg-config
+      - name: Download modules
+        run: go mod download
       - name: Build all packages
-        run: go build -tags "sqlite_fts5" ./...
+        run: go build -tags "sqlite_fts5" -v ./...
       - name: Build binary
-        run: go build -tags "sqlite_fts5" -o nyawa ./cmd/nyawa/
+        run: go build -tags "sqlite_fts5" -v -o nyawa ./cmd/nyawa/
       - name: Check binary size
         run: |
           SIZE=$(stat -c%s nyawa)
           echo "Binary size: $((SIZE / 1024 / 1024))MB"
           test $SIZE -lt $((20 * 1024 * 1024))
+          echo "Size OK"
 
   test:
     name: Unit Tests
@@ -41,7 +47,11 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - name: Install SQLite
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc libsqlite3-dev
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc libsqlite3-dev pkg-config
+      - name: Download modules
+        run: go mod download
       - name: Run tests
         run: go test -tags "sqlite_fts5" -v -count=1 -race ./internal/index/ ./internal/extract/ ./internal/search/
       - name: Build race
@@ -57,16 +67,16 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
       - name: Install SQLite
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc libsqlite3-dev
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc libsqlite3-dev pkg-config
       - name: Build
-        run: go build -tags "sqlite_fts5" -o nyawa ./cmd/nyawa/
+        run: go build -tags "sqlite_fts5" -v -o nyawa ./cmd/nyawa/
       - name: Init DB
         run: ./nyawa init /tmp/smoke.db
       - name: Check stats
         run: |
-          ./nyawa stats /tmp/smoke.db | grep -q "total_memories"
-          echo "Stats OK"
+          ./nyawa stats /tmp/smoke.db | grep "total_memories" && echo "Stats OK"
       - name: Check namespace
         run: |
-          ./nyawa ns /tmp/smoke.db | grep -q "default"
-          echo "Namespace OK"
+          ./nyawa ns /tmp/smoke.db | grep "default" && echo "Namespace OK"
