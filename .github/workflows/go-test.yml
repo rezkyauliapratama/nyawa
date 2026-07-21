@@ -57,8 +57,8 @@ jobs:
       - name: Build race
         run: go build -tags "sqlite_fts5" -race ./...
 
-  smoke:
-    name: Smoke Test
+  e2e:
+    name: E2E
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -73,10 +73,10 @@ jobs:
       - name: Build
         run: go build -tags "sqlite_fts5" -v -o nyawa ./cmd/nyawa/
       - name: Init DB
-        run: ./nyawa init /tmp/smoke.db
+        run: ./nyawa init /tmp/e2e.db
       - name: Check stats
         run: |
-          ./nyawa stats /tmp/smoke.db | grep "total_memories" && echo "Stats OK"
+          ./nyawa stats /tmp/e2e.db | grep -q "total_memories" && echo "Stats OK"
       - name: Check namespace
         run: |
-          ./nyawa ns /tmp/smoke.db | grep "default" && echo "Namespace OK"
+          ./nyawa ns /tmp/e2e.db | grep -q "default" && echo "Namespace OK"
