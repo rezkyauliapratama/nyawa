@@ -1,3 +1,5 @@
+// Package mcp implements a Model Context Protocol server for Nyawa.
+// Runs over stdio using JSON-RPC 2.0.
 package mcp
 
 import (
@@ -8,18 +10,27 @@ import (
 	"os"
 	"time"
 
+	"github.com/rezkyauliapratama/nyawa/internal/search"
 	"github.com/rezkyauliapratama/nyawa/internal/store"
 	"github.com/rezkyauliapratama/nyawa/internal/types"
 )
 
+// Server is the MCP tool server for Nyawa.
 type Server struct {
-	store  *store.Store
-	reader *bufio.Scanner
-	writer *json.Encoder
+	store    *store.Store
+	pipeline *search.Pipeline
+	reader   *bufio.Scanner
+	writer   *json.Encoder
 }
 
-func NewServer(st *store.Store) *Server {
-	return &Server{store: st, reader: bufio.NewScanner(os.Stdin), writer: json.NewEncoder(os.Stdout)}
+// NewServer creates an MCP server backed by the given store and pipeline.
+func NewServer(st *store.Store, p *search.Pipeline) *Server {
+	return &Server{
+		store:    st,
+		pipeline: p,
+		reader:   bufio.NewScanner(os.Stdin),
+		writer:   json.NewEncoder(os.Stdout),
+	}
 }
 
 type jsonRPCRequest struct {
@@ -30,10 +41,10 @@ type jsonRPCRequest struct {
 }
 
 type jsonRPCResponse struct {
-	JSONRPC string     `json:"jsonrpc"`
-	ID      any        `json:"id"`
-	Result  any        `json:"result,omitempty"`
-	Error   *rpcError  `json:"error,omitempty"`
+	JSONRPC string   `json:"jsonrpc"`
+	ID      any      `json:"id"`
+	Result  any      `json:"result,omitempty"`
+	Error   *rpcError `json:"error,omitempty"`
 }
 
 type rpcError struct {
@@ -61,31 +72,51 @@ type propertySchema struct {
 
 func (s *Server) tools() []toolDefinition {
 	return []toolDefinition{
-		{Name: "nyawa_store", Description: "Store a new memory. Returns the memory ID and classification status.",
-			InputSchema: inputSchema{Type: "object",
+		{
+			Name:        "nyawa_store",
+			Description: "Store a new memory with content, optional namespace (default: 'default'), and optional type (note, insight, decision, fact, etc). Returns the memory ID.",
+			InputSchema: inputSchema{
+				Type: "object",
 				Properties: map[string]propertySchema{
 					"content":   {Type: "string", Description: "Memory content to store"},
 					"namespace": {Type: "string", Description: "Namespace (default: 'default')"},
 					"type":      {Type: "string", Description: "Memory type: decision, insight, procedure, fact, preference, context, note, event, reference", Enum: []string{"decision", "insight", "procedure", "fact", "preference", "context", "note", "event", "reference"}},
 				},
 				Required: []string{"content"},
-			}},
-		{Name: "nyawa_recall", Description: "Search memories by query. Uses FTS5 keyword search, falls back gracefully if vector embedder unavailable.",
-			InputSchema: inputSchema{Type: "object",
+			},
+		},
+		{
+			Name:        "nyawa_recall",
+			Description: "Semantic search across memories. Uses hybrid search (vector + FTS5 + RRF). Returns ranked results with relevance scores.",
+			InputSchema: inputSchema{
+				Type: "object",
 				Properties: map[string]propertySchema{
 					"query":     {Type: "string", Description: "Natural language search query"},
-					"namespace": {Type: "string", Description: "Namespace filter"},
-					"limit":     {Type: "string", Description: "Max results (default: 10)"},
+					"namespace": {Type: "string", Description: "Namespace filter (optional)"},
+					"limit":     {Type: "number", Description: "Max results (default: 10)"},
 				},
 				Required: []string{"query"},
-			}},
-		{Name: "nyawa_stats", Description: "Get memory statistics: total memories, pinned count, FTS5 index size.",
-			InputSchema: inputSchema{Type: "object", Properties: map[string]propertySchema{}}},
-		{Name: "nyawa_forget", Description: "Soft-delete a memory by ID. Sets superseded_at timestamp.",
-			InputSchema: inputSchema{Type: "object",
-				Properties: map[string]propertySchema{"id": {Type: "string", Description: "Memory ID to delete"}},
-				Required:   []string{"id"},
-			}},
+			},
+		},
+		{
+			Name:        "nyawa_stats",
+			Description: "Get memory statistics: total memories per namespace, pinned count, FTS5 index size, entity graph size.",
+			InputSchema: inputSchema{
+				Type:       "object",
+				Properties: map[string]propertySchema{},
+			},
+		},
+		{
+			Name:        "nyawa_forget",
+			Description: "Soft-delete a memory by its ID. The memory is marked as superseded and excluded from search results.",
+			InputSchema: inputSchema{
+				Type: "object",
+				Properties: map[string]propertySchema{
+					"id": {Type: "string", Description: "Memory ID to delete (e.g. mem_1234567890)"},
+				},
+				Required: []string{"id"},
+			},
+		},
 	}
 }
 
@@ -93,12 +124,10 @@ func (s *Server) Run() error {
 	log.Println("Nyawa MCP server started (stdio)")
 	for s.reader.Scan() {
 		line := s.reader.Text()
-		if line == "" {
-			continue
-		}
+		if line == "" { continue }
 		var req jsonRPCRequest
 		if err := json.Unmarshal([]byte(line), &req); err != nil {
-			s.writeError(nil, -32700, "Parse error")
+			s.writeError(nil, -32700, "Parse error: invalid JSON")
 			continue
 		}
 		s.handleRequest(req)
@@ -109,14 +138,26 @@ func (s *Server) Run() error {
 func (s *Server) handleRequest(req jsonRPCRequest) {
 	switch req.Method {
 	case "initialize":
-		s.writeResult(req.ID, map[string]any{"protocolVersion": "2025-03-26", "capabilities": map[string]any{"tools": map[string]bool{"listChanged": false}}, "serverInfo": map[string]string{"name": "nyawa", "version": "0.3.0"}})
+		s.handleInitialize(req)
 	case "tools/list":
-		s.writeResult(req.ID, map[string]any{"tools": s.tools()})
+		s.handleToolList(req)
 	case "tools/call":
 		s.handleToolCall(req)
 	default:
 		s.writeError(req.ID, -32601, fmt.Sprintf("Method not found: %s", req.Method))
 	}
+}
+
+func (s *Server) handleInitialize(req jsonRPCRequest) {
+	s.writeResult(req.ID, map[string]any{
+		"protocolVersion": "2025-03-26",
+		"capabilities":    map[string]any{"tools": map[string]bool{"listChanged": false}},
+		"serverInfo":      map[string]string{"name": "nyawa", "version": "0.9.0"},
+	})
+}
+
+func (s *Server) handleToolList(req jsonRPCRequest) {
+	s.writeResult(req.ID, map[string]any{"tools": s.tools()})
 }
 
 type callParams struct {
@@ -127,14 +168,20 @@ type callParams struct {
 func (s *Server) handleToolCall(req jsonRPCRequest) {
 	var params callParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		s.writeError(req.ID, -32602, "Invalid params"); return
+		s.writeError(req.ID, -32602, "Invalid params")
+		return
 	}
 	switch params.Name {
-	case "nyawa_store": s.handleStore(req.ID, params.Arguments)
-	case "nyawa_recall": s.handleRecall(req.ID, params.Arguments)
-	case "nyawa_stats": s.handleStats(req.ID)
-	case "nyawa_forget": s.handleForget(req.ID, params.Arguments)
-	default: s.writeError(req.ID, -32601, fmt.Sprintf("Unknown tool: %s", params.Name))
+	case "nyawa_store":
+		s.handleStore(req.ID, params.Arguments)
+	case "nyawa_recall":
+		s.handleRecall(req.ID, params.Arguments)
+	case "nyawa_stats":
+		s.handleStats(req.ID)
+	case "nyawa_forget":
+		s.handleForget(req.ID, params.Arguments)
+	default:
+		s.writeError(req.ID, -32601, fmt.Sprintf("Unknown tool: %s", params.Name))
 	}
 }
 
@@ -146,54 +193,62 @@ type storeArgs struct {
 
 func (s *Server) handleStore(id any, raw json.RawMessage) {
 	var args storeArgs
-	if err := json.Unmarshal(raw, &args); err != nil || args.Content == "" {
-		s.writeError(id, -32602, "Invalid or missing content"); return
+	if err := json.Unmarshal(raw, &args); err != nil {
+		s.writeError(id, -32602, "Invalid arguments"); return
 	}
-	if args.Namespace == "" {
-		args.Namespace = "default"
+	if args.Content == "" {
+		s.writeError(id, -32602, "content required"); return
 	}
+	if args.Namespace == "" { args.Namespace = "default" }
 	memType := types.MemoryType(args.Type)
-	if memType == "" {
-		memType = types.TypeNote
-	}
+	if memType == "" { memType = types.TypeNote }
 	memID := fmt.Sprintf("mem_%d", time.Now().UnixNano())
-	mem := &types.Memory{ID: memID, Content: args.Content, Type: memType, Namespace: args.Namespace, CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	if err := s.store.InsertMemory(mem); err != nil {
+	if err := s.store.InsertMemory(&types.Memory{
+		ID: memID, Content: args.Content, Type: memType,
+		Namespace: args.Namespace, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}); err != nil {
 		s.writeError(id, -32603, fmt.Sprintf("store failed: %v", err)); return
 	}
 	s.writeResult(id, map[string]any{"id": memID, "content": args.Content, "type": string(memType), "status": "stored"})
 }
 
 type recallArgs struct {
-	Query     string `json:"query"`
-	Namespace string `json:"namespace"`
-	Limit     int    `json:"limit"`
+	Query     string  `json:"query"`
+	Namespace string  `json:"namespace"`
+	Limit     float64 `json:"limit"`
 }
 
 func (s *Server) handleRecall(id any, raw json.RawMessage) {
 	var args recallArgs
-	if err := json.Unmarshal(raw, &args); err != nil || args.Query == "" {
-		s.writeError(id, -32602, "Invalid or missing query"); return
+	if err := json.Unmarshal(raw, &args); err != nil {
+		s.writeError(id, -32602, "Invalid arguments"); return
 	}
-	if args.Limit <= 0 {
-		args.Limit = 10
+	if args.Query == "" {
+		s.writeError(id, -32602, "query required"); return
 	}
-	ftsIDs, err := s.store.FTS5Search(args.Query, args.Limit*3, args.Namespace)
+	limit := int(args.Limit)
+	if limit <= 0 { limit = 10 }
+
+	q := types.StoreQuery{QueryText: args.Query, Namespace: args.Namespace, Limit: limit}
+	results, err := s.pipeline.Search(q)
 	if err != nil {
 		s.writeError(id, -32603, fmt.Sprintf("search failed: %v", err)); return
 	}
-	memories, err := s.store.GetMemoriesByIDs(ftsIDs)
-	if err != nil {
-		s.writeError(id, -32603, fmt.Sprintf("get memories failed: %v", err)); return
-	}
+	defer s.pipeline.ReleaseResults(results)
+
 	type resultItem struct {
 		ID, Content, Type, Namespace, CreatedAt string
+		Score                                  float64
 	}
-	results := make([]resultItem, 0, len(memories))
-	for _, m := range memories {
-		results = append(results, resultItem{ID: m.ID, Content: m.Content, Type: string(m.Type), Namespace: m.Namespace, CreatedAt: m.CreatedAt.Format(time.RFC3339)})
+	items := make([]resultItem, 0, len(results))
+	for _, r := range results {
+		items = append(items, resultItem{
+			ID: r.ID, Content: r.Content, Type: string(r.Type),
+			Namespace: r.Namespace, Score: r.Score,
+			CreatedAt: r.CreatedAt.Format(time.RFC3339),
+		})
 	}
-	s.writeResult(id, map[string]any{"results": results, "count": len(results)})
+	s.writeResult(id, map[string]any{"results": items, "count": len(items)})
 }
 
 func (s *Server) handleStats(id any) {
@@ -204,11 +259,14 @@ func (s *Server) handleStats(id any) {
 	s.writeResult(id, stats)
 }
 
-type forgetArgs struct{ ID string }
+type forgetArgs struct{ ID string `json:"id"` }
 
 func (s *Server) handleForget(id any, raw json.RawMessage) {
 	var args forgetArgs
-	if err := json.Unmarshal(raw, &args); err != nil || args.ID == "" {
+	if err := json.Unmarshal(raw, &args); err != nil {
+		s.writeError(id, -32602, "Invalid arguments"); return
+	}
+	if args.ID == "" {
 		s.writeError(id, -32602, "id required"); return
 	}
 	if err := s.store.DeleteMemory(args.ID); err != nil {
