@@ -1,6 +1,29 @@
+# Binaries
 nyawa
+nyawa.exe
+nyawa-*
+
+# Database
 *.db
 *.db-wal
 *.db-shm
+*.db.hnsw
+
+# Cache
 /tmp/gocache/
 /tmp/gopath/
+.work/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+/dist/
