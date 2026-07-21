@@ -1,4 +1,3 @@
-// Nyawa server
 package server
 
 import (
@@ -46,7 +45,12 @@ func (s *Server) registerRoutes() {
 func (s *Server) Start() error {
 	addr := fmt.Sprintf("%s:%d", s.config.Host, s.config.Port)
 	s.srv = &http.Server{Addr: addr, Handler: s.withMiddleware(s.mux), ReadTimeout: s.config.ReadTimeout, WriteTimeout: s.config.ReadTimeout}
-	log.Printf("Nyawa API server on %s", addr); return s.srv.ListenAndServe()
+	log.Printf("Nyawa API server on %s", addr)
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		if _, err := s.pipeline.Search(types.StoreQuery{QueryText: "warmup", Limit: 1}); err != nil { log.Printf("warmup: %v", err) }
+	}()
+	return s.srv.ListenAndServe()
 }
 func (s *Server) Shutdown() error { if s.srv != nil { return s.srv.Close() }; return nil }
 func (s *Server) withMiddleware(next http.Handler) http.Handler {
@@ -75,6 +79,7 @@ func (s *Server) handleMemories(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStore(w http.ResponseWriter, r *http.Request) {
 	var req storeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSON(w, 400, map[string]string{"error": "invalid JSON"}); return }
+	req.Content = strings.TrimSpace(req.Content)
 	if req.Content == "" { writeJSON(w, 400, map[string]string{"error": "content required"}); return }
 	ns := req.Namespace; if ns == "" { ns = "default" }
 	mt := types.MemoryType(req.Type); if mt == "" { mt = types.TypeNote }
@@ -109,7 +114,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) handleMemoryByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/v1/memories/")
-	if id == "" || id == "batch" { return } // batch handled separately
+	if id == "" || id == "batch" { return }
 	if r.Method == http.MethodGet {
 		m, err := s.store.GetMemory(id); if err != nil { writeJSON(w, 404, map[string]string{"error": "not found"}); return }
 		writeJSON(w, 200, m)
@@ -118,14 +123,21 @@ func (s *Server) handleMemoryByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]string{"status": "deleted"})
 	} else { writeJSON(w, 405, map[string]string{"error": "not allowed"}) }
 }
-type recallRequest struct{ Query, Namespace string; Limit int }
+type recallRequest struct {
+	Query      string     `json:"query"`
+	Namespace  string     `json:"namespace,omitempty"`
+	Limit      int        `json:"limit,omitempty"`
+	TimeTravel *time.Time `json:"time_travel,omitempty"`
+}
 func (s *Server) handleRecall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost { writeJSON(w, 405, map[string]string{"error": "not allowed"}); return }
 	var req recallRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSON(w, 400, map[string]string{"error": "invalid JSON"}); return }
 	if req.Query == "" { writeJSON(w, 400, map[string]string{"error": "query required"}); return }
 	if req.Limit <= 0 { req.Limit = 10 }
-	results, err := s.pipeline.Search(types.StoreQuery{QueryText: req.Query, Namespace: req.Namespace, Limit: req.Limit})
+	q := types.StoreQuery{QueryText: req.Query, Namespace: req.Namespace, Limit: req.Limit}
+	if req.TimeTravel != nil { q.TimeTravel = req.TimeTravel }
+	results, err := s.pipeline.Search(q)
 	if err != nil { writeJSON(w, 500, map[string]string{"error": "search failed"}); return }
 	defer s.pipeline.ReleaseResults(results)
 	type ri struct{ ID, Content, Type, CreatedAt string; Score, RRFScore, TemporalBoost, ImportanceBoost float64; Rank int; Pinned bool }
@@ -165,6 +177,8 @@ func (s *Server) handleBatchStore(w http.ResponseWriter, r *http.Request) {
 	if len(req.Memories) == 0 { writeJSON(w, 400, map[string]string{"error": "memories required"}); return }
 	results := make([]map[string]any, 0, len(req.Memories))
 	for i, m := range req.Memories {
+		if m.Content == "" { continue }
+		m.Content = strings.TrimSpace(m.Content)
 		if m.Content == "" { continue }
 		ns := m.Namespace; if ns == "" { ns = "default" }
 		mt := types.MemoryType(m.Type); if mt == "" { mt = types.TypeNote }

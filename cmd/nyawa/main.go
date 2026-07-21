@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rezkyauliapratama/nyawa/internal/dream"
@@ -42,7 +43,7 @@ func printUsage() {
 Usage:
   nyawa init <db>
   nyawa store <db> <content>
-  nyawa import <db> <file.json|->    Import JSON array from file or stdin
+  nyawa import <db> <file.json|->
   nyawa recall <db> <q> [--ns <ns>] [--at <time>]
   nyawa stats <db>
   nyawa ns <db>
@@ -53,7 +54,6 @@ Usage:
   nyawa version
 `)
 }
-
 func getStore(p string, emb store.Embedder) *store.Store {
 	s, err := store.NewStore(p, emb)
 	if err != nil { log.Fatalf("store: %v", err) }
@@ -72,10 +72,12 @@ func cmdInit() {
 }
 func cmdStore() {
 	if len(os.Args) < 4 { log.Fatal("usage: nyawa store <db> <content>") }
+	content := strings.TrimSpace(os.Args[3])
+	if content == "" { log.Fatal("content cannot be empty") }
 	emb := getEmbedder(); defer emb.StopAll()
 	s := getStore(os.Args[2], emb); defer s.Close()
 	id := fmt.Sprintf("mem_%d", time.Now().UnixNano())
-	s.InsertMemory(&types.Memory{ID: id, Content: os.Args[3], Type: types.TypeNote, Namespace: "default"})
+	s.InsertMemory(&types.Memory{ID: id, Content: content, Type: types.TypeNote, Namespace: "default"})
 	fmt.Printf("Stored: %s\n", id)
 }
 func cmdRecall() {
@@ -126,15 +128,18 @@ func cmdImport() {
 		for { n, err := os.Stdin.Read(b); if n > 0 { data = append(data, b[:n]...) }; if err != nil { break } }
 	} else { var err error; data, err = os.ReadFile(os.Args[3]); if err != nil { log.Fatalf("read: %v", err) } }
 	var entries []struct {
-		Content, Namespace, Type string `json:"content" json:"namespace,omitempty" json:"type,omitempty"`
+		Content   string `json:"content"`
+		Namespace string `json:"namespace,omitempty"`
+		Type      string `json:"type,omitempty"`
 	}
 	if err := json.Unmarshal(data, &entries); err != nil { log.Fatalf("parse: %v", err) }
 	now := time.Now(); im, fa := 0, 0
 	for i, e := range entries {
-		if e.Content == "" { continue }
+		c := strings.TrimSpace(e.Content)
+		if c == "" { continue }
 		ns := e.Namespace; if ns == "" { ns = "default" }
 		mt := types.MemoryType(e.Type); if mt == "" { mt = types.TypeNote }
-		if err := s.InsertMemory(&types.Memory{ID: fmt.Sprintf("mem_%d_%d", now.UnixNano(), i), Content: e.Content, Type: mt, Namespace: ns}); err != nil { fa++; continue }
+		if err := s.InsertMemory(&types.Memory{ID: fmt.Sprintf("mem_%d_%d", now.UnixNano(), i), Content: c, Type: mt, Namespace: ns}); err != nil { fa++; continue }
 		im++
 	}
 	fmt.Printf("Imported %d (%d failed)\n", im, fa)
