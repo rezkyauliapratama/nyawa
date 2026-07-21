@@ -1,3 +1,4 @@
+// Nyawa server
 package server
 
 import (
@@ -26,19 +27,16 @@ type Server struct {
 }
 
 type Config struct {
-	Host        string        `yaml:"host"`
-	Port        int           `yaml:"port"`
-	ReadTimeout time.Duration `yaml:"read_timeout"`
+	Host        string
+	Port        int
+	ReadTimeout time.Duration
 }
 
-func DefaultServerConfig() Config {
-	return Config{Host: "0.0.0.0", Port: 3300, ReadTimeout: 30 * time.Second}
-}
+func DefaultServerConfig() Config { return Config{Host: "0.0.0.0", Port: 3300, ReadTimeout: 30 * time.Second} }
 
 func New(st *store.Store, pipe *search.Pipeline, emb *embedder.PriorityChain, cfg Config) *Server {
 	s := &Server{store: st, pipeline: pipe, embedder: emb, security: security.NewFilter(), config: cfg, mux: http.NewServeMux()}
-	s.registerRoutes()
-	return s
+	s.registerRoutes(); return s
 }
 
 func (s *Server) registerRoutes() {
@@ -47,6 +45,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/v1/recall", s.handleRecall)
 	s.mux.HandleFunc("/v1/stats", s.handleStats)
 	s.mux.HandleFunc("/v1/health", s.handleHealth)
+	s.mux.HandleFunc("/v1/namespaces", s.handleNamespaces)
+	s.mux.HandleFunc("/v1/forget/", s.handleForget)
+	s.mux.HandleFunc("/dashboard", s.handleDashboard)
 	s.mux.HandleFunc("/", s.handleRoot)
 }
 
@@ -57,186 +58,146 @@ func (s *Server) Start() error {
 	return s.srv.ListenAndServe()
 }
 
-func (s *Server) Shutdown() error {
-	if s.srv != nil {
-		return s.srv.Close()
-	}
-	return nil
-}
+func (s *Server) Shutdown() error { if s.srv != nil { return s.srv.Close() }; return nil }
 
 func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		defer func() {
-			if rec := recover(); rec != nil {
-				log.Printf("PANIC: %s %s: %v", r.Method, r.URL.Path, rec)
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
-			}
+			if rec := recover(); rec != nil { log.Printf("PANIC: %s %s: %v", r.Method, r.URL.Path, rec); writeJSON(w, 500, map[string]string{"error": "internal"}) }
 		}()
-		w.Header().Set("Content-Type", "application/json")
-		next.ServeHTTP(w, r)
 		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start))
+		if !strings.HasPrefix(r.URL.Path, "/dashboard") { w.Header().Set("Content-Type", "application/json") }
+		next.ServeHTTP(w, r)
 	})
 }
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"}); return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"service": "nyawa", "version": "0.2.0", "status": "running"})
+	if r.URL.Path != "/" { writeJSON(w, 404, map[string]string{"error": "not found"}); return }
+	writeJSON(w, 200, map[string]string{"service": "nyawa", "status": "running"})
 }
 
-type storeRequest struct {
-	Content   string `json:"content"`
-	Namespace string `json:"namespace,omitempty"`
-	Type      string `json:"type,omitempty"`
-}
+type storeRequest struct{ Content, Namespace, Type string }
 
 func (s *Server) handleMemories(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodPost:
-		s.handleStore(w, r)
-	case http.MethodGet:
-		s.handleList(w, r)
-	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	case http.MethodPost: s.handleStore(w, r)
+	case http.MethodGet: s.handleList(w, r)
+	default: writeJSON(w, 405, map[string]string{"error": "method not allowed"})
 	}
 }
 
 func (s *Server) handleStore(w http.ResponseWriter, r *http.Request) {
 	var req storeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"}); return
-	}
-	if req.Content == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "content required"}); return
-	}
-	classification, reason := s.security.Classify(req.Content)
-	if classification == security.Secret {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "content blocked", "reason": reason})
-		return
-	}
-	ns := req.Namespace
-	if ns == "" {
-		ns = "default"
-	}
-	memType := types.MemoryType(req.Type)
-	if memType == "" {
-		memType = types.TypeNote
-	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSON(w, 400, map[string]string{"error": "invalid JSON"}); return }
+	if req.Content == "" { writeJSON(w, 400, map[string]string{"error": "content required"}); return }
+	cls, _ := s.security.Classify(req.Content)
+	if cls == security.Secret { writeJSON(w, 403, map[string]string{"error": "blocked", "reason": "sensitive content"}); return }
+	ns := req.Namespace; if ns == "" { ns = "default" }
+	mt := types.MemoryType(req.Type); if mt == "" { mt = types.TypeNote }
 	id := fmt.Sprintf("mem_%d", time.Now().UnixNano())
-	mem := &types.Memory{ID: id, Content: req.Content, Type: memType, Namespace: ns, CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	if err := s.store.InsertMemory(mem); err != nil {
-		log.Printf("store error: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store failed"}); return
+	if err := s.store.InsertMemory(&types.Memory{ID: id, Content: req.Content, Type: mt, Namespace: ns}); err != nil {
+		writeJSON(w, 500, map[string]string{"error": "store failed"}); return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "classification": classification})
+	writeJSON(w, 201, map[string]any{"id": id})
 }
 
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
-	stats, err := s.store.Stats()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "stats failed"}); return
+	ns := r.URL.Query().Get("ns")
+	page := parseInt(r.URL.Query().Get("page"), 1)
+	pp := parseInt(r.URL.Query().Get("per_page"), 20)
+	var total int
+	s.store.GetDB().QueryRow(`SELECT COUNT(*) FROM memories WHERE superseded_at IS NULL`).Scan(&total)
+	q := `SELECT id,content,mem_type,namespace,importance,access_count,pinned,created_at,updated_at,superseded_at,edge_count FROM memories WHERE superseded_at IS NULL`
+	args := []any{}
+	if ns != "" { q += ` AND namespace=?`; args = append(args, ns) }
+	q += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`; args = append(args, pp, (page-1)*pp)
+	rows, err := s.store.GetDB().Query(q, args...)
+	if err != nil { writeJSON(w, 500, map[string]string{"error": "query failed"}); return }
+	defer rows.Close()
+	type mi struct{ ID, Content, Type, Namespace, CreatedAt string; Importance float64; Pinned bool; EdgeCount int }
+	var items []mi
+	for rows.Next() {
+		var m mi; var mt, cs, us string; var pi, ei, ac int; var ss *string
+		rows.Scan(&m.ID, &m.Content, &mt, &m.Namespace, &m.Importance, &ac, &pi, &cs, &us, &ss, &ei)
+		m.Type = mt; m.Pinned = pi != 0; m.EdgeCount = ei; m.CreatedAt = cs
+		items = append(items, m)
 	}
-	writeJSON(w, http.StatusOK, stats)
+	writeJSON(w, 200, map[string]any{"memories": items, "total": total, "page": page, "per_page": pp})
 }
 
 func (s *Server) handleMemoryByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/v1/memories/")
-	if id == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id required"}); return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		mem, err := s.store.GetMemory(id)
-		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"}); return
-		}
-		writeJSON(w, http.StatusOK, mem)
-	case http.MethodDelete:
-		if err := s.store.DeleteMemory(id); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "delete failed"}); return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
-	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-	}
+	if id == "" { writeJSON(w, 400, map[string]string{"error": "id required"}); return }
+	if r.Method == http.MethodGet {
+		m, err := s.store.GetMemory(id)
+		if err != nil { writeJSON(w, 404, map[string]string{"error": "not found"}); return }
+		writeJSON(w, 200, m)
+	} else if r.Method == http.MethodDelete {
+		if err := s.store.DeleteMemory(id); err != nil { writeJSON(w, 500, map[string]string{"error": "delete failed"}); return }
+		writeJSON(w, 200, map[string]string{"status": "deleted"})
+	} else { writeJSON(w, 405, map[string]string{"error": "method not allowed"}) }
 }
 
-type recallRequest struct {
-	Query     string `json:"query"`
-	Namespace string `json:"namespace,omitempty"`
-	Limit     int    `json:"limit,omitempty"`
-}
+type recallRequest struct{ Query, Namespace string; Limit int }
 
 func (s *Server) handleRecall(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"}); return
-	}
+	if r.Method != http.MethodPost { writeJSON(w, 405, map[string]string{"error": "method not allowed"}); return }
 	var req recallRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"}); return
-	}
-	if req.Query == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "query required"}); return
-	}
-	if req.Limit <= 0 {
-		req.Limit = 10
-	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSON(w, 400, map[string]string{"error": "invalid JSON"}); return }
+	if req.Query == "" { writeJSON(w, 400, map[string]string{"error": "query required"}); return }
+	if req.Limit <= 0 { req.Limit = 10 }
 	results, err := s.pipeline.Search(types.StoreQuery{QueryText: req.Query, Namespace: req.Namespace, Limit: req.Limit})
-	if err != nil {
-		log.Printf("recall error: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "search failed"}); return
-	}
+	if err != nil { writeJSON(w, 500, map[string]string{"error": "search failed"}); return }
 	defer s.pipeline.ReleaseResults(results)
-	type resultItem struct {
-		ID             string  `json:"id"`
-		Content        string  `json:"content"`
-		Type           string  `json:"type"`
-		Score          float64 `json:"score"`
-		RRFScore       float64 `json:"rrf_score"`
-		TemporalBoost  float64 `json:"temporal_boost"`
-		ImportanceBoost float64 `json:"importance_boost"`
-		Rank           int     `json:"rank"`
-		Pinned         bool    `json:"pinned"`
-		CreatedAt      string  `json:"created_at"`
-	}
-	items := make([]resultItem, 0, len(results))
+	type ri struct{ ID, Content, Type, CreatedAt string; Score, RRFScore, TemporalBoost, ImportanceBoost float64; Rank int; Pinned bool }
+	items := make([]ri, 0, len(results))
 	for _, r := range results {
-		items = append(items, resultItem{ID: r.ID, Content: r.Content, Type: string(r.Type), Score: r.Score, RRFScore: r.RRFScore, TemporalBoost: r.TemporalBoost, ImportanceBoost: r.ImportanceBoost, Rank: r.Rank, Pinned: r.Pinned, CreatedAt: r.CreatedAt.Format(time.RFC3339)})
+		items = append(items, ri{ID: r.ID, Content: r.Content, Type: string(r.Type), Score: r.Score, RRFScore: r.RRFScore,
+			TemporalBoost: r.TemporalBoost, ImportanceBoost: r.ImportanceBoost, Rank: r.Rank, Pinned: r.Pinned, CreatedAt: r.CreatedAt.Format(time.RFC3339)})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"results": items, "count": len(items)})
+	writeJSON(w, 200, map[string]any{"results": items, "count": len(items)})
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"}); return
-	}
-	storeStats, err := s.store.Stats()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "stats failed"}); return
-	}
-	embName, embOK := s.embedder.HealthCheck()
-	embStatus := "unavailable"
-	if embOK {
-		embStatus = "available"
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"store": storeStats, "embedder": map[string]string{"active": embName, "status": embStatus}, "version": "0.2.0"})
+	storeStats, _ := s.store.Stats()
+	eName, eOK := s.embedder.HealthCheck()
+	writeJSON(w, 200, map[string]any{"store": storeStats, "embedder": map[string]string{"active": eName, "status": map[bool]string{true: "available", false: "unavailable"}[eOK]}})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	storeOK := s.store.Ready()
-	embName, embOK := s.embedder.HealthCheck()
-	status := http.StatusOK
-	statusText := "healthy"
-	if !storeOK || !embOK {
-		status = http.StatusServiceUnavailable
-		statusText = "degraded"
-	}
-	writeJSON(w, status, map[string]any{"status": statusText, "store": storeOK, "embedder": map[string]string{"active": embName, "status": map[bool]string{true: "available", false: "unavailable"}[embOK]}, "version": "0.2.0"})
+	stOK := s.store.Ready()
+	eName, eOK := s.embedder.HealthCheck()
+	status := 200; st := "healthy"
+	if !stOK || !eOK { status = 503; st = "degraded" }
+	writeJSON(w, status, map[string]any{"status": st, "store": stOK, "embedder": map[string]string{"active": eName, "status": map[bool]string{true: "available", false: "unavailable"}[eOK]}})
 }
 
-func writeJSON(w http.ResponseWriter, status int, data any) {
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {
+	ns, err := s.store.ListNamespaces()
+	if err != nil { writeJSON(w, 500, map[string]string{"error": err.Error()}); return }
+	writeJSON(w, 200, ns)
+}
+
+func (s *Server) handleForget(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete { writeJSON(w, 405, map[string]string{"error": "use DELETE"}); return }
+	id := strings.TrimPrefix(r.URL.Path, "/v1/forget/")
+	if id == "" { writeJSON(w, 400, map[string]string{"error": "id required"}); return }
+	if err := s.store.DeleteMemory(id); err != nil { writeJSON(w, 500, map[string]string{"error": err.Error()}); return }
+	writeJSON(w, 200, map[string]string{"status": "forgotten"})
+}
+
+func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(200)
+	s.writeDashboardHTML(w)
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) { w.Header().Set("Content-Type", "application/json"); w.WriteHeader(status); json.NewEncoder(w).Encode(v) }
+func parseInt(s string, def int) int {
+	if s == "" { return def }
+	var v int
+	if _, err := fmt.Sscanf(s, "%d", &v); err != nil { return def }
+	if v < 1 { return def }
+	return v
 }
