@@ -2,9 +2,11 @@ package search
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"sync"
 	"time"
+
 	"github.com/rezkyauliapratama/nyawa/internal/embedder"
 	"github.com/rezkyauliapratama/nyawa/internal/pool"
 	"github.com/rezkyauliapratama/nyawa/internal/types"
@@ -14,7 +16,6 @@ type StoreReader interface {
 	FTS5Search(query string, topK int, namespace string) ([]string, error)
 	VectorSearch(queryVector []float32, topK int, namespace string) ([]string, error)
 	GetMemoriesByIDs(ids []string) ([]*types.Memory, error)
-	IncrementAccessCount(id string) error
 }
 
 type Pipeline struct {
@@ -24,16 +25,12 @@ type Pipeline struct {
 	post       *PostProcessor
 	cache      *Cache
 	resultPool *pool.ResultPool
+	slicePool  *pool.ResultSlicePool
 }
 
 func NewPipeline(store StoreReader, emb *embedder.PriorityChain, cfg types.SearchConfig) *Pipeline {
-	return &Pipeline{
-		store: store, embedder: emb,
-		rrf: NewRRF(cfg.RRFK),
-		post: NewPostProcessor(cfg.RecencyWeight, cfg.ImportanceWeight, pool.NewResultPool(64)),
-		cache: NewCache(256, 5*time.Minute),
-		resultPool: pool.NewResultPool(64),
-	}
+	rp := pool.NewResultPool(64)
+	return &Pipeline{store: store, embedder: emb, rrf: NewRRF(cfg.RRFK), post: NewPostProcessor(cfg.RecencyWeight, cfg.ImportanceWeight, rp), cache: NewCache(256, 5*time.Minute), resultPool: rp, slicePool: pool.NewResultSlicePool()}
 }
 
 func (p *Pipeline) Search(q types.StoreQuery) ([]*types.MemoryResult, error) {
@@ -41,27 +38,37 @@ func (p *Pipeline) Search(q types.StoreQuery) ([]*types.MemoryResult, error) {
 		return cached, nil
 	}
 	queryVec, err := p.embedder.Embed(q.QueryText)
-	if err != nil {
-		return nil, fmt.Errorf("embed: %w", err)
+	var haveVector bool
+	if err == nil {
+		haveVector = true
+	} else {
+		log.Printf("embedder unavailable, falling back to FTS5-only search: %v", err)
 	}
 	var (
 		vectorIDs, fts5IDs []string
-		wg sync.WaitGroup
-		errVec, errFTS5 error
+		wg                 sync.WaitGroup
+		errVec, errFTS5    error
 	)
 	limit := q.Limit
 	if limit <= 0 {
 		limit = types.DefaultQueryLimit
 	}
-	wg.Add(2)
+	searchTopK := limit * 3
+	if searchTopK < 50 {
+		searchTopK = 50
+	}
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		vectorIDs, errVec = p.store.VectorSearch(queryVec, forceMin(limit*3, 50), q.Namespace)
+		fts5IDs, errFTS5 = p.store.FTS5Search(q.QueryText, searchTopK, q.Namespace)
 	}()
-	go func() {
-		defer wg.Done()
-		fts5IDs, errFTS5 = p.store.FTS5Search(q.QueryText, forceMin(limit*3, 50), q.Namespace)
-	}()
+	if haveVector {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			vectorIDs, errVec = p.store.VectorSearch(queryVec, searchTopK, q.Namespace)
+		}()
+	}
 	wg.Wait()
 	if errFTS5 != nil {
 		return nil, errFTS5
@@ -88,13 +95,6 @@ func (p *Pipeline) ReleaseResults(results []*types.MemoryResult) {
 	for _, r := range results {
 		p.resultPool.Put(r)
 	}
-}
-
-func forceMin(v, min int) int {
-	if v < min {
-		return min
-	}
-	return v
 }
 
 type cacheEntry struct {
