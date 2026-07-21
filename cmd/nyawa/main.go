@@ -54,7 +54,6 @@ Usage:
   nyawa version
 `)
 }
-
 func getStore(p string, emb store.Embedder) *store.Store {
 	s, err := store.NewStore(p, emb)
 	if err != nil { log.Fatalf("store: %v", err) }
@@ -128,7 +127,11 @@ func cmdImport() {
 		b := make([]byte, 4096)
 		for { n, err := os.Stdin.Read(b); if n > 0 { data = append(data, b[:n]...) }; if err != nil { break } }
 	} else { var err error; data, err = os.ReadFile(os.Args[3]); if err != nil { log.Fatalf("read: %v", err) } }
-	var entries []struct{ Content, Namespace, Type string }
+	var entries []struct {
+		Content   string `json:"content"`
+		Namespace string `json:"namespace,omitempty"`
+		Type      string `json:"type,omitempty"`
+	}
 	if err := json.Unmarshal(data, &entries); err != nil { log.Fatalf("parse: %v", err) }
 	now := time.Now(); im, fa := 0, 0
 	for i, e := range entries {
