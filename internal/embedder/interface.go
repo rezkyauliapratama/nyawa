@@ -18,7 +18,9 @@ type PriorityChain struct {
 
 func NewPriorityChain(embedders ...Embedder) *PriorityChain {
 	pc := &PriorityChain{chain: embedders}
-	pc.selectActive()
+	for _, e := range embedders {
+		if e.Available() { pc.current = e; break }
+	}
 	return pc
 }
 
@@ -27,10 +29,6 @@ func (pc *PriorityChain) Embed(text string) ([]float32, error) {
 		v, err := pc.current.Embed(text)
 		if err == nil { return v, nil }
 	}
-	return pc.tryFallback(text)
-}
-
-func (pc *PriorityChain) tryFallback(text string) ([]float32, error) {
 	for _, e := range pc.chain {
 		if !e.Available() { continue }
 		v, err := e.Embed(text)
@@ -39,17 +37,11 @@ func (pc *PriorityChain) tryFallback(text string) ([]float32, error) {
 	return nil, ErrNoEmbedder
 }
 
-func (pc *PriorityChain) selectActive() {
-	for _, e := range pc.chain {
-		if e.Available() { pc.current = e; return }
-	}
-	pc.current = nil
-}
-
-func (pc *PriorityChain) HealthCheck() (name string, ok bool) {
+func (pc *PriorityChain) HealthCheck() (string, bool) {
 	if pc.current != nil && pc.current.Available() { return pc.current.Name(), true }
-	pc.selectActive()
-	if pc.current != nil { return pc.current.Name(), true }
+	for _, e := range pc.chain {
+		if e.Available() { pc.current = e; return pc.current.Name(), true }
+	}
 	return "", false
 }
 
@@ -62,4 +54,9 @@ func (pc *PriorityChain) Available() bool { _, ok := pc.HealthCheck(); return ok
 func (pc *PriorityChain) Dims() int {
 	if pc.current != nil { return pc.current.Dims() }
 	return 768
+}
+func (pc *PriorityChain) StopAll() {
+	for _, e := range pc.chain {
+		if p, ok := e.(*PythonEmbedder); ok { p.Stop() }
+	}
 }
