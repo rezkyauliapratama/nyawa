@@ -41,9 +41,9 @@ type jsonRPCRequest struct {
 }
 
 type jsonRPCResponse struct {
-	JSONRPC string   `json:"jsonrpc"`
-	ID      any      `json:"id"`
-	Result  any      `json:"result,omitempty"`
+	JSONRPC string    `json:"jsonrpc"`
+	ID      any       `json:"id"`
+	Result  any       `json:"result,omitempty"`
 	Error   *rpcError `json:"error,omitempty"`
 }
 
@@ -68,6 +68,17 @@ type propertySchema struct {
 	Type        string   `json:"type"`
 	Description string   `json:"description,omitempty"`
 	Enum        []string `json:"enum,omitempty"`
+}
+
+// MCP Tool Result Content types (MCP SDK v1.26.0+)
+type toolContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type toolResult struct {
+	Content []toolContent `json:"content"`
+	IsError bool          `json:"isError,omitempty"`
 }
 
 func (s *Server) tools() []toolDefinition {
@@ -173,14 +184,15 @@ type callParams struct {
 func (s *Server) handleToolCall(req jsonRPCRequest) {
 	var params callParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		s.writeError(req.ID, -32602, "Invalid params"); return
+		s.writeToolError(req.ID, "Invalid params")
+		return
 	}
 	switch params.Name {
 	case "nyawa_store":  s.handleStore(req.ID, params.Arguments)
 	case "nyawa_recall": s.handleRecall(req.ID, params.Arguments)
 	case "nyawa_stats":  s.handleStats(req.ID)
 	case "nyawa_forget": s.handleForget(req.ID, params.Arguments)
-	default: s.writeError(req.ID, -32601, fmt.Sprintf("Unknown tool: %s", params.Name))
+	default: s.writeToolError(req.ID, fmt.Sprintf("Unknown tool: %s", params.Name))
 	}
 }
 
@@ -193,10 +205,12 @@ type storeArgs struct {
 func (s *Server) handleStore(id any, raw json.RawMessage) {
 	var args storeArgs
 	if err := json.Unmarshal(raw, &args); err != nil {
-		s.writeError(id, -32602, "Invalid arguments"); return
+		s.writeToolError(id, "Invalid arguments")
+		return
 	}
 	if args.Content == "" {
-		s.writeError(id, -32602, "content required"); return
+		s.writeToolError(id, "content required")
+		return
 	}
 	if args.Namespace == "" { args.Namespace = "default" }
 	memType := types.MemoryType(args.Type)
@@ -206,9 +220,11 @@ func (s *Server) handleStore(id any, raw json.RawMessage) {
 		ID: memID, Content: args.Content, Type: memType,
 		Namespace: args.Namespace, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}); err != nil {
-		s.writeError(id, -32603, fmt.Sprintf("store failed: %v", err)); return
+		s.writeToolError(id, fmt.Sprintf("store failed: %v", err))
+		return
 	}
-	s.writeResult(id, map[string]any{"id": memID, "content": args.Content, "type": string(memType), "status": "stored"})
+	result := map[string]any{"id": memID, "content": args.Content, "type": string(memType), "status": "stored"}
+	s.writeToolResult(id, result)
 }
 
 type recallArgs struct {
@@ -220,16 +236,19 @@ type recallArgs struct {
 func (s *Server) handleRecall(id any, raw json.RawMessage) {
 	var args recallArgs
 	if err := json.Unmarshal(raw, &args); err != nil {
-		s.writeError(id, -32602, "Invalid arguments"); return
+		s.writeToolError(id, "Invalid arguments")
+		return
 	}
 	if args.Query == "" {
-		s.writeError(id, -32602, "query required"); return
+		s.writeToolError(id, "query required")
+		return
 	}
 	limit := int(args.Limit)
 	if limit <= 0 { limit = 10 }
 	results, err := s.pipeline.Search(types.StoreQuery{QueryText: args.Query, Namespace: args.Namespace, Limit: limit})
 	if err != nil {
-		s.writeError(id, -32603, fmt.Sprintf("search failed: %v", err)); return
+		s.writeToolError(id, fmt.Sprintf("search failed: %v", err))
+		return
 	}
 	defer s.pipeline.ReleaseResults(results)
 	type resultItem struct {
@@ -244,13 +263,17 @@ func (s *Server) handleRecall(id any, raw json.RawMessage) {
 			CreatedAt: r.CreatedAt.Format(time.RFC3339),
 		})
 	}
-	s.writeResult(id, map[string]any{"results": items, "count": len(items)})
+	result := map[string]any{"results": items, "count": len(items)}
+	s.writeToolResult(id, result)
 }
 
 func (s *Server) handleStats(id any) {
 	stats, err := s.store.Stats()
-	if err != nil { s.writeError(id, -32603, fmt.Sprintf("stats failed: %v", err)); return }
-	s.writeResult(id, stats)
+	if err != nil {
+		s.writeToolError(id, fmt.Sprintf("stats failed: %v", err))
+		return
+	}
+	s.writeToolResult(id, stats)
 }
 
 type forgetArgs struct{ ID string `json:"id"` }
@@ -258,19 +281,56 @@ type forgetArgs struct{ ID string `json:"id"` }
 func (s *Server) handleForget(id any, raw json.RawMessage) {
 	var args forgetArgs
 	if err := json.Unmarshal(raw, &args); err != nil {
-		s.writeError(id, -32602, "Invalid arguments"); return
+		s.writeToolError(id, "Invalid arguments")
+		return
 	}
 	if args.ID == "" {
-		s.writeError(id, -32602, "id required"); return
+		s.writeToolError(id, "id required")
+		return
 	}
 	if err := s.store.DeleteMemory(args.ID); err != nil {
-		s.writeError(id, -32603, fmt.Sprintf("delete failed: %v", err)); return
+		s.writeToolError(id, fmt.Sprintf("delete failed: %v", err))
+		return
 	}
-	s.writeResult(id, map[string]string{"status": "deleted", "id": args.ID})
+	result := map[string]string{"status": "deleted", "id": args.ID}
+	s.writeToolResult(id, result)
 }
 
+// writeResult writes a generic JSON-RPC response (used for initialize, tools/list).
 func (s *Server) writeResult(id any, result any) {
 	s.writer.Encode(jsonRPCResponse{JSONRPC: "2.0", ID: id, Result: result})
+}
+
+// writeToolResult wraps tool call result in standard MCP CallToolResult format
+// { content: [{ type: "text", text: "..." }] }
+// Required by MCP SDK v1.26.0+ — the raw result dict is not valid.
+func (s *Server) writeToolResult(id any, data any) {
+	jsonBytes, err := json.Marshal(data)
+	var text string
+	if err != nil {
+		text = fmt.Sprintf("{\"error\":\"marshal failed: %v\"}", err)
+	} else {
+		text = string(jsonBytes)
+	}
+	s.writer.Encode(jsonRPCResponse{
+		JSONRPC: "2.0",
+		ID:      id,
+		Result: toolResult{
+			Content: []toolContent{{Type: "text", Text: text}},
+		},
+	})
+}
+
+// writeToolError writes a tool call error as a proper CallToolResult with isError=true.
+func (s *Server) writeToolError(id any, message string) {
+	s.writer.Encode(jsonRPCResponse{
+		JSONRPC: "2.0",
+		ID:      id,
+		Result: toolResult{
+			Content: []toolContent{{Type: "text", Text: fmt.Sprintf("{\"error\":\"%s\"}", message)}},
+			IsError: true,
+		},
+	})
 }
 
 func (s *Server) writeError(id any, code int, message string) {
