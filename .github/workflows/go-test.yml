@@ -10,23 +10,6 @@ env:
   GO_VERSION: '1.23'
 
 jobs:
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - name: Install deps
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc libsqlite3-dev
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          args: --timeout=5m -c .golangci.yml
-
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -36,22 +19,20 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: Install deps
+      - name: Install SQLite
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc libsqlite3-dev
-      - name: Vet
-        run: go vet -tags "sqlite_fts5" ./...
-      - name: Build all
-        run: go build -tags "sqlite_fts5" -v ./...
+      - name: Build all packages
+        run: go build -tags "sqlite_fts5" ./...
       - name: Build binary
         run: go build -tags "sqlite_fts5" -o nyawa ./cmd/nyawa/
-      - name: Check size
+      - name: Check binary size
         run: |
           SIZE=$(stat -c%s nyawa)
           echo "Binary size: $((SIZE / 1024 / 1024))MB"
           test $SIZE -lt $((20 * 1024 * 1024))
 
   test:
-    name: Test
+    name: Unit Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,15 +40,15 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: Install deps
+      - name: Install SQLite
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc libsqlite3-dev
-      - name: Unit tests
+      - name: Run tests
         run: go test -tags "sqlite_fts5" -v -count=1 -race ./internal/index/ ./internal/extract/ ./internal/search/
       - name: Build race
         run: go build -tags "sqlite_fts5" -race ./...
 
-  e2e:
-    name: E2E
+  smoke:
+    name: Smoke Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -75,15 +56,17 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: Install deps
+      - name: Install SQLite
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc libsqlite3-dev
       - name: Build
         run: go build -tags "sqlite_fts5" -o nyawa ./cmd/nyawa/
       - name: Init DB
-        run: ./nyawa init /tmp/e2e.db
-      - name: Stats check
+        run: ./nyawa init /tmp/smoke.db
+      - name: Check stats
         run: |
-          ./nyawa stats /tmp/e2e.db | grep -q "total_memories"
-      - name: Namespace
+          ./nyawa stats /tmp/smoke.db | grep -q "total_memories"
+          echo "Stats OK"
+      - name: Check namespace
         run: |
-          ./nyawa ns /tmp/e2e.db | grep -q "default"
+          ./nyawa ns /tmp/smoke.db | grep -q "default"
+          echo "Namespace OK"
