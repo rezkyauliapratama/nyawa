@@ -1,0 +1,39 @@
+{
+  "name": "nyawa-mcp",
+  "version": "0.9.0",
+  "description": "Nyawa offline-first AI memory engine -- MCP integration for AI agents",
+  "author": "Rezky Aulia Pratama",
+  "tools": {
+    "nyawa_store": {
+      "description": "Store a new memory with content, namespace, and type",
+      "input": {
+        "content": "string (required) -- memory content",
+        "namespace": "string (optional, default: 'default') -- memory namespace",
+        "type": "string (optional, default: 'note') -- one of: decision, insight, procedure, fact, preference, context, note, event, reference"
+      },
+      "output": "memory ID and stored confirmation"
+    },
+    "nyawa_recall": {
+      "description": "Semantic search across memories using hybrid search (vector + FTS5 + RRF)",
+      "input": {
+        "query": "string (required) -- natural language search query",
+        "namespace": "string (optional) -- namespace filter",
+        "limit": "number (optional, default: 10) -- max results"
+      },
+      "output": "ranked memory results with relevance scores"
+    },
+    "nyawa_stats": {
+      "description": "Get memory engine statistics",
+      "input": {},
+      "output": "total memories, pinned count, namespaces, vector index size, entity graph"
+    },
+    "nyawa_forget": {
+      "description": "Soft-delete a memory by its ID",
+      "input": {
+        "id": "string (required) -- memory ID to delete"
+      },
+      "output": "deletion confirmation"
+    }
+  },
+  "instructions": "Nyawa MCP server communicates over stdio using JSON-RPC 2.0. Start the server with nyawa mcp <db>, send JSON-RPC request lines to stdin, and read responses from stdout. The protocol uses MCP 2025-03-26. Each line is a complete JSON-RPC request. Responses are line-delimited JSON. Always call initialize first, then tools/list to discover available tools."
+}
