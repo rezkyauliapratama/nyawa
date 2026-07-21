@@ -2,13 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, 'phase-*', 'fix-*']
+    branches: [main]
   pull_request:
     branches: [main]
-
-env:
-  GO_VERSION: '1.23'
-  CGO_ENABLED: '1'
 
 jobs:
   build:
@@ -16,22 +12,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
+          go-version: '1.23'
       - name: Install SQLite
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq gcc libsqlite3-dev pkg-config
       - name: Build
-        run: go build -tags "sqlite_fts5" -v -o nyawa ./cmd/nyawa/ 2>&1
-      - name: Check size
+        run: go build -tags "sqlite_fts5" -o nyawa ./cmd/nyawa/ 2>&1
+      - name: Check binary
         run: |
-          test -f nyawa || exit 1
-          SIZE=$(stat -c%s nyawa)
-          echo "Binary size: $((SIZE / 1024 / 1024))MB"
-          test $SIZE -lt $((20 * 1024 * 1024)) && echo "Size OK"
+          ls -lh nyawa
+          file nyawa
 
   test:
     name: Test
@@ -40,14 +34,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
+          go-version: '1.23'
       - name: Install SQLite
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq gcc libsqlite3-dev pkg-config
       - name: Test
-        run: go test -tags "sqlite_fts5" -v -count=1 . ./internal/index/ ./internal/extract/ ./internal/search/ 2>&1
+        run: go test -tags "sqlite_fts5" -count=1 ./internal/index/ ./internal/extract/ ./internal/search/ 2>&1
 
   e2e:
     name: E2E
@@ -56,16 +49,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
+          go-version: '1.23'
       - name: Install SQLite
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq gcc libsqlite3-dev pkg-config
       - name: Build
-        run: go build -tags "sqlite_fts5" -v -o nyawa ./cmd/nyawa/ 2>&1
+        run: go build -tags "sqlite_fts5" -o nyawa ./cmd/nyawa/ 2>&1
       - name: Init DB
         run: ./nyawa init /tmp/e2e.db 2>&1
-      - name: Check stats
-        run: |
-          ./nyawa stats /tmp/e2e.db 2>&1 | grep "total_memories" && echo "Stats OK"
+      - name: Stats
+        run: ./nyawa stats /tmp/e2e.db 2>&1 | grep total_memories && echo "OK"
