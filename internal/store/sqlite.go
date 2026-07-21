@@ -76,15 +76,40 @@ func (s *Store) InsertMemory(m *types.Memory) error {
 
 func (s *Store) GetMemory(id string) (*types.Memory, error) {
 	m := &types.Memory{}
-	var memType string; var pinnedInt int; var supersededStr *string
+	var memType, createdAtStr, updatedAtStr string
+	var pinnedInt int
+	var supersededStr *string
 	err := s.db.QueryRow(`SELECT id, content, mem_type, namespace, importance, access_count, pinned, created_at, updated_at, superseded_at, edge_count FROM memories WHERE id = ?`, id).
-		Scan(&m.ID, &m.Content, &memType, &m.Namespace, &m.Importance, &m.AccessCount, &pinnedInt, &m.CreatedAt, &m.UpdatedAt, &supersededStr, &m.EdgeCount)
+		Scan(&m.ID, &m.Content, &memType, &m.Namespace, &m.Importance, &m.AccessCount, &pinnedInt, &createdAtStr, &updatedAtStr, &supersededStr, &m.EdgeCount)
 	if err != nil {
 		return nil, err
 	}
 	m.Type = types.MemoryType(memType)
 	m.Pinned = pinnedInt != 0
+	m.CreatedAt, _ = parseTime(createdAtStr)
+	m.UpdatedAt, _ = parseTime(updatedAtStr)
+	if supersededStr != nil {
+		t, err := parseTime(*supersededStr)
+		if err == nil {
+			m.SupersededAt = &t
+		}
+	}
 	return m, nil
+}
+
+func (s *Store) DeleteMemory(id string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.Exec(`UPDATE memories SET superseded_at = ? WHERE id = ?`, now, id)
+	return err
+}
+
+func (s *Store) IncrementAccessCount(id string) error {
+	_, err := s.db.Exec(`UPDATE memories SET access_count = access_count + 1 WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) VectorSearch(queryVector []float32, topK int, namespace string) ([]string, error) {
+	return nil, nil
 }
 
 func (s *Store) FTS5Search(query string, topK int, namespace string) ([]string, error) {
@@ -96,16 +121,10 @@ func (s *Store) FTS5Search(query string, topK int, namespace string) ([]string, 
 	var ids []string
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
+		rows.Scan(&id)
 		ids = append(ids, id)
 	}
 	return ids, nil
-}
-
-func (s *Store) VectorSearch(queryVector []float32, topK int, namespace string) ([]string, error) {
-	return nil, nil // placeholder for Phase 2a (HNSW)
 }
 
 func (s *Store) GetMemoriesByIDs(ids []string) ([]*types.Memory, error) {
@@ -127,12 +146,22 @@ func (s *Store) GetMemoriesByIDs(ids []string) ([]*types.Memory, error) {
 	var memories []*types.Memory
 	for rows.Next() {
 		m := &types.Memory{}
-		var memType string; var pinnedInt int; var supersededStr *string
-		if err := rows.Scan(&m.ID, &m.Content, &memType, &m.Namespace, &m.Importance, &m.AccessCount, &pinnedInt, &m.CreatedAt, &m.UpdatedAt, &supersededStr, &m.EdgeCount); err != nil {
+		var memType, createdAtStr, updatedAtStr string
+		var pinnedInt int
+		var supersededStr *string
+		if err := rows.Scan(&m.ID, &m.Content, &memType, &m.Namespace, &m.Importance, &m.AccessCount, &pinnedInt, &createdAtStr, &updatedAtStr, &supersededStr, &m.EdgeCount); err != nil {
 			return nil, err
 		}
 		m.Type = types.MemoryType(memType)
 		m.Pinned = pinnedInt != 0
+		m.CreatedAt, _ = parseTime(createdAtStr)
+		m.UpdatedAt, _ = parseTime(updatedAtStr)
+		if supersededStr != nil {
+			t, err := parseTime(*supersededStr)
+			if err == nil {
+				m.SupersededAt = &t
+			}
+		}
 		memories = append(memories, m)
 	}
 	return memories, nil
@@ -155,6 +184,7 @@ func boolToInt(b bool) int {
 	}
 	return 0
 }
+
 func joinString(elems []string, sep string) string {
 	if len(elems) == 0 {
 		return ""
@@ -164,4 +194,16 @@ func joinString(elems []string, sep string) string {
 		result += sep + e
 	}
 	return result
+}
+
+func parseTime(s string) (time.Time, error) {
+	t, err := time.Parse(time.RFC3339, s)
+	if err == nil {
+		return t, nil
+	}
+	t, err = time.Parse("2006-01-02 15:04:05", s)
+	if err == nil {
+		return t, nil
+	}
+	return time.Time{}, err
 }
