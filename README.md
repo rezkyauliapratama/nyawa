@@ -1,36 +1,20 @@
-<div align="center">
-  <h1>Nyawa</h1>
-  <p><strong>Offline-First AI Memory Engine</strong></p>
-  <p>
-    <a href="https://github.com/rezkyauliapratama/nyawa/actions"><img src="https://img.shields.io/github/actions/workflow/status/rezkyauliapratama/nyawa/go-test.yml?branch=main&label=CI&logo=github" alt="CI"></a>
-    <a href="https://github.com/rezkyauliapratama/nyawa/blob/main/LICENSE"><img src="https://img.shields.io/github/license/rezkyauliapratama/nyawa?color=blue" alt="License"></a>
-    <a href="https://github.com/rezkyauliapratama/nyawa/releases"><img src="https://img.shields.io/github/v/release/rezkyauliapratama/nyawa?include_prereleases&label=release" alt="Release"></a>
-    <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go" alt="Go"></a>
-    <img src="https://img.shields.io/badge/binary-14MB-green" alt="Size">
-    <a href="https://github.com/rezkyauliapratama/nyawa/stargazers"><img src="https://img.shields.io/github/stars/rezkyauliapratama/nyawa?style=flat&logo=github" alt="Stars"></a>
-  </p>
-  <p>
-    <b>Indonesian</b> - <i>"nyawa" means "soul" or "spirit"</i>
-  </p>
-  <br>
-</div>
+# Nyawa
 
----
+**Offline-First AI Memory Engine**
 
-**Nyawa** is a portable, offline-first memory engine for AI agents. It stores, searches, and maintains memories using hybrid search (semantic + keyword), entity graph traversal, and a proactive Dream Cycle that consolidates knowledge while idle.
+![CI](https://github.com/rezkyauliapratama/nyawa/actions/workflows/go-test.yml/badge.svg)
+![License](https://img.shields.io/github/license/rezkyauliapratama/nyawa?color=blue)
+![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)
+![Size](https://img.shields.io/badge/binary-14MB-green)
 
-> **Key Philosophy:** Zero external dependencies. No Docker. No external vector databases. Just a single 14MB Go binary with SQLite.
+Nyawa is a portable, offline-first memory engine for AI agents.
 
----
+> Zero external dependencies. No Docker. No external vector databases. Single 14MB Go binary with SQLite.
 
-## Quick Start
+### Quick Start
 
 ```bash
-# Install (Linux x86_64)
-curl -L https://github.com/rezkyauliapratama/nyawa/releases/latest/download/nyawa-linux-amd64.gz | gunzip > nyawa
-chmod +x ./nyawa
-
-# Or build from source
+# Build from source
 git clone https://github.com/rezkyauliapratama/nyawa.git
 cd nyawa
 make build
@@ -48,24 +32,17 @@ make build
 # Open http://localhost:3300/dashboard
 ```
 
----
+### Features
 
-## Features
+- Hybrid search: HNSW vector + SQLite FTS5 + RRF fusion
+- Entity graph: auto-extract, traverse, boost
+- Dream Cycle: 6-phase autonomous memory maintenance
+- Web dashboard: real-time UI at /dashboard
+- Namespace isolation: organize memories by context
+- Time-travel queries: recall past states
+- Batch import: JSON file or stdin
+- MCP protocol: AI agent integration
 
-### Hybrid Search
-Combines semantic (HNSW vector index) and keyword (SQLite FTS5) search with Reciprocal Rank Fusion (RRF) for best-in-class recall.
+### Docs
 
-### Entity Graph
-Automatically extracts entities (people, technologies, URLs) from memories and builds a traversable knowledge graph.
-
-### Dream Cycle
-Six-phase automatic memory maintenance that runs in the background: Evict, Contradiction, Dedup, Link, Prioritize, Snapshot.
-
-### Web Dashboard
-Built-in dashboard at /dashboard with stats, search, browse, and delete. No frontend framework needed.
-
-### Namespace Isolation
-Organize memories into isolated namespaces (backend, infra, personal).
-
-### Time-Travel Queries
-Query memories as they existed at any point in time.
+Full README: [github.com/rezkyauliapratama/nyawa](https://github.com/rezkyauliapratama/nyawa)
