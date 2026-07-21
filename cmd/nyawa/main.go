@@ -1,5 +1,3 @@
-// Nyawa — Offline-First AI Memory Engine
-// Phase 4: Scale & Stability
 package main
 
 import (
@@ -32,24 +30,26 @@ func main() {
 	case "dream": cmdDream()
 	case "ns": cmdNamespace()
 	case "archive": cmdArchive()
-	case "version": fmt.Println("nyawa v0.8.0 — Phase 4")
+	case "import": cmdImport()
+	case "version": fmt.Println("nyawa v0.9.0")
 	default: printUsage(); os.Exit(1)
 	}
 }
 
 func printUsage() {
-	fmt.Printf(`Nyawa — Offline-First AI Memory Engine v0.8.0
+	fmt.Printf(`Nyawa — Offline-First AI Memory Engine
 
 Usage:
-  nyawa init <db-path>
+  nyawa init <db>
   nyawa store <db> <content>
+  nyawa import <db> <file.json|->    Import JSON array from file or stdin
   nyawa recall <db> <q> [--ns <ns>] [--at <time>]
   nyawa stats <db>
-  nyawa ns <db>                    List namespaces
-  nyawa archive <db> <out>         Archive superseded
-  nyawa serve <db>                 HTTP + Dream Cycle
-  nyawa mcp <db>                   MCP server
-  nyawa dream <db>                 Dream Cycle
+  nyawa ns <db>
+  nyawa archive <db> <out>
+  nyawa serve <db>
+  nyawa mcp <db>
+  nyawa dream <db>
   nyawa version
 `)
 }
@@ -66,7 +66,7 @@ func getEmbedder() *embedder.PriorityChain {
 	return embedder.NewPriorityChain(bge, ollama)
 }
 func cmdInit() {
-	if len(os.Args) < 3 { log.Fatal("usage: nyawa init <db-path>") }
+	if len(os.Args) < 3 { log.Fatal("usage: nyawa init <db>") }
 	s := getStore(os.Args[2], nil); defer s.Close()
 	stats, _ := s.Stats(); b, _ := json.Marshal(stats); fmt.Println(string(b))
 }
@@ -116,6 +116,29 @@ func cmdArchive() {
 	if err != nil { log.Fatalf("archive: %v", err) }
 	fmt.Printf("Archived %d memories to %s\n", c, os.Args[3])
 }
+func cmdImport() {
+	if len(os.Args) < 4 { log.Fatal("usage: nyawa import <db> <file.json|->") }
+	emb := getEmbedder(); defer emb.StopAll()
+	s := getStore(os.Args[2], emb); defer s.Close()
+	var data []byte
+	if os.Args[3] == "-" {
+		b := make([]byte, 4096)
+		for { n, err := os.Stdin.Read(b); if n > 0 { data = append(data, b[:n]...) }; if err != nil { break } }
+	} else { var err error; data, err = os.ReadFile(os.Args[3]); if err != nil { log.Fatalf("read: %v", err) } }
+	var entries []struct {
+		Content, Namespace, Type string `json:"content" json:"namespace,omitempty" json:"type,omitempty"`
+	}
+	if err := json.Unmarshal(data, &entries); err != nil { log.Fatalf("parse: %v", err) }
+	now := time.Now(); im, fa := 0, 0
+	for i, e := range entries {
+		if e.Content == "" { continue }
+		ns := e.Namespace; if ns == "" { ns = "default" }
+		mt := types.MemoryType(e.Type); if mt == "" { mt = types.TypeNote }
+		if err := s.InsertMemory(&types.Memory{ID: fmt.Sprintf("mem_%d_%d", now.UnixNano(), i), Content: e.Content, Type: mt, Namespace: ns}); err != nil { fa++; continue }
+		im++
+	}
+	fmt.Printf("Imported %d (%d failed)\n", im, fa)
+}
 func cmdServe() {
 	if len(os.Args) < 3 { log.Fatal("usage: nyawa serve <db>") }
 	emb := getEmbedder(); defer emb.StopAll()
@@ -131,8 +154,7 @@ func cmdServe() {
 func cmdMCP() {
 	if len(os.Args) < 3 { log.Fatal("usage: nyawa mcp <db>") }
 	emb := getEmbedder(); defer emb.StopAll()
-	st := getStore(os.Args[2], emb)
-	log.Printf("MCP — db=%s", os.Args[2])
+	st := getStore(os.Args[2], emb); log.Printf("MCP — db=%s", os.Args[2])
 	if err := mcp.NewServer(st).Run(); err != nil { log.Fatalf("mcp: %v", err) }
 }
 func cmdDream() {
@@ -140,8 +162,7 @@ func cmdDream() {
 	st := getStore(os.Args[2], nil); defer st.Close()
 	stats, _ := st.Stats(); b, _ := json.MarshalIndent(stats, "", "  "); fmt.Println(string(b))
 	fmt.Println("--- Running Dream Cycle ---")
-	engine := dream.New(st.GetDB(), st.GetHNSW(), st.GetHNSWPath())
-	cfg := dream.DefaultConfig()
-	result := engine.Run(cfg)
-	b2, _ := json.MarshalIndent(result, "", "  "); fmt.Println(string(b2))
+	e := dream.New(st.GetDB(), st.GetHNSW(), st.GetHNSWPath())
+	res := e.Run(dream.DefaultConfig())
+	b2, _ := json.MarshalIndent(res, "", "  "); fmt.Println(string(b2))
 }
