@@ -98,13 +98,15 @@ func (s *Server) tools() []toolDefinition {
 		},
 		{
 			Name:        "nyawa_recall",
-			Description: "Semantic search across memories. Uses hybrid search (vector + FTS5 + RRF). Returns ranked results with relevance scores.",
+			Description: "Semantic search across memories. Uses hybrid search (vector + FTS5 + RRF). Supports server-side filtering by type and minimum score.",
 			InputSchema: inputSchema{
 				Type: "object",
 				Properties: map[string]propertySchema{
-					"query":     {Type: "string", Description: "Natural language search query"},
-					"namespace": {Type: "string", Description: "Namespace filter (optional)"},
-					"limit":     {Type: "number", Description: "Max results (default: 10)"},
+					"query":         {Type: "string", Description: "Natural language search query"},
+					"namespace":     {Type: "string", Description: "Namespace filter (optional)"},
+					"limit":         {Type: "number", Description: "Max results (default: 10)"},
+					"exclude_types": {Type: "string", Description: "Comma-separated memory types to exclude from results"},
+					"min_score":     {Type: "number", Description: "Minimum similarity score threshold (0.0-1.0)"},
 				},
 				Required: []string{"query"},
 			},
@@ -228,9 +230,11 @@ func (s *Server) handleStore(id any, raw json.RawMessage) {
 }
 
 type recallArgs struct {
-	Query     string  `json:"query"`
-	Namespace string  `json:"namespace"`
-	Limit     float64 `json:"limit"`
+	Query       string   `json:"query"`
+	Namespace   string   `json:"namespace"`
+	Limit       float64  `json:"limit"`
+	ExcludeTypes []string `json:"exclude_types,omitempty"`
+	MinScore    float64  `json:"min_score,omitempty"`
 }
 
 func (s *Server) handleRecall(id any, raw json.RawMessage) {
@@ -245,23 +249,42 @@ func (s *Server) handleRecall(id any, raw json.RawMessage) {
 	}
 	limit := int(args.Limit)
 	if limit <= 0 { limit = 10 }
-	results, err := s.pipeline.Search(types.StoreQuery{QueryText: args.Query, Namespace: args.Namespace, Limit: limit})
+	results, err := s.pipeline.Search(types.StoreQuery{QueryText: args.Query, Namespace: args.Namespace, Limit: limit * 3})
 	if err != nil {
 		s.writeToolError(id, fmt.Sprintf("search failed: %v", err))
 		return
 	}
 	defer s.pipeline.ReleaseResults(results)
+
+	// Build exclude set for fast lookup
+	excludeSet := make(map[string]bool, len(args.ExcludeTypes))
+	for _, t := range args.ExcludeTypes {
+		excludeSet[t] = true
+	}
+
 	type resultItem struct {
 		ID, Content, Type, Namespace, CreatedAt string
 		Score                                  float64
 	}
 	items := make([]resultItem, 0, len(results))
 	for _, r := range results {
+		// Filter by type
+		if len(excludeSet) > 0 && excludeSet[string(r.Type)] {
+			continue
+		}
+		// Filter by min score
+		if args.MinScore > 0 && r.Score < args.MinScore {
+			continue
+		}
 		items = append(items, resultItem{
 			ID: r.ID, Content: r.Content, Type: string(r.Type),
 			Namespace: r.Namespace, Score: r.Score,
 			CreatedAt: r.CreatedAt.Format(time.RFC3339),
 		})
+	}
+	// Truncate to requested limit after filtering
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
 	}
 	result := map[string]any{"results": items, "count": len(items)}
 	s.writeToolResult(id, result)
