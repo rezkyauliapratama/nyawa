@@ -130,6 +130,21 @@ func (s *Server) tools() []toolDefinition {
 				Required: []string{"id"},
 			},
 		},
+		{
+			Name:        "nyawa_update",
+			Description: "Update an existing memory's content, type, namespace, or importance. Only active (non-deleted) memories can be updated.",
+			InputSchema: inputSchema{
+				Type: "object",
+				Properties: map[string]propertySchema{
+					"id":         {Type: "string", Description: "Memory ID to update (required)"},
+					"content":    {Type: "string", Description: "New memory content"},
+					"type":       {Type: "string", Description: "Memory type: decision, insight, procedure, fact, preference, context, note, event, reference", Enum: []string{"decision", "insight", "procedure", "fact", "preference", "context", "note", "event", "reference"}},
+					"namespace":  {Type: "string", Description: "New namespace"},
+					"importance": {Type: "number", Description: "Importance score (0.0-1.0)"},
+				},
+				Required: []string{"id"},
+			},
+		},
 	}
 }
 
@@ -194,6 +209,7 @@ func (s *Server) handleToolCall(req jsonRPCRequest) {
 	case "nyawa_recall": s.handleRecall(req.ID, params.Arguments)
 	case "nyawa_stats":  s.handleStats(req.ID)
 	case "nyawa_forget": s.handleForget(req.ID, params.Arguments)
+	case "nyawa_update": s.handleUpdate(req.ID, params.Arguments)
 	default: s.writeToolError(req.ID, fmt.Sprintf("Unknown tool: %s", params.Name))
 	}
 }
@@ -256,7 +272,6 @@ func (s *Server) handleRecall(id any, raw json.RawMessage) {
 	}
 	defer s.pipeline.ReleaseResults(results)
 
-	// Build exclude set for fast lookup
 	excludeSet := make(map[string]bool, len(args.ExcludeTypes))
 	for _, t := range args.ExcludeTypes {
 		excludeSet[t] = true
@@ -268,11 +283,9 @@ func (s *Server) handleRecall(id any, raw json.RawMessage) {
 	}
 	items := make([]resultItem, 0, len(results))
 	for _, r := range results {
-		// Filter by type
 		if len(excludeSet) > 0 && excludeSet[string(r.Type)] {
 			continue
 		}
-		// Filter by min score
 		if args.MinScore > 0 && r.Score < args.MinScore {
 			continue
 		}
@@ -282,7 +295,6 @@ func (s *Server) handleRecall(id any, raw json.RawMessage) {
 			CreatedAt: r.CreatedAt.Format(time.RFC3339),
 		})
 	}
-	// Truncate to requested limit after filtering
 	if limit > 0 && len(items) > limit {
 		items = items[:limit]
 	}
@@ -316,6 +328,41 @@ func (s *Server) handleForget(id any, raw json.RawMessage) {
 		return
 	}
 	result := map[string]string{"status": "deleted", "id": args.ID}
+	s.writeToolResult(id, result)
+}
+
+type updateArgs struct {
+	ID         string  `json:"id"`
+	Content    string  `json:"content,omitempty"`
+	Type       string  `json:"type,omitempty"`
+	Namespace  string  `json:"namespace,omitempty"`
+	Importance float64 `json:"importance,omitempty"`
+}
+
+func (s *Server) handleUpdate(id any, raw json.RawMessage) {
+	var args updateArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		s.writeToolError(id, "Invalid arguments")
+		return
+	}
+	if args.ID == "" {
+		s.writeToolError(id, "id required")
+		return
+	}
+	mem, err := s.store.GetMemory(args.ID)
+	if err != nil {
+		s.writeToolError(id, fmt.Sprintf("memory not found: %v", err))
+		return
+	}
+	if args.Content != "" { mem.Content = args.Content }
+	if args.Type != "" { mem.Type = types.MemoryType(args.Type) }
+	if args.Namespace != "" { mem.Namespace = args.Namespace }
+	if args.Importance > 0 { mem.Importance = args.Importance }
+	if err := s.store.UpdateMemory(mem); err != nil {
+		s.writeToolError(id, fmt.Sprintf("update failed: %v", err))
+		return
+	}
+	result := map[string]any{"status": "updated", "id": mem.ID, "content": mem.Content, "type": string(mem.Type)}
 	s.writeToolResult(id, result)
 }
 
