@@ -74,6 +74,22 @@ func (s *Store) DeleteMemory(id string) error {
 	if err == nil { s.hnsw.Delete(id); s.persistHNSW() }
 	return err
 }
+func (s *Store) UpdateMemory(m *types.Memory) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.Exec(`UPDATE memories SET content=?, mem_type=?, namespace=?, importance=?, updated_at=? WHERE id=? AND superseded_at IS NULL`,
+		m.Content, string(m.Type), m.Namespace, m.Importance, now, m.ID)
+	if err != nil { return fmt.Errorf("update: %w", err) }
+	n, _ := result.RowsAffected()
+	if n == 0 { return fmt.Errorf("memory %s not found or already deleted", m.ID) }
+	s.hnsw.Delete(m.ID)
+	if s.embedder != nil && s.embedder.Available() {
+		if v, e := s.embedder.Embed(m.Content); e == nil && len(v) > 0 {
+			s.hnsw.Insert(m.ID, v)
+			s.persistHNSW()
+		}
+	}
+	return nil
+}
 func (s *Store) FTS5SearchAt(query string, tq TimeQuery) ([]string, error) {
 	if tq.Limit <= 0 { tq.Limit = 10 }
 	var q string; var args []any
