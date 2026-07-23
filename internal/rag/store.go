@@ -1,14 +1,10 @@
-// Package rag implements document-level RAG (Retrieval-Augmented Generation) for Nyawa.
-// Uses the same SQLite + HNSW core but adds collections, documents, and chunking.
-//
-// Default mode: memory (unchanged).
-// RAG mode: activate via CLI subcommands or MCP tools.
 package rag
 
 import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +13,6 @@ import (
 	"github.com/rezkyauliapratama/nyawa/internal/index"
 )
 
-// Collection groups documents for RAG.
 type Collection struct {
 	ID          int       `json:"id"`
 	Name        string    `json:"name"`
@@ -28,7 +23,6 @@ type Collection struct {
 	DocCount    int       `json:"doc_count"`
 }
 
-// Document represents an ingested document.
 type Document struct {
 	ID         string          `json:"id"`
 	Collection int             `json:"collection_id"`
@@ -39,7 +33,6 @@ type Document struct {
 	CreatedAt  time.Time       `json:"created_at"`
 }
 
-// Chunk is a single piece of a document.
 type Chunk struct {
 	ID          string          `json:"id"`
 	DocumentID  string          `json:"document_id"`
@@ -48,14 +41,12 @@ type Chunk struct {
 	Metadata    json.RawMessage `json:"metadata,omitempty"`
 }
 
-// Embedder interface (subset of store.Embedder).
 type Embedder interface {
 	Embed(string) ([]float32, error)
 	Available() bool
 	Dims() int
 }
 
-// RAGStore wraps the memory store and adds RAG-specific operations.
 type RAGStore struct {
 	db       *sql.DB
 	hnsw     *index.HNSW
@@ -63,7 +54,6 @@ type RAGStore struct {
 	embedder Embedder
 }
 
-// NewRAGStore creates a RAG store backed by the existing memory database.
 func NewRAGStore(db *sql.DB, hnsw *index.HNSW, hnswPath string, emb Embedder) *RAGStore {
 	r := &RAGStore{db: db, hnsw: hnsw, hnswPath: hnswPath, embedder: emb}
 	r.migrate()
@@ -98,8 +88,6 @@ func (r *RAGStore) migrate() {
 		metadata TEXT DEFAULT '{}');
 	CREATE INDEX IF NOT EXISTS idx_rag_chunks_document ON rag_chunks(document_id);`)
 }
-
-// ---- Collections ----------------------------------------------------------
 
 func (r *RAGStore) CreateCollection(name, description string, chunkSize int) (*Collection, error) {
 	if chunkSize <= 0 { chunkSize = 500 }
@@ -137,8 +125,6 @@ func (r *RAGStore) DeleteCollection(name string) error {
 	_, err = r.db.Exec(`DELETE FROM rag_collections WHERE name=?`, name)
 	return err
 }
-
-// ---- Document Ingestion ---------------------------------------------------
 
 func (r *RAGStore) IngestFile(filePath, collectionName string, metadata map[string]interface{}) (*Document, error) {
 	data, err := os.ReadFile(filePath)
@@ -198,8 +184,6 @@ func (r *RAGStore) IngestDir(dirPath, collectionName string) (int, error) {
 	return count, nil
 }
 
-// ---- RAG Query ------------------------------------------------------------
-
 type RAGResult struct {
 	ChunkID  string  `json:"chunk_id"`
 	Content  string  `json:"content"`
@@ -243,12 +227,11 @@ func (r *RAGStore) Query(query string, topK int, collectionName string) ([]RAGRe
 		r.db.QueryRow(`SELECT filename FROM rag_documents WHERE id=?`, docID).Scan(&filename)
 
 		ragResults = append(ragResults, RAGResult{
-			ChunkID: res.ID, Content: content, Score: res.Score,
+			ChunkID: res.ID, Content: content, Score: 1.0 / (1.0 + res.Distance),
 			Document: filename, ChunkIdx: chunkIdx,
 		})
 	}
 
-	// Sort by score descending
 	for i := 0; i < len(ragResults); i++ {
 		for j := i + 1; j < len(ragResults); j++ {
 			if ragResults[j].Score > ragResults[i].Score {
@@ -261,8 +244,6 @@ func (r *RAGStore) Query(query string, topK int, collectionName string) ([]RAGRe
 	}
 	return ragResults, nil
 }
-
-// ---- Helpers --------------------------------------------------------------
 
 func (r *RAGStore) getOrCreateCollection(name string) (*Collection, error) {
 	row := r.db.QueryRow(`SELECT id,name,description,chunk_size FROM rag_collections WHERE name=?`, name)
