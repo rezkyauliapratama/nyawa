@@ -191,16 +191,13 @@ type RAGResult struct {
 	ChunkIdx int     `json:"chunk_index"`
 }
 
-// Query performs a RAG search with default reranker (cross-encoder if available, else noop).
 func (r *RAGStore) Query(query string, topK int, collectionName string) ([]RAGResult, error) {
-	reranker := &NoopReranker{}
+	var reranker Reranker = &NoopReranker{}
 	if ce := NewPythonCrossEncoder(); ce.Available() {
 		reranker = ce
 	}
 	return r.QueryWithRerank(query, topK, collectionName, reranker)
 }
-
-// ---- Helpers --------------------------------------------------------------
 
 func (r *RAGStore) getOrCreateCollection(name string) (*Collection, error) {
 	row := r.db.QueryRow(`SELECT id,name,description,chunk_size FROM rag_collections WHERE name=?`, name)
