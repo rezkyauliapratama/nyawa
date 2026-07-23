@@ -16,7 +16,6 @@ import (
 	"time"
 )
 
-// Reranker re-ranks retrieved chunks by semantic relevance to the query.
 type Reranker interface {
 	Rerank(query string, candidates []string) ([]float64, error)
 	Available() bool
@@ -118,67 +117,92 @@ func (r *PythonCrossEncoder) Stop() {
 	}
 }
 
-// ---- Cohere Reranker (3rd Party) -----------------------------------------
+// ---- OpenAI-Compatible Reranker (3rd Party: Jina, Voyage, etc.) -----------
 
-type CohereReranker struct {
-	apiKey string
-	model  string
-	client *http.Client
+type OpenAIReranker struct {
+	apiKey  string
+	baseURL string
+	model   string
+	client  *http.Client
+	name    string
 }
 
-func NewCohereReranker(apiKey string) *CohereReranker {
-	if apiKey == "" {
-		apiKey = os.Getenv("COHERE_API_KEY")
+type openAIRerankRequest struct {
+	Model     string   `json:"model"`
+	Query     string   `json:"query"`
+	Documents []string `json:"documents"`
+	TopN      int      `json:"top_n,omitempty"`
+}
+
+type openAIRerankResponse struct {
+	Results []struct {
+		Index          int     `json:"index"`
+		RelevanceScore float64 `json:"relevance_score"`
+	} `json:"results"`
+}
+
+func NewOpenAIReranker() *OpenAIReranker {
+	baseURL := os.Getenv("RERANK_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://api.jina.ai/v1"
 	}
-	return &CohereReranker{
-		apiKey: apiKey,
-		model:  "rerank-v3.5",
-		client: &http.Client{Timeout: 30 * time.Second},
+	model := os.Getenv("RERANK_MODEL")
+	if model == "" {
+		model = "jina-reranker-v2-base-multilingual"
+	}
+	apiKey := os.Getenv("RERANK_API_KEY")
+	name := fmt.Sprintf("openai/%s", model)
+
+	return &OpenAIReranker{
+		apiKey:  apiKey,
+		baseURL: strings.TrimRight(baseURL, "/"),
+		model:   model,
+		client:  &http.Client{Timeout: 30 * time.Second},
+		name:    name,
 	}
 }
 
-func (c *CohereReranker) Rerank(query string, candidates []string) ([]float64, error) {
-	if c.apiKey == "" {
-		return nil, fmt.Errorf("COHERE_API_KEY not set")
+func (r *OpenAIReranker) Rerank(query string, candidates []string) ([]float64, error) {
+	if r.apiKey == "" {
+		return nil, fmt.Errorf("RERANK_API_KEY not set")
 	}
-	body := map[string]any{
-		"model":     c.model,
-		"query":     query,
-		"documents": candidates,
-		"top_n":     len(candidates),
+	body := openAIRerankRequest{
+		Model:     r.model,
+		Query:     query,
+		Documents: candidates,
+		TopN:      len(candidates),
 	}
 	b, _ := json.Marshal(body)
-	req, err := http.NewRequest("POST", "https://api.cohere.com/v2/rerank", bytes.NewReader(b))
-	if err != nil { return nil, err }
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req, err := http.NewRequest("POST", r.baseURL+"/rerank", bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+r.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.client.Do(req)
-	if err != nil { return nil, err }
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("api call: %w", err)
+	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	var result struct {
-		Results []struct {
-			Index          int     `json:"index"`
-			RelevanceScore float64 `json:"relevance_score"`
-		} `json:"results"`
-	}
+	var result openAIRerankResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("cohere: %v", err)
+		return nil, fmt.Errorf("parse: %v", err)
 	}
 
 	scores := make([]float64, len(candidates))
-	for _, r := range result.Results {
-		if r.Index < len(scores) {
-			scores[r.Index] = r.RelevanceScore
+	for _, res := range result.Results {
+		if res.Index < len(scores) {
+			scores[res.Index] = res.RelevanceScore
 		}
 	}
 	return scores, nil
 }
 
-func (c *CohereReranker) Available() bool { return c.apiKey != "" }
-func (c *CohereReranker) Name() string    { return "cohere/" + c.model }
+func (r *OpenAIReranker) Available() bool { return r.apiKey != "" }
+func (r *OpenAIReranker) Name() string    { return r.name }
 
 // ---- Noop Reranker (passthrough) -----------------------------------------
 
