@@ -191,58 +191,16 @@ type RAGResult struct {
 	ChunkIdx int     `json:"chunk_index"`
 }
 
+// Query performs a RAG search with default reranker (cross-encoder if available, else noop).
 func (r *RAGStore) Query(query string, topK int, collectionName string) ([]RAGResult, error) {
-	if r.embedder == nil || !r.embedder.Available() {
-		return nil, fmt.Errorf("embedder not available")
+	reranker := &NoopReranker{}
+	if ce := NewPythonCrossEncoder(); ce.Available() {
+		reranker = ce
 	}
-	if topK <= 0 { topK = 5 }
-
-	vec, err := r.embedder.Embed(query)
-	if err != nil { return nil, fmt.Errorf("embed query: %w", err) }
-
-	results := r.hnsw.Search(vec, topK*3)
-	if len(results) == 0 { return nil, nil }
-
-	var ragResults []RAGResult
-	for _, res := range results {
-		if !strings.HasPrefix(res.ID, "rag_chk_") { continue }
-
-		var content string
-		var docID string
-		var chunkIdx int
-		err := r.db.QueryRow(`SELECT content, document_id, chunk_index FROM rag_chunks WHERE id=?`, res.ID).Scan(&content, &docID, &chunkIdx)
-		if err != nil { continue }
-
-		if collectionName != "" {
-			var colID int
-			r.db.QueryRow(`SELECT collection_id FROM rag_documents WHERE id=?`, docID).Scan(&colID)
-			if colID == 0 { continue }
-			var colName string
-			r.db.QueryRow(`SELECT name FROM rag_collections WHERE id=?`, colID).Scan(&colName)
-			if colName != collectionName { continue }
-		}
-
-		var filename string
-		r.db.QueryRow(`SELECT filename FROM rag_documents WHERE id=?`, docID).Scan(&filename)
-
-		ragResults = append(ragResults, RAGResult{
-			ChunkID: res.ID, Content: content, Score: 1.0 / (1.0 + res.Distance),
-			Document: filename, ChunkIdx: chunkIdx,
-		})
-	}
-
-	for i := 0; i < len(ragResults); i++ {
-		for j := i + 1; j < len(ragResults); j++ {
-			if ragResults[j].Score > ragResults[i].Score {
-				ragResults[i], ragResults[j] = ragResults[j], ragResults[i]
-			}
-		}
-	}
-	if len(ragResults) > topK {
-		ragResults = ragResults[:topK]
-	}
-	return ragResults, nil
+	return r.QueryWithRerank(query, topK, collectionName, reranker)
 }
+
+// ---- Helpers --------------------------------------------------------------
 
 func (r *RAGStore) getOrCreateCollection(name string) (*Collection, error) {
 	row := r.db.QueryRow(`SELECT id,name,description,chunk_size FROM rag_collections WHERE name=?`, name)
