@@ -11,6 +11,7 @@ import (
 	"github.com/rezkyauliapratama/nyawa/internal/dream"
 	"github.com/rezkyauliapratama/nyawa/internal/embedder"
 	"github.com/rezkyauliapratama/nyawa/internal/mcp"
+	"github.com/rezkyauliapratama/nyawa/internal/rag"
 	"github.com/rezkyauliapratama/nyawa/internal/search"
 	"github.com/rezkyauliapratama/nyawa/internal/server"
 	"github.com/rezkyauliapratama/nyawa/internal/store"
@@ -33,6 +34,7 @@ func main() {
 	case "archive": cmdArchive()
 	case "import": cmdImport()
 	case "version": fmt.Println("nyawa v0.9.0")
+	case "rag": cmdRag()
 	default: printUsage(); os.Exit(1)
 	}
 }
@@ -51,6 +53,11 @@ Usage:
   nyawa serve <db>
   nyawa mcp <db>
   nyawa dream <db>
+  nyawa rag <db> <command> [args...]
+    collection <list|create|delete> [name]
+    ingest <file|dir> [--collection <name>]
+    query "<question>" [--collection <name>] [--top-k <n>]
+    stats
   nyawa version
 `)
 }
@@ -187,4 +194,85 @@ func cmdDream() {
 	e := dream.New(st.GetDB(), st.GetHNSW(), st.GetHNSWPath())
 	res := e.Run(dream.DefaultConfig())
 	b2, _ := json.MarshalIndent(res, "", "  "); fmt.Println(string(b2))
+}
+
+func cmdRag() {
+	if len(os.Args) < 4 { log.Fatal("usage: nyawa rag <db> <command> [args...]") }
+	dbPath := os.Args[2]
+	sub := os.Args[3]
+
+	emb := getEmbedder(); defer emb.StopAll()
+	st := getStore(dbPath, emb); defer st.Close()
+	rs := rag.NewRAGStore(st.GetDB(), st.GetHNSW(), st.GetHNSWPath(), emb)
+
+	switch sub {
+	case "collection":
+		if len(os.Args) < 5 { log.Fatal("usage: nyawa rag <db> collection <list|create|delete>") }
+		switch os.Args[4] {
+		case "list":
+			cols, err := rs.ListCollections()
+			if err != nil { log.Fatalf("collections: %v", err) }
+			if len(cols) == 0 { fmt.Println("No collections"); return }
+			for _, c := range cols { fmt.Printf("#%d %s (docs=%d chunk_size=%d)\n", c.ID, c.Name, c.DocCount, c.ChunkSize) }
+		case "create":
+			name := ""
+			if len(os.Args) > 5 { name = os.Args[5] } else { log.Fatal("usage: nyawa rag <db> collection create <name>") }
+			c, err := rs.CreateCollection(name, "", 500)
+			if err != nil { log.Fatalf("create: %v", err) }
+			fmt.Printf("Collection created: #%d %s\n", c.ID, c.Name)
+		case "delete":
+			if len(os.Args) > 5 {
+				if err := rs.DeleteCollection(os.Args[5]); err != nil { log.Fatalf("delete: %v", err) }
+				fmt.Println("Collection deleted")
+			} else { log.Fatal("usage: nyawa rag <db> collection delete <name>") }
+		default:
+			log.Fatalf("unknown collection command: %s", os.Args[4])
+		}
+
+	case "ingest":
+		if len(os.Args) < 5 { log.Fatal("usage: nyawa rag <db> ingest <file|dir> [--collection <name>]") }
+		colName := "default"
+		path := os.Args[4]
+		for i := 5; i < len(os.Args)-1; i++ {
+			if os.Args[i] == "--collection" { colName = os.Args[i+1] }
+		}
+		info, err := os.Stat(path)
+		if err != nil { log.Fatalf("path: %v", err) }
+		if info.IsDir() {
+			n, err := rs.IngestDir(path, colName)
+			if err != nil { log.Fatalf("ingest dir: %v", err) }
+			fmt.Printf("Ingested %d files from %s into %s\n", n, path, colName)
+		} else {
+			doc, err := rs.IngestFile(path, colName, nil)
+			if err != nil { log.Fatalf("ingest file: %v", err) }
+			fmt.Printf("Ingested %s (%d chunks) into %s\n", doc.Filename, doc.ChunkCount, colName)
+		}
+
+	case "query":
+		if len(os.Args) < 5 { log.Fatal("usage: nyawa rag <db> query \"<question>\" [--collection <name>] [--top-k <n>]") }
+		question := os.Args[4]
+		colName := ""
+		topK := 5
+		for i := 5; i < len(os.Args)-1; i++ {
+			switch os.Args[i] {
+			case "--collection": colName = os.Args[i+1]
+			case "--top-k": fmt.Sscanf(os.Args[i+1], "%d", &topK)
+			}
+		}
+		results, err := rs.Query(question, topK, colName)
+		if err != nil { log.Fatalf("query: %v", err) }
+		if len(results) == 0 { fmt.Println("No results"); return }
+		fmt.Printf("=== RAG Results (top-%d) ===\n", len(results))
+		for i, r := range results {
+			fmt.Printf("\n--- Result #%d [%.4f] from %s chunk#%d ---\n%s\n", i+1, r.Score, r.Document, r.ChunkIdx, r.Content)
+		}
+
+	case "stats":
+		stats := rs.Stats()
+		b, _ := json.MarshalIndent(stats, "", "  ")
+		fmt.Println(string(b))
+
+	default:
+		log.Fatalf("unknown rag command: %s", sub)
+	}
 }
