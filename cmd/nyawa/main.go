@@ -18,6 +18,12 @@ import (
 	"github.com/rezkyauliapratama/nyawa/internal/types"
 )
 
+var (
+	bgeEmbedder    *embedder.PythonEmbedder
+	apiEmbedder    *embedder.OpenAIEmbedder
+	ollamaEmbedder *embedder.OllamaEmbedder
+)
+
 func main() {
 	log.SetFlags(0); log.SetPrefix("nyawa: ")
 	if len(os.Args) < 2 { printUsage(); os.Exit(1) }
@@ -78,12 +84,56 @@ func getStore(p string, emb store.Embedder) *store.Store {
 	return s
 }
 
-func getEmbedder() *embedder.PriorityChain {
-	bge := embedder.NewPythonEmbedder("/opt/data/nyawa/internal/embedder/model")
-	if err := bge.Start(); err != nil { log.Printf("BGE unavailable: %v", err) } else { log.Printf("BGE ready") }
-	jina := embedder.NewJinaEmbedder()
-	ollama := embedder.NewOllamaEmbedder(embedder.OllamaConfig{BaseURL: "http://localhost:11434", Model: "nomic-embed-text"})
-	return embedder.NewPriorityChain(bge, jina, ollama)
+func initEmbedders() {
+	bgeEmbedder = embedder.NewPythonEmbedder("/opt/data/nyawa/internal/embedder/model")
+	if err := bgeEmbedder.Start(); err != nil {
+		log.Printf("BGE unavailable: %v", err)
+		bgeEmbedder = nil
+	} else {
+		log.Printf("BGE ready")
+	}
+	apiEmbedder = embedder.NewOpenAIEmbedder()
+	ollamaEmbedder = embedder.NewOllamaEmbedder(embedder.OllamaConfig{
+		BaseURL: "http://localhost:11434", Model: "nomic-embed-text",
+	})
+}
+
+// getMemoryEmbedder returns embedder for memory operations.
+// MEMORY_EMBEDDER=local (default) → BGE ONNX offline
+// MEMORY_EMBEDDER=api            → OpenAI-compatible API (EMBEDDING_API_KEY)
+func getMemoryEmbedder() *embedder.PriorityChain {
+	if bgeEmbedder == nil {
+		bge := embedder.NewPythonEmbedder("/opt/data/nyawa/internal/embedder/model")
+		if err := bge.Start(); err == nil { bgeEmbedder = bge }
+	}
+	mode := os.Getenv("MEMORY_EMBEDDER")
+	if mode == "api" && apiEmbedder != nil && apiEmbedder.Available() {
+		log.Printf("Memory embedder: api (%s)", apiEmbedder.Name())
+		return embedder.NewPriorityChain(apiEmbedder)
+	}
+	if bgeEmbedder != nil {
+		return embedder.NewPriorityChain(bgeEmbedder, ollamaEmbedder)
+	}
+	return embedder.NewPriorityChain(apiEmbedder, ollamaEmbedder)
+}
+
+// getRAGEmbedder returns embedder for RAG operations.
+// RAG_EMBEDDER=local (default) → BGE ONNX offline
+// RAG_EMBEDDER=api             → OpenAI-compatible API (EMBEDDING_API_KEY)
+func getRAGEmbedder() *embedder.PriorityChain {
+	if bgeEmbedder == nil {
+		bge := embedder.NewPythonEmbedder("/opt/data/nyawa/internal/embedder/model")
+		if err := bge.Start(); err == nil { bgeEmbedder = bge }
+	}
+	mode := os.Getenv("RAG_EMBEDDER")
+	if mode == "api" && apiEmbedder != nil && apiEmbedder.Available() {
+		log.Printf("RAG embedder: api (%s)", apiEmbedder.Name())
+		return embedder.NewPriorityChain(apiEmbedder)
+	}
+	if bgeEmbedder != nil {
+		return embedder.NewPriorityChain(bgeEmbedder, apiEmbedder, ollamaEmbedder)
+	}
+	return embedder.NewPriorityChain(apiEmbedder, ollamaEmbedder)
 }
 
 func cmdInit() {
@@ -96,7 +146,7 @@ func cmdStore() {
 	if len(os.Args) < 4 { log.Fatal("usage: nyawa store <db> <content>") }
 	content := strings.TrimSpace(os.Args[3])
 	if content == "" { log.Fatal("content cannot be empty") }
-	emb := getEmbedder(); defer emb.StopAll()
+	emb := getMemoryEmbedder(); defer emb.StopAll()
 	s := getStore(os.Args[2], emb); defer s.Close()
 	id := fmt.Sprintf("mem_%d", time.Now().UnixNano())
 	s.InsertMemory(&types.Memory{ID: id, Content: content, Type: types.TypeNote, Namespace: "default"})
@@ -106,7 +156,7 @@ func cmdStore() {
 func cmdRecall() {
 	if len(os.Args) < 4 { log.Fatal("usage: nyawa recall <db> <q> [--ns <ns>] [--at <time>]") }
 	ns, atTime := parseFlags()
-	emb := getEmbedder(); defer emb.StopAll()
+	emb := getMemoryEmbedder(); defer emb.StopAll()
 	s := getStore(os.Args[2], emb); defer s.Close()
 	p := search.NewPipeline(s, emb, types.DefaultConfig().Search)
 	q := types.StoreQuery{QueryText: os.Args[3], Limit: 10, Namespace: ns}
@@ -141,7 +191,7 @@ func cmdArchive() {
 
 func cmdImport() {
 	if len(os.Args) < 4 { log.Fatal("usage: nyawa import <db> <file.json|->") }
-	emb := getEmbedder(); defer emb.StopAll()
+	emb := getMemoryEmbedder(); defer emb.StopAll()
 	s := getStore(os.Args[2], emb); defer s.Close()
 	var data []byte
 	if os.Args[3] == "-" {
@@ -167,7 +217,7 @@ func cmdImport() {
 
 func cmdServe() {
 	if len(os.Args) < 3 { log.Fatal("usage: nyawa serve <db>") }
-	emb := getEmbedder(); defer emb.StopAll()
+	emb := getMemoryEmbedder(); defer emb.StopAll()
 	st := getStore(os.Args[2], emb); defer st.Close()
 	engine := dream.New(st.GetDB(), st.GetHNSW(), st.GetHNSWPath())
 	engine.Start(dream.DefaultConfig())
@@ -180,7 +230,7 @@ func cmdServe() {
 
 func cmdMCP() {
 	if len(os.Args) < 3 { log.Fatal("usage: nyawa mcp <db>") }
-	emb := getEmbedder(); defer emb.StopAll()
+	emb := getMemoryEmbedder(); defer emb.StopAll()
 	st := getStore(os.Args[2], emb)
 	log.Printf("MCP -- db=%s embedder=%s", os.Args[2], emb.Current())
 	p := search.NewPipeline(st, emb, types.DefaultConfig().Search)
@@ -202,7 +252,7 @@ func cmdRag() {
 	dbPath := os.Args[2]
 	sub := os.Args[3]
 
-	emb := getEmbedder(); defer emb.StopAll()
+	emb := getRAGEmbedder(); defer emb.StopAll()
 	st := getStore(dbPath, emb); defer st.Close()
 	rs := rag.NewRAGStore(st.GetDB(), st.GetHNSW(), st.GetHNSWPath(), emb)
 
