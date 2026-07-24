@@ -81,9 +81,9 @@ func getStore(p string, emb store.Embedder) *store.Store {
 func getEmbedder() *embedder.PriorityChain {
 	bge := embedder.NewPythonEmbedder("/opt/data/nyawa/internal/embedder/model")
 	if err := bge.Start(); err != nil { log.Printf("BGE unavailable: %v", err) } else { log.Printf("BGE ready") }
-	jina := embedder.NewJinaEmbedder()
+	api := embedder.NewOpenAIEmbedder()
 	ollama := embedder.NewOllamaEmbedder(embedder.OllamaConfig{BaseURL: "http://localhost:11434", Model: "nomic-embed-text"})
-	return embedder.NewPriorityChain(bge, jina, ollama)
+	return embedder.NewPriorityChain(bge, api, ollama)
 }
 
 func cmdInit() {
