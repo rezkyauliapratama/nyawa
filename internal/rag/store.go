@@ -191,9 +191,13 @@ type RAGResult struct {
 	ChunkIdx int     `json:"chunk_index"`
 }
 
+// Query performs a RAG search with default reranker.
+// Priority: Jina API → Python CrossEncoder → Noop (vector score only)
 func (r *RAGStore) Query(query string, topK int, collectionName string) ([]RAGResult, error) {
 	var reranker Reranker = &NoopReranker{}
-	if ce := NewPythonCrossEncoder(); ce.Available() {
+	if jina := NewOpenAIReranker(); jina.Available() {
+		reranker = jina
+	} else if ce := NewPythonCrossEncoder(); ce.Available() {
 		reranker = ce
 	}
 	return r.QueryWithRerank(query, topK, collectionName, reranker)
