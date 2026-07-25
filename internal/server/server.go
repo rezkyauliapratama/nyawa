@@ -39,6 +39,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/v1/health", s.handleHealth)
 	s.mux.HandleFunc("/v1/namespaces", s.handleNamespaces)
 	s.mux.HandleFunc("/v1/forget/", s.handleForget)
+	s.mux.HandleFunc("/v1/rag/stats", s.handleRAGStats)
+	s.mux.HandleFunc("/v1/hnsw/info", s.handleHNSWInfo)
 	s.mux.HandleFunc("/dashboard", s.handleDashboard)
 	s.mux.HandleFunc("/", s.handleRoot)
 }
@@ -190,6 +192,20 @@ func (s *Server) handleBatchStore(w http.ResponseWriter, r *http.Request) {
 		results = append(results, map[string]any{"id": id, "status": "stored"})
 	}
 	writeJSON(w, 201, map[string]any{"results": results, "count": len(results)})
+}
+func (s *Server) handleRAGStats(w http.ResponseWriter, r *http.Request) {
+	db := s.store.GetDB()
+	var cols, docs, chunks int
+	db.QueryRow(`SELECT COUNT(*) FROM rag_collections`).Scan(&cols)
+	db.QueryRow(`SELECT COUNT(*) FROM rag_documents`).Scan(&docs)
+	db.QueryRow(`SELECT COUNT(*) FROM rag_chunks`).Scan(&chunks)
+	writeJSON(w, 200, map[string]int{"collections": cols, "documents": docs, "chunks": chunks})
+}
+func (s *Server) handleHNSWInfo(w http.ResponseWriter, r *http.Request) {
+	h := s.store.GetHNSW()
+	if h == nil { writeJSON(w, 200, map[string]any{"error": "HNSW not initialized"}); return }
+	info := h.Info()
+	writeJSON(w, 200, info)
 }
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
