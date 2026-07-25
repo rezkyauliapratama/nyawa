@@ -18,11 +18,14 @@ const (
 	TypeNote       MemoryType = "note"
 	TypeEvent      MemoryType = "event"
 	TypeReference  MemoryType = "reference"
+	TypeRule       MemoryType = "rule"
 )
 
 func (t MemoryType) Weight() float64 {
 	switch t {
 	case TypeDecision:
+		return 1.0
+	case TypeRule:
 		return 1.0
 	case TypeInsight:
 		return 0.9
@@ -49,6 +52,8 @@ func (t MemoryType) DecayHours() float64 {
 	switch t {
 	case TypeDecision:
 		return 720
+	case TypeRule:
+		return 0
 	case TypeInsight:
 		return 1440
 	case TypeProcedure:
