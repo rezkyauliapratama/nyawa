@@ -17,11 +17,20 @@ func (s *Server) writeDashboardHTML(w io.Writer) {
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0d1117;color:#c9d1d9;padding:20px}
 .container{max-width:1200px;margin:auto}
 h1{font-size:1.8rem;margin-bottom:4px;color:#58a6ff}
+h2{font-size:1.2rem;color:#8b949e;margin:24px 0 12px;text-transform:uppercase;letter-spacing:.5px}
 .sub{color:#8b949e;font-size:.9rem;margin-bottom:24px}
-.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:24px}
+.grid{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:16px;margin-bottom:24px}
 .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px}
 .card h3{font-size:.85rem;text-transform:uppercase;color:#8b949e;margin-bottom:8px}
 .card .val{font-size:1.6rem;font-weight:700;color:#f0f6fc}
+.card .val-sm{font-size:1.1rem;font-weight:600;color:#f0f6fc}
+.card .sub-val{font-size:.8rem;color:#8b949e;margin-top:4px}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
+.detail-card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px}
+.detail-card h3{font-size:.85rem;text-transform:uppercase;color:#8b949e;margin-bottom:12px}
+.detail-row{display:flex;justify-content:space-between;padding:4px 0;font-size:.9rem;border-bottom:1px solid #21262d}
+.detail-row .lbl{color:#8b949e}
+.detail-row .v{color:#f0f6fc;font-weight:600}
 input,select,button{font-size:.95rem;padding:10px 14px;border-radius:6px;border:1px solid #30363d;background:#0d1117;color:#c9d1d9}
 input{flex:1;min-width:0;outline:none;width:200px}
 input:focus{border-color:#58a6ff}
@@ -43,17 +52,29 @@ td.maxw{max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowra
 .empty{text-align:center;padding:40px;color:#8b949e}
 .del{background:transparent;border:none;color:#da3633;cursor:pointer;padding:4px 8px}
 .del:hover{background:#da363322}
-.toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:8px;color:#fff;font-weight:600}
+.toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:8px;color:#fff;font-weight:600;z-index:100}
 .toast.ok{background:#238636}.toast.err{background:#da3633}
 textarea{width:100%;min-height:80px;padding:10px;border-radius:6px;border:1px solid #30363d;background:#0d1117;color:#c9d1d9;font-size:.95rem;resize:vertical;margin-bottom:8px;outline:none}
 textarea:focus{border-color:#58a6ff}
 .flex{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
-@media(max-width:768px){.grid{grid-template-columns:1fr}}
+@media(max-width:768px){.grid{grid-template-columns:1fr 1fr}.detail-grid{grid-template-columns:1fr}}
 </style></head>
 <body><div class="container">
 <h1>Nyawa</h1>
 <div class="sub">Offline-First AI Memory Engine</div>
+
+<h2>Overview</h2>
 <div class="grid" id="stats"></div>
+
+<h2>Embedder & Index</h2>
+<div class="grid" id="embedderStats"></div>
+
+<h2>Details</h2>
+<div class="detail-grid">
+<div class="detail-card" id="hnswDetail"><h3>HNSW Index</h3><div id="hnswBody"></div></div>
+<div class="detail-card" id="ragDetail"><h3>RAG</h3><div id="ragBody"></div></div>
+</div>
+
 <div class="card"><h3>Store Memory</h3>
 <textarea id="storeText" placeholder="Enter memory content..."></textarea>
 <div class="flex"><input id="storeNS" placeholder="namespace (default)"><button class="primary" onclick="doStore()">Store</button></div></div>
@@ -74,17 +95,43 @@ textarea:focus{border-color:#58a6ff}
 const A='';let CP=1;
 
 async function loadStats(){try{
-  var r=await fetch(A+'/v1/stats'),d=await r.json(),s=d.store||d;
-  var items=[['Memories',s.total_memories||0],['Vector Indexed',s.vector_indexed||0],['Entities',s.entity_nodes||0],['Edges',s.entity_edges||0],['Namespaces',Object.keys(s.namespaces||{}).length],['Superseded',s.superseded||0]];
+  var r=await fetch(A+'/v1/stats'),d=await r.json(),s=d.store||d,e=d.embedder||{};
+  var items=[['Memories',s.total_memories||0],['Vector Indexed',s.vector_indexed||0],['Pinned',s.pinned_memories||0],['Superseded',s.superseded||0]];
   var html='';for(var i=0;i<items.length;i++)html+='<div class="card"><h3>'+items[i][0]+'</h3><div class="val">'+items[i][1]+'</div></div>';
   document.getElementById('stats').innerHTML=html;
-}catch(e){console.error(e)}}
+  var eName=e.active||'none',eStatus=(e.status||'unavailable');
+  var embItems=[['Embedder',eName+'<div class="sub-val">'+eStatus+'</div>'],['Entity Nodes',s.entity_nodes||0],['Entity Edges',s.entity_edges||0],['Namespaces',Object.keys(s.namespaces||{}).length]];
+  var embHtml='';for(var i=0;i<embItems.length;i++)embHtml+='<div class="card"><h3>'+embItems[i][0]+'</h3><div class="val-sm">'+embItems[i][1]+'</div></div>';
+  document.getElementById('embedderStats').innerHTML=embHtml;
+|}catch(e){console.error(e)}}
+
+async function loadRAG(){try{
+  var r=await fetch(A+'/v1/rag/stats'),d=await r.json();
+  var h='<div class="detail-row"><span class="lbl">Collections</span><span class="v">'+(d.collections||0)+'</span></div>';
+  h+='<div class="detail-row"><span class="lbl">Documents</span><span class="v">'+(d.documents||0)+'</span></div>';
+  h+='<div class="detail-row"><span class="lbl">Chunks</span><span class="v">'+(d.chunks||0)+'</span></div>';
+  document.getElementById('ragBody').innerHTML=h||'<div class="sub-val">No RAG data</div>';
+|}catch(e){document.getElementById('ragBody').innerHTML='<div class="sub-val">RAG unavailable</div>';}}
+
+async function loadHNSW(){try{
+  var r=await fetch(A+'/v1/hnsw/info'),d=await r.json();
+  var cfg=d.config||{};
+  var h='<div class="detail-row"><span class="lbl">Total Nodes</span><span class="v">'+(d.total_nodes||0)+'</span></div>';
+  h+='<div class="detail-row"><span class="lbl">Graph Layers</span><span class="v">'+(d.layers||0)+'</span></div>';
+  h+='<div class="detail-row"><span class="lbl">Total Edges</span><span class="v">'+(d.edges||0)+'</span></div>';
+  h+='<div class="detail-row"><span class="lbl">M (max connections)</span><span class="v">'+(cfg.M||'-')+'</span></div>';
+  h+='<div class="detail-row"><span class="lbl">efConstruction</span><span class="v">'+(cfg.EfConstruction||'-')+'</span></div>';
+  h+='<div class="detail-row"><span class="lbl">efSearch</span><span class="v">'+(cfg.EfSearch||'-')+'</span></div>';
+  h+='<div class="detail-row"><span class="lbl">Dimensions</span><span class="v">'+(cfg.Dim||'-')+'</span></div>';
+  if(d.entry_point)h+='<div class="detail-row"><span class="lbl">Entry Point</span><span class="v" style="font-size:.8rem;word-break:break-all">'+esc(d.entry_point)+'</span></div>';
+  document.getElementById('hnswBody').innerHTML=h;
+|}catch(e){document.getElementById('hnswBody').innerHTML='<div class="sub-val">HNSW unavailable</div>';}}
 
 async function loadNS(){try{
   var r=await fetch(A+'/v1/namespaces'),d=await r.json(),sel=document.getElementById('nsSel');
   var html='<option value="">All namespaces</option>';for(var k in d)html+='<option>'+k+'</option>';
   sel.innerHTML=html;
-}catch(e){}}
+|}catch(e){}}
 
 async function loadList(page,ns){CP=page||1;ns=ns||document.getElementById('nsSel').value;
   try{
@@ -106,7 +153,7 @@ async function doStore(){
   try{
     var r=await fetch(A+'/v1/memories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:c,namespace:ns})});
     if(!r.ok){var e=await r.json();toast(e.error||'Error','err');return}
-    document.getElementById('storeText').value='';toast('Stored!','ok');loadStats();loadList(1);
+    document.getElementById('storeText').value='';toast('Stored!','ok');loadStats();loadRAG();loadHNSW();loadList(1);
   }catch(e){toast(e.message,'err')}}
 
 async function delMem(id){
@@ -123,14 +170,15 @@ function renderMem(items,title){
   if(!items.length){tb.innerHTML='';em.style.display='block';return}
   em.style.display='none';var h='';
   for(var i=0;i<items.length;i++){
-    var m=items[i],tc=(m.type||'note').toLowerCase(),cr=(m.created_at||'').slice(0,10);
-    var sc=typeof m.score==='number'?m.score.toFixed(4):'';
-    h+='<tr><td class="maxw" title="'+esc(m.content)+'">'+esc(trunc(m.content,70))+'</td>'
-      +'<td><span class="tag tag-'+tc+'">'+esc(m.type||'note')+'</span></td>'
-      +'<td><span class="ns-badge">'+esc(m.namespace||'default')+'</span></td>'
+    var m=items[i],tp=(m.Type||m.type||'note').toLowerCase(),cr=(m.CreatedAt||m.created_at||'').slice(0,10);
+    var sc=typeof m.Score==='number'?m.Score.toFixed(4):(typeof m.score==='number'?m.score.toFixed(4):'');
+    var ct=m.Content||m.content||'',ns=m.Namespace||m.namespace||'default',id=m.ID||m.id||'';
+    h+='<tr><td class="maxw" title="'+esc(ct)+'">'+esc(trunc(ct,70))+'</td>'
+      +'<td><span class="tag tag-'+tp+'">'+esc(tp)+'</span></td>'
+      +'<td><span class="ns-badge">'+esc(ns)+'</span></td>'
       +'<td style="color:#8b949e">'+sc+'</td>'
       +'<td style="color:#8b949e;font-size:.85rem">'+cr+'</td>'
-      +'<td><button class="del" onclick="delMem(\''+m.id+'\')">x</button></td></tr>';
+      +'<td><button class="del" onclick="delMem(\''+id+'\')">x</button></td></tr>';
   }
   tb.innerHTML=h;
 }
@@ -145,9 +193,9 @@ function renderPages(total,page,perPage){
 }
 
 function toast(msg,tp){var d=document.createElement('div');d.className='toast '+tp;d.textContent=msg;document.body.appendChild(d);setTimeout(function(){d.remove()},2500)}
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;')}
 function trunc(s,n){return s.length>n?s.slice(0,n-1)+'...':s}
 
-loadStats();loadNS();loadList(1);
+loadStats();loadRAG();loadHNSW();loadNS();loadList(1);
 </script></body></html>`)
 }
