@@ -18,43 +18,39 @@ func DefaultHNSWConfig(dim int) HNSWConfig {
 type Node struct{ ID string; Vec []float32; Level int }
 
 type HNSW struct {
-	mu          sync.RWMutex
-	entryPoint  string
-	maxLevel    int
-	config      HNSWConfig
-	nodes       map[string]*Node
-	graph       []map[string]map[string]float64
-	rng         *rand.Rand
+	mu         sync.RWMutex
+	config     HNSWConfig
+	nodes      map[string]*Node
+	graph      []map[string]map[string]float64
+	entryPoint string
+	maxLevel   int
+	rng        *rand.Rand
 }
 
-func NewHNSW(config HNSWConfig) *HNSW {
-	return &HNSW{
-		config: config,
-		nodes:  make(map[string]*Node),
-		graph:  []map[string]map[string]float64{{}},
-		rng:    rand.New(rand.NewSource(42)),
-	}
+func NewHNSW(cfg HNSWConfig) *HNSW {
+	graph := make([]map[string]map[string]float64, 1)
+	graph[0] = make(map[string]map[string]float64)
+	return &HNSW{config: cfg, nodes: make(map[string]*Node), graph: graph, entryPoint: "", maxLevel: -1, rng: rand.New(rand.NewSource(42))}
 }
 
-func (h *HNSW) distance(a, b []float32) float64 {
-	dot, n1, n2 := float64(0), float64(0), float64(0)
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		n1 += float64(a[i]) * float64(a[i])
-		n2 += float64(b[i]) * float64(b[i])
-	}
-	denom := math.Sqrt(n1) * math.Sqrt(n2)
-	if denom == 0 { return 1 }
-	return 1 - dot/denom
+type SearchResult struct{ ID string; Distance float64 }
+
+func (h *HNSW) randomLevel() int {
+	l := int(math.Floor(-math.Log(h.rng.Float64()) * h.config.ML))
+	if l > h.maxLevel+1 { l = h.maxLevel + 1 }
+	return l
 }
 
 func (h *HNSW) Insert(id string, vec []float32) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if _, ok := h.nodes[id]; ok { h.nodes[id].Vec = vec; return }
-	level := int(math.Floor(-math.Log(h.rng.Float64()) * h.config.ML))
+	if _, exists := h.nodes[id]; exists { return }
+	level := h.randomLevel()
 	h.nodes[id] = &Node{ID: id, Vec: vec, Level: level}
 	for len(h.graph) <= level { h.graph = append(h.graph, make(map[string]map[string]float64)) }
+	for l := 0; l <= level; l++ {
+		if h.graph[l][id] == nil { h.graph[l][id] = make(map[string]float64) }
+	}
 	if h.entryPoint == "" { h.entryPoint = id; h.maxLevel = level; return }
 	curr := h.entryPoint
 	for l := h.maxLevel; l > level; l-- { curr = h.searchLayer(vec, curr, 1, l)[0] }
@@ -65,14 +61,11 @@ func (h *HNSW) Insert(id string, vec []float32) {
 		for _, nID := range neighbors {
 			if nID == id { continue }
 			if h.graph[l][nID] == nil { h.graph[l][nID] = make(map[string]float64) }
-			h.graph[l][nID][id] = h.distance(vec, h.nodes[nID].Vec)
-			if h.graph[l][id] == nil { h.graph[l][id] = make(map[string]float64) }
 			h.graph[l][id][nID] = h.distance(vec, h.nodes[nID].Vec)
+			h.graph[l][nID][id] = h.graph[l][id][nID]
+			if len(h.graph[l][nID]) > h.config.Mmax { h.pruneNeighbors(l, nID) }
 		}
-		if len(neighbors) > 0 {
-			h.pruneNeighbors(l, id)
-			for _, nID := range neighbors { h.pruneNeighbors(l, nID) }
-		}
+		if len(h.graph[l][id]) > h.config.Mmax { h.pruneNeighbors(l, id) }
 		curr = candidates[0]
 	}
 	if level > h.maxLevel { h.entryPoint = id; h.maxLevel = level }
@@ -96,32 +89,6 @@ func (h *HNSW) Search(query []float32, topK int) []SearchResult {
 	}
 	if len(results) > topK { results = results[:topK] }
 	return results
-}
-
-type candidate struct{ id string; dist float64 }
-type minHeap []candidate
-func (h minHeap) len() int                                    { return len(h) }
-func (h minHeap) isEmpty() bool                                { return len(h) == 0 }
-func (h minHeap) peek() candidate                              { return h[0] }
-func (h *minHeap) push(c candidate)                           { *h = append(*h, c) }
-func (h *minHeap) pop() candidate {
-	smallest := 0
-	for i := 1; i < len(*h); i++ { if (*h)[i].dist < (*h)[smallest].dist { smallest = i } }
-	c := (*h)[smallest]
-	*h = append((*h)[:smallest], (*h)[smallest+1:]...)
-	return c
-}
-type maxHeap []candidate
-func (h maxHeap) len() int                                    { return len(h) }
-func (h maxHeap) isEmpty() bool                                { return len(h) == 0 }
-func (h maxHeap) peek() candidate                              { return h[0] }
-func (h *maxHeap) push(c candidate)                           { *h = append(*h, c) }
-func (h *maxHeap) pop() candidate {
-	largest := 0
-	for i := 1; i < len(*h); i++ { if (*h)[i].dist > (*h)[largest].dist { largest = i } }
-	c := (*h)[largest]
-	*h = append((*h)[:largest], (*h)[largest+1:]...)
-	return c
 }
 
 func (h *HNSW) searchLayer(q []float32, entry string, ef, layer int) []string {
@@ -154,22 +121,70 @@ func (h *HNSW) pruneNeighbors(layer int, nodeID string) {
 	neighbors := h.graph[layer][nodeID]
 	if len(neighbors) <= h.config.Mmax { return }
 	type pair struct{ id string; dist float64 }
-	sorted := make([]pair, 0, len(neighbors))
-	for id, dist := range neighbors { sorted = append(sorted, pair{id, dist}) }
-	for i := 0; i < len(sorted); i++ {
-		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j].dist < sorted[i].dist { sorted[i], sorted[j] = sorted[j], sorted[i] }
+	var pairs []pair
+	for nID, d := range neighbors { pairs = append(pairs, pair{id: nID, dist: d}) }
+	for i := 0; i < len(pairs); i++ {
+		for j := i + 1; j < len(pairs); j++ {
+			if pairs[j].dist < pairs[i].dist { pairs[i], pairs[j] = pairs[j], pairs[i] }
 		}
 	}
 	h.graph[layer][nodeID] = make(map[string]float64)
-	for i := 0; i < h.config.Mmax && i < len(sorted); i++ {
-		h.graph[layer][nodeID][sorted[i].id] = sorted[i].dist
+	for i := 0; i < h.config.Mmax && i < len(pairs); i++ { h.graph[layer][nodeID][pairs[i].id] = pairs[i].dist }
+}
+
+func (h *HNSW) distance(a, b []float32) float64 {
+	var sum float64
+	minLen := len(a)
+	if len(b) < minLen { minLen = len(b) }
+	for i := 0; i < minLen; i++ { d := float64(a[i]) - float64(b[i]); sum += d * d }
+	return math.Sqrt(sum)
+}
+
+func (h *HNSW) Delete(id string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	node, exists := h.nodes[id]
+	if !exists { return }
+	level := node.Level
+	delete(h.nodes, id)
+	for l := 0; l <= level && l < len(h.graph); l++ {
+		delete(h.graph[l], id)
+		for nID := range h.graph[l] { delete(h.graph[l][nID], id) }
+	}
+	if h.entryPoint == id {
+		h.entryPoint = ""; h.maxLevel = -1
+		for id := range h.nodes { h.entryPoint = id; h.maxLevel = h.nodes[id].Level; break }
 	}
 }
 
-type SearchResult struct{ ID string; Distance float64 }
-
 func (h *HNSW) Size() int { h.mu.RLock(); defer h.mu.RUnlock(); return len(h.nodes) }
+
+func (h *HNSW) Info() map[string]any {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	layers := len(h.graph)
+	totalEdges := 0
+	for l := 0; l < layers; l++ {
+		for _, neighbors := range h.graph[l] {
+			totalEdges += len(neighbors)
+		}
+	}
+	return map[string]any{
+		"total_nodes": len(h.nodes),
+		"layers":      layers,
+		"max_level":   h.maxLevel,
+		"edges":       totalEdges,
+		"entry_point": h.entryPoint,
+		"config": map[string]any{
+			"M":               h.config.M,
+			"Mmax":            h.config.Mmax,
+			"EfConstruction":  h.config.EfConstruction,
+			"EfSearch":        h.config.EfSearch,
+			"ML":              h.config.ML,
+			"Dim":             h.config.Dim,
+		},
+	}
+}
 
 func (h *HNSW) Save(path string) error {
 	h.mu.RLock(); defer h.mu.RUnlock()
@@ -213,9 +228,46 @@ func (h *HNSW) Load(path string) error {
 	return nil
 }
 
-func (h *HNSW) GetDB() *sql.DB { return nil }
-func (h *HNSW) GetHNSW() *HNSW { return h }
-func (h *HNSW) GetHNSWPath() string { return "" }
+type candidate struct{ id string; dist float64 }
 
+type minHeap struct{ items []candidate }
 func newMinHeap() *minHeap { return &minHeap{} }
+func (h *minHeap) push(c candidate) {
+	h.items = append(h.items, c)
+	for i := len(h.items) - 1; i > 0; { p := (i - 1) / 2; if h.items[i].dist >= h.items[p].dist { break }; h.items[i], h.items[p] = h.items[p], h.items[i]; i = p }
+}
+func (h *minHeap) pop() candidate {
+	top := h.items[0]; h.items[0] = h.items[len(h.items)-1]; h.items = h.items[:len(h.items)-1]; h.sink(0); return top
+}
+func (h *minHeap) sink(i int) {
+	for {
+		smallest := i; l, r := 2*i+1, 2*i+2
+		if l < len(h.items) && h.items[l].dist < h.items[smallest].dist { smallest = l }
+		if r < len(h.items) && h.items[r].dist < h.items[smallest].dist { smallest = r }
+		if smallest == i { break }
+		h.items[i], h.items[smallest] = h.items[smallest], h.items[i]; i = smallest
+	}
+}
+func (h *minHeap) isEmpty() bool { return len(h.items) == 0 }
+func (h *minHeap) len() int      { return len(h.items) }
+
+type maxHeap struct{ items []candidate }
 func newMaxHeap() *maxHeap { return &maxHeap{} }
+func (h *maxHeap) push(c candidate) {
+	h.items = append(h.items, c)
+	for i := len(h.items) - 1; i > 0; { p := (i - 1) / 2; if h.items[i].dist <= h.items[p].dist { break }; h.items[i], h.items[p] = h.items[p], h.items[i]; i = p }
+}
+func (h *maxHeap) pop() candidate {
+	top := h.items[0]; h.items[0] = h.items[len(h.items)-1]; h.items = h.items[:len(h.items)-1]; h.sink(0); return top
+}
+func (h *maxHeap) peek() candidate { return h.items[0] }
+func (h *maxHeap) len() int        { return len(h.items) }
+func (h *maxHeap) sink(i int) {
+	for {
+		largest := i; l, r := 2*i+1, 2*i+2
+		if l < len(h.items) && h.items[l].dist > h.items[largest].dist { largest = l }
+		if r < len(h.items) && h.items[r].dist > h.items[largest].dist { largest = r }
+		if largest == i { break }
+		h.items[i], h.items[largest] = h.items[largest], h.items[i]; i = largest
+	}
+}
