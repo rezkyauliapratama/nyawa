@@ -96,12 +96,19 @@ func (e *Engine) loop(cfg Config) {
 
 func (e *Engine) phaseEvict(cfg Config) int {
 	cutoff := time.Now().AddDate(0, 0, -cfg.StaleDays).Format(time.RFC3339)
-	res, err := e.db.Exec(`UPDATE memories SET superseded_at=datetime('now') WHERE superseded_at IS NULL AND created_at<? AND access_count<? AND importance<? AND pinned=0`,
+	rows, err := e.db.Query(`SELECT id FROM memories WHERE superseded_at IS NULL AND created_at<? AND access_count<? AND importance<? AND pinned=0`,
 		cutoff, cfg.StaleMinAccess, cfg.ImportanceThreshold)
 	if err != nil { return 0 }
-	n, _ := res.RowsAffected()
-	if n > 0 { log.Printf("Dream evicted %d stale", n) }
-	return int(n)
+	defer rows.Close()
+	var ids []string
+	for rows.Next() { var id string; rows.Scan(&id); ids = append(ids, id) }
+	if len(ids) == 0 { return 0 }
+	for _, id := range ids {
+		e.db.Exec(`UPDATE memories SET superseded_at=datetime('now') WHERE id=?`, id)
+		if e.hnsw != nil { e.hnsw.Delete(id) }
+	}
+	if len(ids) > 0 { log.Printf("Dream evicted %d stale memories", len(ids)) }
+	return len(ids)
 }
 
 var contradictPairs = [][2]string{
@@ -226,9 +233,9 @@ func (e *Engine) phaseSnapshot() int {
 	if len(old) < 2 { return 0 }
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Snapshot of %d old memories:\\n", len(old)))
+	sb.WriteString(fmt.Sprintf("Snapshot of %d old memories:\n", len(old)))
 	for _, o := range old {
-		sb.WriteString(fmt.Sprintf("* %s\\n", truncate(o.content, 120)))
+		sb.WriteString(fmt.Sprintf("* %s\n", truncate(o.content, 120)))
 		e.db.Exec(`UPDATE memories SET superseded_at=datetime('now') WHERE id=?`, o.id)
 	}
 
