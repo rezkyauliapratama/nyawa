@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rezkyauliapratama/nyawa/internal/embedder"
+	"github.com/rezkyauliapratama/nyawa/internal/rag"
 	"github.com/rezkyauliapratama/nyawa/internal/search"
 	"github.com/rezkyauliapratama/nyawa/internal/security"
 	"github.com/rezkyauliapratama/nyawa/internal/store"
@@ -16,13 +17,14 @@ import (
 )
 
 type Server struct {
-	store    *store.Store
-	pipeline *search.Pipeline
-	embedder *embedder.PriorityChain
-	security *security.Filter
-	config   Config
-	mux      *http.ServeMux
-	srv      *http.Server
+	store     *store.Store
+	pipeline  *search.Pipeline
+	embedder  *embedder.PriorityChain
+	security  *security.Filter
+	ragStore  *rag.RAGStore
+	config    Config
+	mux       *http.ServeMux
+	srv       *http.Server
 }
 
 type Config struct {
@@ -35,8 +37,8 @@ func DefaultServerConfig() Config {
 	return Config{Host: "0.0.0.0", Port: 3300, ReadTimeout: 30 * time.Second}
 }
 
-func New(st *store.Store, pipe *search.Pipeline, emb *embedder.PriorityChain, cfg Config) *Server {
-	s := &Server{store: st, pipeline: pipe, embedder: emb, security: security.NewFilter(), config: cfg, mux: http.NewServeMux()}
+func New(st *store.Store, pipe *search.Pipeline, emb *embedder.PriorityChain, rs *rag.RAGStore, cfg Config) *Server {
+	s := &Server{store: st, pipeline: pipe, embedder: emb, security: security.NewFilter(), ragStore: rs, config: cfg, mux: http.NewServeMux()}
 	s.registerRoutes()
 	return s
 }
@@ -49,6 +51,12 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/v1/health", s.handleHealth)
 	s.mux.HandleFunc("/v1/namespaces", s.handleNamespaces)
 	s.mux.HandleFunc("/v1/forget/", s.handleForget)
+	s.mux.HandleFunc("/v1/memories/batch", s.handleBatchStore)
+	s.mux.HandleFunc("/v1/rag/collections", s.handleRAGCollections)
+	s.mux.HandleFunc("/v1/rag/collections/", s.handleRAGCollectionsByName)
+	s.mux.HandleFunc("/v1/rag/ingest", s.handleRAGIngest)
+	s.mux.HandleFunc("/v1/rag/query", s.handleRAGQuery)
+	s.mux.HandleFunc("/v1/rag/stats", s.handleRAGStats)
 	s.mux.HandleFunc("/dashboard", s.handleDashboard)
 	s.mux.HandleFunc("/", s.handleRoot)
 }
@@ -96,9 +104,7 @@ func (s *Server) handleMemories(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStore(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Content, Namespace, Type string
-	}
+	var req struct{ Content, Namespace, Type string }
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"}); return }
 	req.Content = strings.TrimSpace(req.Content)
 	if req.Content == "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "content required"}); return }
@@ -198,21 +204,87 @@ func (s *Server) handleForget(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "forgotten"})
 }
 
+func (s *Server) handleBatchStore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost { writeJSON(w, 405, map[string]string{"error": "use POST"}); return }
+	var req struct{ Memories []struct{ Content, Namespace, Type string } `json:"memories"` }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSON(w, 400, map[string]string{"error": "invalid JSON"}); return }
+	if len(req.Memories) == 0 { writeJSON(w, 400, map[string]string{"error": "memories required"}); return }
+	results := make([]map[string]any, 0, len(req.Memories))
+	for i, m := range req.Memories {
+		if m.Content == "" { continue }
+		ns := m.Namespace; if ns == "" { ns = "default" }
+		mt := types.MemoryType(m.Type); if mt == "" { mt = types.TypeNote }
+		id := fmt.Sprintf("mem_%d_%d", time.Now().UnixNano(), i)
+		if err := s.store.InsertMemory(&types.Memory{ID: id, Content: m.Content, Type: mt, Namespace: ns}); err != nil {
+			results = append(results, map[string]any{"id": id, "status": "error", "error": err.Error()}); continue
+		}
+		results = append(results, map[string]any{"id": id, "status": "stored"})
+	}
+	writeJSON(w, 201, map[string]any{"results": results, "count": len(results)})
+}
+
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	s.writeDashboardHTML(w)
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+// ─── RAG Handlers ──────────────────────────────────────────
+
+func (s *Server) handleRAGCollections(w http.ResponseWriter, r *http.Request) {
+	if s.ragStore == nil { writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "RAG not available"}); return }
+	switch r.Method {
+	case http.MethodGet:
+		cols, err := s.ragStore.ListCollections()
+		if err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()}); return }
+		if cols == nil { cols = []rag.Collection{} }
+		writeJSON(w, http.StatusOK, map[string]any{"collections": cols})
+	case http.MethodPost:
+		var req struct{ Name, Description string; ChunkSize int }
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"}); return }
+		if req.Name == "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name required"}); return }
+		col, err := s.ragStore.CreateCollection(req.Name, req.Description, req.ChunkSize)
+		if err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()}); return }
+		writeJSON(w, http.StatusCreated, col)
+	default: writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
 }
 
-func parseInt(s string, defaultVal int) int {
-	if s == "" { return defaultVal }
-	var v int
-	if _, err := fmt.Sscanf(s, "%d", &v); err != nil { return defaultVal }
-	if v < 1 { return defaultVal }
-	return v
+func (s *Server) handleRAGCollectionsByName(w http.ResponseWriter, r *http.Request) {
+	if s.ragStore == nil { writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "RAG not available"}); return }
+	name := strings.TrimPrefix(r.URL.Path, "/v1/rag/collections/")
+	if name == "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name required"}); return }
+	if r.Method != http.MethodDelete { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "use DELETE"}); return }
+	if err := s.ragStore.DeleteCollection(name); err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()}); return }
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s *Server) handleRAGIngest(w http.ResponseWriter, r *http.Request) {
+	if s.ragStore == nil { writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "RAG not available"}); return }
+	if r.Method != http.MethodPost { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "use POST"}); return }
+	var req struct{ FilePath, Collection string }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"}); return }
+	if req.FilePath == "" || req.Collection == "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "file_path and collection required"}); return }
+	doc, err := s.ragStore.IngestFile(req.FilePath, req.Collection, nil)
+	if err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()}); return }
+	writeJSON(w, http.StatusCreated, doc)
+}
+
+func (s *Server) handleRAGQuery(w http.ResponseWriter, r *http.Request) {
+	if s.ragStore == nil { writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "RAG not available"}); return }
+	if r.Method != http.MethodPost { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "use POST"}); return }
+	var req struct{ Query, Collection string; TopK int }
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"}); return }
+	if req.Query == "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "query required"}); return }
+	if req.TopK <= 0 { req.TopK = 5 }
+	results, err := s.ragStore.Query(req.Query, req.TopK, req.Collection)
+	if err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()}); return }
+	if results == nil { results = []rag.RAGResult{} }
+	writeJSON(w, http.StatusOK, map[string]any{"results": results, "count": len(results)})
+}
+
+func (s *Server) handleRAGStats(w http.ResponseWriter, r *http.Request) {
+	if s.ragStore == nil { writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "RAG not available"}); return }
+	if r.Method != http.MethodGet { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "use GET"}); return }
+	stats := s.ragStore.Stats()
+	writeJSON(w, http.StatusOK, stats)
 }
