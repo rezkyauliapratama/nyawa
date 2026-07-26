@@ -5,7 +5,6 @@ import (
 	"time"
 )
 
-// MemoryType represents the taxonomy of memory.
 type MemoryType string
 
 const (
@@ -18,85 +17,60 @@ const (
 	TypeNote       MemoryType = "note"
 	TypeEvent      MemoryType = "event"
 	TypeReference  MemoryType = "reference"
-	TypeRule       MemoryType = "rule"
 )
 
 func (t MemoryType) Weight() float64 {
 	switch t {
-	case TypeDecision:
-		return 1.0
-	case TypeRule:
-		return 1.0
-	case TypeInsight:
-		return 0.9
-	case TypeProcedure:
-		return 0.8
-	case TypeFact:
-		return 0.7
-	case TypePreference:
-		return 0.6
-	case TypeContext:
-		return 0.5
-	case TypeNote:
-		return 0.4
-	case TypeEvent:
-		return 0.4
-	case TypeReference:
-		return 0.3
-	default:
-		return 0.4
+	case TypeDecision: return 1.0
+	case TypeInsight: return 0.9
+	case TypeProcedure: return 0.8
+	case TypeFact: return 0.7
+	case TypePreference: return 0.6
+	case TypeContext: return 0.5
+	case TypeNote: return 0.4
+	case TypeEvent: return 0.4
+	case TypeReference: return 0.3
+	default: return 0.4
 	}
 }
 
 func (t MemoryType) DecayHours() float64 {
 	switch t {
-	case TypeDecision:
-		return 720
-	case TypeRule:
-		return 0
-	case TypeInsight:
-		return 1440
-	case TypeProcedure:
-		return 2160
-	case TypeFact:
-		return 4320
-	case TypePreference:
-		return 720
-	case TypeContext:
-		return 336
-	case TypeNote:
-		return 168
-	case TypeEvent:
-		return 2160
-	case TypeReference:
-		return 8760
-	default:
-		return 168
+	case TypeDecision: return 720
+	case TypeInsight: return 1440
+	case TypeProcedure: return 2160
+	case TypeFact: return 4320
+	case TypePreference: return 720
+	case TypeContext: return 336
+	case TypeNote: return 168
+	case TypeEvent: return 2160
+	case TypeReference: return 8760
+	default: return 168
 	}
 }
 
 type Memory struct {
-	ID           string     `json:"id"`
-	Content      string     `json:"content"`
-	Type         MemoryType `json:"type"`
-	Namespace    string     `json:"namespace"`
-	Importance   float64    `json:"importance"`
-	AccessCount  int        `json:"access_count"`
-	Pinned       bool       `json:"pinned"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID          string     `json:"id"`
+	Content     string     `json:"content"`
+	Type        MemoryType `json:"type"`
+	Namespace   string     `json:"namespace"`
+	Importance  float64    `json:"importance"`
+	AccessCount int        `json:"access_count"`
+	Pinned      bool       `json:"pinned"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 	SupersededAt *time.Time `json:"superseded_at,omitempty"`
-	Vector       []float32  `json:"-"`
-	EdgeCount    int        `json:"edge_count,omitempty"`
+	Vector      []float32  `json:"-"`
+	EdgeCount   int        `json:"edge_count,omitempty"`
 }
 
 type MemoryResult struct {
 	Memory
-	Score           float64 `json:"score"`
-	RRFScore        float64 `json:"rrf_score"`
-	TemporalBoost   float64 `json:"temporal_boost"`
+	Score          float64 `json:"score"`
+	RRFScore       float64 `json:"rrf_score"`
+	TemporalBoost  float64 `json:"temporal_boost"`
 	ImportanceBoost float64 `json:"importance_boost"`
-	Rank            int     `json:"rank"`
+	Rank           int     `json:"rank"`
 }
 
 func (r *MemoryResult) Reset() {

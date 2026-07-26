@@ -18,30 +18,34 @@ type PriorityChain struct {
 
 func NewPriorityChain(embedders ...Embedder) *PriorityChain {
 	pc := &PriorityChain{chain: embedders}
-	for _, e := range embedders {
-		if e.Available() { pc.current = e; break }
-	}
+	pc.selectActive()
 	return pc
 }
 
 func (pc *PriorityChain) Embed(text string) ([]float32, error) {
 	if pc.current != nil && pc.current.Available() {
-		v, err := pc.current.Embed(text)
-		if err == nil { return v, nil }
+		if v, err := pc.current.Embed(text); err == nil { return v, nil }
 	}
+	return pc.tryFallback(text)
+}
+
+func (pc *PriorityChain) tryFallback(text string) ([]float32, error) {
 	for _, e := range pc.chain {
 		if !e.Available() { continue }
-		v, err := e.Embed(text)
-		if err == nil { pc.current = e; return v, nil }
+		if v, err := e.Embed(text); err == nil { pc.current = e; return v, nil }
 	}
 	return nil, ErrNoEmbedder
 }
 
-func (pc *PriorityChain) HealthCheck() (string, bool) {
+func (pc *PriorityChain) selectActive() {
+	for _, e := range pc.chain { if e.Available() { pc.current = e; return } }
+	pc.current = nil
+}
+
+func (pc *PriorityChain) HealthCheck() (name string, ok bool) {
 	if pc.current != nil && pc.current.Available() { return pc.current.Name(), true }
-	for _, e := range pc.chain {
-		if e.Available() { pc.current = e; return pc.current.Name(), true }
-	}
+	pc.selectActive()
+	if pc.current != nil { return pc.current.Name(), true }
 	return "", false
 }
 

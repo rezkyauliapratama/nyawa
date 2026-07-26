@@ -13,9 +13,7 @@ type HealthCheckRunner struct {
 }
 
 func NewHealthCheckRunner(chain *PriorityChain, interval time.Duration) *HealthCheckRunner {
-	if interval <= 0 {
-		interval = 60 * time.Second
-	}
+	if interval <= 0 { interval = 60 * time.Second }
 	return &HealthCheckRunner{chain: chain, interval: interval, lastStatus: "unknown", stopCh: make(chan struct{})}
 }
 
@@ -28,10 +26,8 @@ func (h *HealthCheckRunner) loop() {
 	defer ticker.Stop()
 	for {
 		select {
-		case <-ticker.C:
-			h.check()
-		case <-h.stopCh:
-			return
+		case <-ticker.C: h.check()
+		case <-h.stopCh: return
 		}
 	}
 }
@@ -39,15 +35,10 @@ func (h *HealthCheckRunner) loop() {
 func (h *HealthCheckRunner) check() {
 	name, ok := h.chain.HealthCheck()
 	status := "available"
-	if !ok {
-		status = "unavailable"
-	}
+	if !ok { status = "unavailable" }
 	if status != h.lastStatus {
-		if ok {
-			log.Printf("Embedder health: %s → available (%s)", h.lastStatus, name)
-		} else {
-			log.Printf("Embedder health: %s → unavailable", h.lastStatus)
-		}
+		if ok { log.Printf("Embedder health: %s → available (%s)", h.lastStatus, name)
+		} else { log.Printf("Embedder health: %s → unavailable", h.lastStatus) }
 		h.lastStatus = status
 	}
 }

@@ -7,8 +7,8 @@ type Config struct {
 }
 
 type StoreConfig struct {
-	DBPath      string `yaml:"db_path"`
-	MaxMemories int    `yaml:"max_memories"`
+	DBPath       string `yaml:"db_path"`
+	MaxMemories  int    `yaml:"max_memories"`
 }
 
 type SearchConfig struct {
