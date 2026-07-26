@@ -2,7 +2,6 @@ package security
 
 import (
 	"regexp"
-	"strings"
 )
 
 type Classification string
