@@ -11,6 +11,7 @@ import (
 	"github.com/rezkyauliapratama/nyawa/internal/dream"
 	"github.com/rezkyauliapratama/nyawa/internal/embedder"
 	"github.com/rezkyauliapratama/nyawa/internal/mcp"
+	"github.com/rezkyauliapratama/nyawa/internal/rag"
 	"github.com/rezkyauliapratama/nyawa/internal/search"
 	"github.com/rezkyauliapratama/nyawa/internal/server"
 	"github.com/rezkyauliapratama/nyawa/internal/store"
@@ -206,7 +207,8 @@ func cmdMCP() {
 	st := getStore(os.Args[2], emb)
 	log.Printf("MCP — db=%s embedder=%s", os.Args[2], emb.Current())
 	p := search.NewPipeline(st, emb, types.DefaultConfig().Search)
-	if err := mcp.NewServer(st, p).Run(); err != nil { log.Fatalf("mcp: %v", err) }
+	rs := rag.NewRAGStore(st.GetDB(), st.GetHNSW(), st.GetHNSWPath(), emb)
+	if err := mcp.NewServer(st, p, rs).Run(); err != nil { log.Fatalf("mcp: %v", err) }
 }
 
 func cmdDream() {
