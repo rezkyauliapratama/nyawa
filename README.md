@@ -3,42 +3,34 @@
   <img src="https://github.com/rezkyauliapratama/nyawa/actions/workflows/go-test.yml/badge.svg" alt="CI">
   <img src="https://img.shields.io/github/license/rezkyauliapratama/nyawa?color=blue&style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&style=flat-square" alt="Go">
-  <img src="https://img.shields.io/badge/binary-14MB-green?style=flat-square" alt="Size">
-  <img src="https://img.shields.io/badge/dependencies-zero-success?style=flat-square" alt="Zero Deps">
+  <img src="https://img.shields.io/badge/binary-8.1MB-green?style=flat-square" alt="Size">
+  <img src="https://img.shields.io/badge/version-v1.0.0-blue?style=flat-square" alt="Version">
 </p>
 
-<h1 align="center">
-  Nyawa
-</h1>
+<h1 align="center">Nyawa</h1>
 
 <p align="center">
   <strong>Offline-First AI Memory Engine</strong><br>
-  <em>Give your AI a memory that lasts no cloud, no Docker, no vector database required.</em>
+  <em>Give your AI a memory that lasts — no cloud, no Docker, no vector database required.</em>
 </p>
 
 <p align="center">
-  <i>"nyawa" means "soul" or "spirit" in Indonesian because memory is the soul of intelligence.</i>
+  <i>"nyawa" means "soul" or "spirit" in Indonesian — because memory is the soul of intelligence.</i>
 </p>
-
-<br>
 
 ---
 
 ## Why Nyawa?
 
-Most AI memory tools require:
-- Docker and Kubernetes
-- External vector databases (Pinecone, Qdrant, Weaviate)
-- Cloud APIs / GPU
-- Hundreds of MB of dependencies
+Most AI memory tools require Docker, external vector databases (Pinecone, Qdrant), cloud APIs, or hundreds of MB of dependencies. Nyawa is different:
 
-**Nyawa is different:**
-- **Single 14MB binary** go build and you are done
-- **Zero dependencies** just SQLite
-- **100% offline** all data stays local
-- **Fast** 11ms search, 22 mems/sec throughput
+- **Single 8.1MB binary** — `go build` and you're done
+- **Zero runtime dependencies** — just SQLite
+- **100% offline** — all data stays local
+- **Fast** — ~11ms search, 22 mems/sec throughput
+- **Dual-mode** — Memory (semantic recall) + RAG (document retrieval)
 
-> "Nyawa is what happens when you ask what the simplest thing that could work is and refuse to add anything else."
+> "Nyawa is what happens when you ask what the simplest thing that could work is — and refuse to add anything else."
 
 ---
 
@@ -46,14 +38,15 @@ Most AI memory tools require:
 
 | Feature | What It Does | Powered By |
 |---------|-------------|------------|
-| Hybrid Search | Semantic + keyword fused via RRF | HNSW (pure Go) + SQLite FTS5 |
-| Entity Graph | Auto-extract People, Tech, URLs, Locations | 18 regex patterns, zero LLM |
-| Dream Cycle | 6-phase autonomous memory maintenance | Background goroutine |
-| Web Dashboard | Real-time UI for store, search, browse, delete | Go HTTP handler + Chart.js |
-| Namespaces | Isolate memories by context | SQLite namespace column |
-| Time-Travel | Query memories as they existed at any date | Superseded_at tracking |
-| Batch Import | Import thousands of memories from JSON | Bulk insert |
-| MCP Protocol | Plug into any AI agent | Built-in MCP server |
+| **Hybrid Search** | Semantic + keyword fused via RRF | HNSW (pure Go) + SQLite FTS5 |
+| **Entity Graph** | Auto-extract People, Tech, URLs, Locations | 18 regex patterns, zero LLM |
+| **Dream Cycle** | 6-phase autonomous memory maintenance | Background goroutine |
+| **RAG Engine** | Document-level retrieval with chunking + reranking | HNSW + Jina/Python CrossEncoder |
+| **Web Dashboard** | Memory + RAG UI in one page | Go HTTP handler + inline JS |
+| **Namespaces** | Isolate memories by context | SQLite namespace column |
+| **Time-Travel** | Query memories as they existed at any date | Superseded_at tracking |
+| **Batch Import** | Import thousands of memories from JSON | Bulk insert |
+| **MCP Protocol** | Plug into any AI agent (10 tools) | Built-in MCP server stdio |
 
 ---
 
@@ -90,11 +83,35 @@ make build
 
 ---
 
+## RAG — Retrieval-Augmented Generation
+
+Nyawa includes a built-in RAG engine for document-level retrieval:
+
+```bash
+# 1. Create a collection
+./nyawa rag /tmp/nyawa.db create-collection my-docs --chunk-size 500
+
+# 2. Ingest documents (txt, md, json, csv)
+./nyawa rag /tmp/nyawa.db ingest my-docs ./document.md
+
+# 3. Query your documents
+./nyawa rag /tmp/nyawa.db query "What does the system architecture look like?"
+```
+
+**RAG Pipeline:**
+```
+Document → Chunking (paragraph-aware) → Embedding → HNSW Index → Reranking (Jina/Python/local)
+```
+
+Available via REST API (`/v1/rag/`) or MCP tools (`rag_query`, `rag_ingest_file`, etc.).
+
+---
+
 ## Performance
 
 | Metric | Nyawa | Alternative (Qdrant + Docker) |
 |--------|-------|------------------------------|
-| **Binary size** | **14 MB** | ~2 GB (Docker image) |
+| **Binary size** | **8.1 MB** | ~2 GB (Docker image) |
 | **Dependencies** | **0** (SQLite built-in) | Docker, Python, grpc, ... |
 | **Search latency** | **~11 ms** | ~5-20 ms (+ network overhead) |
 | **Store throughput** | **22 mems/sec** | ~100 mems/sec (batched) |
@@ -106,7 +123,7 @@ make build
 
 ## Dream Cycle
 
-Nyawa runs a Dream Cycle a background process that maintains memory automatically:
+Nyawa runs a Dream Cycle — a background process that maintains memory automatically:
 
 ```
 Dream Cycle running every 1h...
@@ -118,7 +135,7 @@ Dream Cycle running every 1h...
  [6/6] Snapshot   -> Compress old memories into summaries
 ```
 
-No LLM calls. No API bills. All algorithmic 100% free and private.
+No LLM calls. No API bills. All algorithmic — 100% free and private.
 
 ---
 
@@ -132,6 +149,8 @@ cd nyawa && make build
 sudo make install   # -> /usr/local/bin/nyawa
 ```
 
+Requirements: Go 1.23+, gcc (for SQLite CGO)
+
 ### Pre-built binary
 
 Download from [Releases](https://github.com/rezkyauliapratama/nyawa/releases):
@@ -141,7 +160,12 @@ curl -L https://github.com/rezkyauliapratama/nyawa/releases/latest/download/nyaw
 chmod +x ./nyawa
 ```
 
-> Requirements: Go 1.23+, gcc (for SQLite CGO)
+### Docker
+
+```bash
+docker pull ghcr.io/rezkyauliapratama/nyawa:latest
+docker run -d --name nyawa -v ./memory.db:/data/memory.db -p 3300:3300 ghcr.io/rezkyauliapratama/nyawa:latest
+```
 
 ---
 
@@ -163,19 +187,50 @@ chmod +x ./nyawa
 
 ### REST API
 
+**Memory:**
 ```
-POST   /v1/memories          Store a memory
-POST   /v1/memories/batch    Batch store
-GET    /v1/memories          List (paginated)
-GET    /v1/memories/:id      Get by ID
-DELETE /v1/memories/:id      Delete
-POST   /v1/recall            Search (query, namespace, time_travel)
-GET    /v1/stats             Statistics
-GET    /v1/health            Health check
-GET    /v1/namespaces        List namespaces
-DELETE /v1/forget/:id        Forget a memory
-GET    /dashboard            Web dashboard
+POST   /v1/memories            Store a memory
+POST   /v1/memories/batch      Batch store
+GET    /v1/memories            List (paginated)
+GET    /v1/memories/:id        Get by ID
+DELETE /v1/memories/:id        Delete
+POST   /v1/recall              Search (query, namespace, time_travel)
+GET    /v1/stats               Statistics
+GET    /v1/health              Health check
+GET    /v1/namespaces          List namespaces
+DELETE /v1/forget/:id          Forget a memory
 ```
+
+**RAG:**
+```
+GET    /v1/rag/collections      List collections
+POST   /v1/rag/collections      Create collection
+DELETE /v1/rag/collections/:name  Delete collection
+POST   /v1/rag/ingest           Ingest file into collection
+POST   /v1/rag/query            Query RAG collection
+GET    /v1/rag/stats            RAG statistics
+```
+
+**Dashboard:**
+```
+GET    /dashboard              Web dashboard (Memory + RAG)
+```
+
+### MCP Tools (10 tools)
+
+**Memory Tools:**
+- `nyawa_store` — Store a new memory
+- `nyawa_recall` — Semantic search across memories
+- `nyawa_stats` — Memory statistics
+- `nyawa_forget` — Soft-delete a memory by ID
+
+**RAG Tools:**
+- `rag_create_collection` — Create a RAG collection
+- `rag_list_collections` — List all RAG collections
+- `rag_delete_collection` — Delete a RAG collection
+- `rag_ingest_file` — Ingest a file into a collection
+- `rag_query` — Query RAG collections for relevant chunks
+- `rag_stats` — RAG statistics
 
 ---
 
@@ -183,7 +238,7 @@ GET    /dashboard            Web dashboard
 
 ```
 +----------------------------------------------------------+
-|                    CLI / HTTP / MCP                       |
+|              CLI / HTTP / MCP (10 tools)                  |
 +----------------------------------------------------------+
 |                    Search Pipeline                        |
 |   +-------------+  +-----------+  +------------------+   |
@@ -195,14 +250,17 @@ GET    /dashboard            Web dashboard
 |                    |  RRF Fusion |                        |
 |                    +-------------+                        |
 +----------------------------------------------------------+
+|                    RAG Pipeline                           |
+|    Chunking → Embedding → HNSW → Rerank (Jina/Python)    |
++----------------------------------------------------------+
 |                    Dream Cycle (background)               |
 |            Evict -> Contra -> Dedup -> Link -> Prio -> Snap|
 +----------------------------------------------------------+
 |                    Embedder Chain                         |
-|         BGE (ONNX) <-- priority --> Ollama (fallback)    |
+|         BGE (ONNX) <-- priority --> Jina <-- Ollama      |
 +----------------------------------------------------------+
 |                    SQLite (single file)                   |
-|         memories + fts5 index + entity_nodes + edges      |
+|         memories + fts5 + rag_collections + entities      |
 +----------------------------------------------------------+
 ```
 
@@ -216,7 +274,8 @@ GET    /dashboard            Web dashboard
 | Phase 2 | Done | HNSW, BGE embedder, entity extraction |
 | Phase 3 | Done | Entity graph, Dream Cycle |
 | Phase 4 | Done | Namespaces, time-travel, archival, dashboard |
-| Phase 5 | Coming | Prometheus metrics, auth, TLS, rate limiting |
+| Phase 5 | Done | RAG engine, MCP RAG tools, dashboard RAG UI |
+| Phase 6 | Coming | Prometheus metrics, auth, TLS, rate limiting |
 
 ---
 
@@ -240,12 +299,12 @@ make commit
 
 ## Contributing
 
-Nyawa is open source and welcoming! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Nyawa is open source and welcoming! See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```bash
 1. Fork the repository
 2. Create a branch: git checkout -b feat/awesome-feature
-3. Commit: git commit -m feat add awesome feature
+3. Commit: git commit -m "feat: add awesome feature"
 4. Push: git push origin feat/awesome-feature
 5. Open a Pull Request
 ```
@@ -259,7 +318,5 @@ MIT (c) [Rezky Aulia Pratama](https://github.com/rezkyauliapratama)
 ---
 
 <p align="center">
-  <sub>Built with love in <a href="https://go.dev/">Go</a> because sometimes the smartest solution is the simplest one.</sub>
-  <br>
-  <sub>14MB | 11ms search | Dream Cycle | Zero LLM</sub>
+  <sub>Built with love in <a href="https://go.dev/">Go</a> — 8.1MB, 11ms search, RAG + Memory, Dream Cycle, Zero LLM.</sub>
 </p>
