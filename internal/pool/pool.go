@@ -9,12 +9,11 @@ type ResultPool struct{ pool sync.Pool }
 
 func NewResultPool(preWarm int) *ResultPool {
 	rp := &ResultPool{pool: sync.Pool{New: func() any { return &types.MemoryResult{} }}}
-	for i := 0; i < preWarm; i++ {
-		rp.pool.Put(&types.MemoryResult{})
-	}
+	for i := 0; i < preWarm; i++ { rp.pool.Put(&types.MemoryResult{}) }
 	return rp
 }
-func (rp *ResultPool) Get() *types.MemoryResult  { return rp.pool.Get().(*types.MemoryResult) }
+
+func (rp *ResultPool) Get() *types.MemoryResult { return rp.pool.Get().(*types.MemoryResult) }
 func (rp *ResultPool) Put(r *types.MemoryResult) { r.Reset(); rp.pool.Put(r) }
 
 type ResultSlicePool struct{ pool sync.Pool }

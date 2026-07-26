@@ -15,7 +15,6 @@ import (
 	"github.com/rezkyauliapratama/nyawa/internal/types"
 )
 
-// Server is the MCP tool server for Nyawa.
 type Server struct {
 	store    *store.Store
 	pipeline *search.Pipeline
@@ -23,15 +22,22 @@ type Server struct {
 	writer   *json.Encoder
 }
 
-// NewServer creates an MCP server backed by the given store and pipeline.
 func NewServer(st *store.Store, p *search.Pipeline) *Server {
-	return &Server{
-		store:    st,
-		pipeline: p,
-		reader:   bufio.NewScanner(os.Stdin),
-		writer:   json.NewEncoder(os.Stdout),
-	}
+	return &Server{store: st, pipeline: p, reader: bufio.NewScanner(os.Stdin), writer: json.NewEncoder(os.Stdout)}
 }
+
+// ─── MCP CallToolResult types ─────────────────────
+
+type callToolResult struct {
+	Content []contentItem `json:"content"`
+}
+
+type contentItem struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// ─── JSON-RPC types ──────────────────────────────
 
 type jsonRPCRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -41,9 +47,9 @@ type jsonRPCRequest struct {
 }
 
 type jsonRPCResponse struct {
-	JSONRPC string    `json:"jsonrpc"`
-	ID      any       `json:"id"`
-	Result  any       `json:"result,omitempty"`
+	JSONRPC string   `json:"jsonrpc"`
+	ID      any      `json:"id"`
+	Result  any      `json:"result,omitempty"`
 	Error   *rpcError `json:"error,omitempty"`
 }
 
@@ -70,94 +76,34 @@ type propertySchema struct {
 	Enum        []string `json:"enum,omitempty"`
 }
 
-// MCP Tool Result Content types (MCP SDK v1.26.0+)
-type toolContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type toolResult struct {
-	Content []toolContent `json:"content"`
-	IsError bool          `json:"isError,omitempty"`
-}
-
 func (s *Server) tools() []toolDefinition {
 	return []toolDefinition{
-		{
-			Name:        "nyawa_store",
-			Description: "Store a new memory with content, optional namespace (default: 'default'), and optional type (note, insight, decision, fact, etc). Returns the memory ID.",
-			InputSchema: inputSchema{
-				Type: "object",
-				Properties: map[string]propertySchema{
-					"content":   {Type: "string", Description: "Memory content to store"},
-					"namespace": {Type: "string", Description: "Namespace (default: 'default')"},
-					"type":      {Type: "string", Description: "Memory type: decision, insight, procedure, fact, preference, context, note, event, reference", Enum: []string{"decision", "insight", "procedure", "fact", "preference", "context", "note", "event", "reference"}},
-				},
-				Required: []string{"content"},
-			},
-		},
-		{
-			Name:        "nyawa_recall",
-			Description: "Semantic search across memories. Uses hybrid search (vector + FTS5 + RRF). Supports server-side filtering by type and minimum score.",
-			InputSchema: inputSchema{
-				Type: "object",
-				Properties: map[string]propertySchema{
-					"query":         {Type: "string", Description: "Natural language search query"},
-					"namespace":     {Type: "string", Description: "Namespace filter (optional)"},
-					"limit":         {Type: "number", Description: "Max results (default: 10)"},
-					"exclude_types": {Type: "string", Description: "Comma-separated memory types to exclude from results"},
-					"min_score":     {Type: "number", Description: "Minimum similarity score threshold (0.0-1.0)"},
-				},
-				Required: []string{"query"},
-			},
-		},
-		{
-			Name:        "nyawa_stats",
-			Description: "Get memory statistics: total memories per namespace, pinned count, FTS5 index size, entity graph size.",
-			InputSchema: inputSchema{
-				Type:       "object",
-				Properties: map[string]propertySchema{},
-			},
-		},
-		{
-			Name:        "nyawa_forget",
-			Description: "Soft-delete a memory by its ID. The memory is marked as superseded and excluded from search results.",
-			InputSchema: inputSchema{
-				Type: "object",
-				Properties: map[string]propertySchema{
-					"id": {Type: "string", Description: "Memory ID to delete (e.g. mem_1234567890)"},
-				},
-				Required: []string{"id"},
-			},
-		},
-		{
-			Name:        "nyawa_update",
-			Description: "Update an existing memory's content, type, namespace, or importance. Only active (non-deleted) memories can be updated.",
-			InputSchema: inputSchema{
-				Type: "object",
-				Properties: map[string]propertySchema{
-					"id":         {Type: "string", Description: "Memory ID to update (required)"},
-					"content":    {Type: "string", Description: "New memory content"},
-					"type":       {Type: "string", Description: "Memory type: decision, insight, procedure, fact, preference, context, note, event, reference", Enum: []string{"decision", "insight", "procedure", "fact", "preference", "context", "note", "event", "reference"}},
-					"namespace":  {Type: "string", Description: "New namespace"},
-					"importance": {Type: "number", Description: "Importance score (0.0-1.0)"},
-				},
-				Required: []string{"id"},
-			},
-		},
+		{Name: "nyawa_store", Description: "Store a new memory with content, optional namespace (default: 'default'), and optional type.",
+			InputSchema: inputSchema{Type: "object", Properties: map[string]propertySchema{
+				"content": {Type: "string"}, "namespace": {Type: "string"},
+				"type": {Type: "string", Enum: []string{"decision","insight","procedure","fact","preference","context","note","event","reference"}},
+			}, Required: []string{"content"}}},
+		{Name: "nyawa_recall", Description: "Semantic search across memories. Hybrid (vector + FTS5 + RRF).",
+			InputSchema: inputSchema{Type: "object", Properties: map[string]propertySchema{
+				"query": {Type: "string"}, "namespace": {Type: "string"}, "limit": {Type: "number"},
+			}, Required: []string{"query"}}},
+		{Name: "nyawa_stats", Description: "Memory statistics.",
+			InputSchema: inputSchema{Type: "object", Properties: map[string]propertySchema{}}},
+		{Name: "nyawa_forget", Description: "Soft-delete a memory by ID.",
+			InputSchema: inputSchema{Type: "object", Properties: map[string]propertySchema{
+				"id": {Type: "string"},
+			}, Required: []string{"id"}}},
 	}
 }
 
 func (s *Server) Run() error {
 	log.Println("Nyawa MCP server started (stdio)")
-	log.SetOutput(os.Stderr)
 	for s.reader.Scan() {
 		line := s.reader.Text()
 		if line == "" { continue }
 		var req jsonRPCRequest
 		if err := json.Unmarshal([]byte(line), &req); err != nil {
-			s.writeError(nil, -32700, "Parse error: invalid JSON")
-			continue
+			s.writeError(nil, -32700, "Parse error: invalid JSON"); continue
 		}
 		s.handleRequest(req)
 	}
@@ -165,27 +111,20 @@ func (s *Server) Run() error {
 }
 
 func (s *Server) handleRequest(req jsonRPCRequest) {
-	// Skip JSON-RPC notifications (no id) — never respond
-	if req.ID == nil {
-		return
-	}
+	if req.ID == nil { return }
 	switch req.Method {
-	case "initialize":
-		s.handleInitialize(req)
-	case "tools/list":
-		s.handleToolList(req)
-	case "tools/call":
-		s.handleToolCall(req)
-	default:
-		s.writeError(req.ID, -32601, fmt.Sprintf("Method not found: %s", req.Method))
+	case "initialize": s.handleInitialize(req)
+	case "tools/list": s.handleToolList(req)
+	case "tools/call": s.handleToolCall(req)
+	default: s.writeError(req.ID, -32601, fmt.Sprintf("Method not found: %s", req.Method))
 	}
 }
 
 func (s *Server) handleInitialize(req jsonRPCRequest) {
 	s.writeResult(req.ID, map[string]any{
 		"protocolVersion": "2025-03-26",
-		"capabilities":    map[string]any{"tools": map[string]bool{"listChanged": false}},
-		"serverInfo":      map[string]string{"name": "nyawa", "version": "0.9.0"},
+		"capabilities": map[string]any{"tools": map[string]bool{"listChanged": false}},
+		"serverInfo": map[string]string{"name": "nyawa", "version": "0.9.0"},
 	})
 }
 
@@ -201,16 +140,14 @@ type callParams struct {
 func (s *Server) handleToolCall(req jsonRPCRequest) {
 	var params callParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		s.writeToolError(req.ID, "Invalid params")
-		return
+		s.writeError(req.ID, -32602, "Invalid params"); return
 	}
 	switch params.Name {
 	case "nyawa_store":  s.handleStore(req.ID, params.Arguments)
 	case "nyawa_recall": s.handleRecall(req.ID, params.Arguments)
 	case "nyawa_stats":  s.handleStats(req.ID)
 	case "nyawa_forget": s.handleForget(req.ID, params.Arguments)
-	case "nyawa_update": s.handleUpdate(req.ID, params.Arguments)
-	default: s.writeToolError(req.ID, fmt.Sprintf("Unknown tool: %s", params.Name))
+	default: s.writeError(req.ID, -32601, fmt.Sprintf("Unknown tool: %s", params.Name))
 	}
 }
 
@@ -222,92 +159,52 @@ type storeArgs struct {
 
 func (s *Server) handleStore(id any, raw json.RawMessage) {
 	var args storeArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		s.writeToolError(id, "Invalid arguments")
-		return
-	}
-	if args.Content == "" {
-		s.writeToolError(id, "content required")
-		return
-	}
+	if err := json.Unmarshal(raw, &args); err != nil { s.writeError(id, -32602, "Invalid arguments"); return }
+	if args.Content == "" { s.writeError(id, -32602, "content required"); return }
 	if args.Namespace == "" { args.Namespace = "default" }
 	memType := types.MemoryType(args.Type)
 	if memType == "" { memType = types.TypeNote }
 	memID := fmt.Sprintf("mem_%d", time.Now().UnixNano())
-	if err := s.store.InsertMemory(&types.Memory{
-		ID: memID, Content: args.Content, Type: memType,
-		Namespace: args.Namespace, CreatedAt: time.Now(), UpdatedAt: time.Now(),
-	}); err != nil {
-		s.writeToolError(id, fmt.Sprintf("store failed: %v", err))
-		return
+	mem := &types.Memory{ID: memID, Content: args.Content, Type: memType,
+		Namespace: args.Namespace, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := s.store.InsertMemory(mem); err != nil {
+		s.writeError(id, -32603, fmt.Sprintf("store failed: %v", err)); return
 	}
-	result := map[string]any{"id": memID, "content": args.Content, "type": string(memType), "status": "stored"}
-	s.writeToolResult(id, result)
+	s.writeToolResult(id, map[string]any{"id": memID, "content": args.Content, "type": string(memType), "status": "stored"})
 }
 
 type recallArgs struct {
-	Query       string   `json:"query"`
-	Namespace   string   `json:"namespace"`
-	Limit       float64  `json:"limit"`
-	ExcludeTypes []string `json:"exclude_types,omitempty"`
-	MinScore    float64  `json:"min_score,omitempty"`
+	Query     string  `json:"query"`
+	Namespace string  `json:"namespace"`
+	Limit     float64 `json:"limit"`
 }
 
 func (s *Server) handleRecall(id any, raw json.RawMessage) {
 	var args recallArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		s.writeToolError(id, "Invalid arguments")
-		return
-	}
-	if args.Query == "" {
-		s.writeToolError(id, "query required")
-		return
-	}
+	if err := json.Unmarshal(raw, &args); err != nil { s.writeError(id, -32602, "Invalid arguments"); return }
+	if args.Query == "" { s.writeError(id, -32602, "query required"); return }
 	limit := int(args.Limit)
 	if limit <= 0 { limit = 10 }
-	results, err := s.pipeline.Search(types.StoreQuery{QueryText: args.Query, Namespace: args.Namespace, Limit: limit * 3})
-	if err != nil {
-		s.writeToolError(id, fmt.Sprintf("search failed: %v", err))
-		return
-	}
+	q := types.StoreQuery{QueryText: args.Query, Namespace: args.Namespace, Limit: limit}
+	results, err := s.pipeline.Search(q)
+	if err != nil { s.writeError(id, -32603, fmt.Sprintf("search failed: %v", err)); return }
 	defer s.pipeline.ReleaseResults(results)
-
-	excludeSet := make(map[string]bool, len(args.ExcludeTypes))
-	for _, t := range args.ExcludeTypes {
-		excludeSet[t] = true
-	}
-
 	type resultItem struct {
-		ID, Content, Type, Namespace, CreatedAt string
-		Score                                  float64
+		ID string `json:"id"`; Content string `json:"content"`
+		Type string `json:"type"`; Namespace string `json:"namespace"`
+		Score float64 `json:"score"`; CreatedAt string `json:"created_at"`
 	}
 	items := make([]resultItem, 0, len(results))
 	for _, r := range results {
-		if len(excludeSet) > 0 && excludeSet[string(r.Type)] {
-			continue
-		}
-		if args.MinScore > 0 && r.Score < args.MinScore {
-			continue
-		}
-		items = append(items, resultItem{
-			ID: r.ID, Content: r.Content, Type: string(r.Type),
-			Namespace: r.Namespace, Score: r.Score,
-			CreatedAt: r.CreatedAt.Format(time.RFC3339),
-		})
+		items = append(items, resultItem{ID: r.ID, Content: r.Content, Type: string(r.Type),
+			Namespace: r.Namespace, Score: r.Score, CreatedAt: r.CreatedAt.Format(time.RFC3339)})
 	}
-	if limit > 0 && len(items) > limit {
-		items = items[:limit]
-	}
-	result := map[string]any{"results": items, "count": len(items)}
-	s.writeToolResult(id, result)
+	s.writeToolResult(id, map[string]any{"results": items, "count": len(items)})
 }
 
 func (s *Server) handleStats(id any) {
 	stats, err := s.store.Stats()
-	if err != nil {
-		s.writeToolError(id, fmt.Sprintf("stats failed: %v", err))
-		return
-	}
+	if err != nil { s.writeError(id, -32603, fmt.Sprintf("stats failed: %v", err)); return }
 	s.writeToolResult(id, stats)
 }
 
@@ -315,91 +212,22 @@ type forgetArgs struct{ ID string `json:"id"` }
 
 func (s *Server) handleForget(id any, raw json.RawMessage) {
 	var args forgetArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		s.writeToolError(id, "Invalid arguments")
-		return
-	}
-	if args.ID == "" {
-		s.writeToolError(id, "id required")
-		return
-	}
+	if err := json.Unmarshal(raw, &args); err != nil { s.writeError(id, -32602, "Invalid arguments"); return }
+	if args.ID == "" { s.writeError(id, -32602, "id required"); return }
 	if err := s.store.DeleteMemory(args.ID); err != nil {
-		s.writeToolError(id, fmt.Sprintf("delete failed: %v", err))
-		return
+		s.writeError(id, -32603, fmt.Sprintf("delete failed: %v", err)); return
 	}
-	result := map[string]string{"status": "deleted", "id": args.ID}
-	s.writeToolResult(id, result)
+	s.writeToolResult(id, map[string]string{"status": "deleted", "id": args.ID})
 }
 
-type updateArgs struct {
-	ID         string  `json:"id"`
-	Content    string  `json:"content,omitempty"`
-	Type       string  `json:"type,omitempty"`
-	Namespace  string  `json:"namespace,omitempty"`
-	Importance float64 `json:"importance,omitempty"`
-}
-
-func (s *Server) handleUpdate(id any, raw json.RawMessage) {
-	var args updateArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		s.writeToolError(id, "Invalid arguments")
-		return
-	}
-	if args.ID == "" {
-		s.writeToolError(id, "id required")
-		return
-	}
-	mem, err := s.store.GetMemory(args.ID)
-	if err != nil {
-		s.writeToolError(id, fmt.Sprintf("memory not found: %v", err))
-		return
-	}
-	if args.Content != "" { mem.Content = args.Content }
-	if args.Type != "" { mem.Type = types.MemoryType(args.Type) }
-	if args.Namespace != "" { mem.Namespace = args.Namespace }
-	if args.Importance > 0 { mem.Importance = args.Importance }
-	if err := s.store.UpdateMemory(mem); err != nil {
-		s.writeToolError(id, fmt.Sprintf("update failed: %v", err))
-		return
-	}
-	result := map[string]any{"status": "updated", "id": mem.ID, "content": mem.Content, "type": string(mem.Type)}
-	s.writeToolResult(id, result)
-}
-
-// writeResult writes a generic JSON-RPC response (used for initialize, tools/list).
 func (s *Server) writeResult(id any, result any) {
 	s.writer.Encode(jsonRPCResponse{JSONRPC: "2.0", ID: id, Result: result})
 }
 
-// writeToolResult wraps tool call result in standard MCP CallToolResult format
-// { content: [{ type: "text", text: "..." }] }
-// Required by MCP SDK v1.26.0+ — the raw result dict is not valid.
-func (s *Server) writeToolResult(id any, data any) {
-	jsonBytes, err := json.Marshal(data)
-	var text string
-	if err != nil {
-		text = fmt.Sprintf("{\"error\":\"marshal failed: %v\"}", err)
-	} else {
-		text = string(jsonBytes)
-	}
-	s.writer.Encode(jsonRPCResponse{
-		JSONRPC: "2.0",
-		ID:      id,
-		Result: toolResult{
-			Content: []toolContent{{Type: "text", Text: text}},
-		},
-	})
-}
-
-// writeToolError writes a tool call error as a proper CallToolResult with isError=true.
-func (s *Server) writeToolError(id any, message string) {
-	s.writer.Encode(jsonRPCResponse{
-		JSONRPC: "2.0",
-		ID:      id,
-		Result: toolResult{
-			Content: []toolContent{{Type: "text", Text: fmt.Sprintf("{\"error\":\"%s\"}", message)}},
-			IsError: true,
-		},
+func (s *Server) writeToolResult(id any, result any) {
+	text, _ := json.Marshal(result)
+	s.writer.Encode(jsonRPCResponse{JSONRPC: "2.0", ID: id,
+		Result: callToolResult{Content: []contentItem{{Type: "text", Text: string(text)}}},
 	})
 }
 
