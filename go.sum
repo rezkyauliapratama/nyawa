@@ -1,2 +1,2 @@
-github.com/mattn/go-sqlite3 v1.14.48 h1:1Ck0GpQpNBdWwTRq3hDx0FltS1A2FOhhDLO8mQ93L4=
-google.golang.org v0.0.0-20250324211829-b45a1f7aae1a h1:...
+github.com/mattn/go-sqlite3 v1.14.48 h1:7XHIgl0a8HwOaiK4E47ozLkST78rR9+OtNGx27D/TFs=
+github.com/mattn/go-sqlite3 v1.14.48/go.mod h1:6JTjA44L93a0QCyJef5YvlPoKXntQPjzWv5gtm9sB6w=
