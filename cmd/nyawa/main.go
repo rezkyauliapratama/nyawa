@@ -196,7 +196,8 @@ func cmdServe() {
 
 	hc := embedder.NewHealthCheckRunner(emb, 60*time.Second); hc.Start(); defer hc.Stop()
 	p := search.NewPipeline(st, emb, types.DefaultConfig().Search)
-	srv := server.New(st, p, emb, server.DefaultServerConfig())
+	rs := rag.NewRAGStore(st.GetDB(), st.GetHNSW(), st.GetHNSWPath(), emb)
+	srv := server.New(st, p, emb, rs, server.DefaultServerConfig())
 	log.Printf("Server — db=%s embedder=%s dream=%v", os.Args[2], emb.Current(), engine.Running())
 	if err := srv.Start(); err != nil { log.Fatalf("server: %v", err) }
 }
