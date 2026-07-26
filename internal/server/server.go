@@ -288,3 +288,17 @@ func (s *Server) handleRAGStats(w http.ResponseWriter, r *http.Request) {
 	stats := s.ragStore.Stats()
 	writeJSON(w, http.StatusOK, stats)
 }
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+func parseInt(s string, defaultVal int) int {
+	if s == "" { return defaultVal }
+	var v int
+	if _, err := fmt.Sscanf(s, "%d", &v); err != nil { return defaultVal }
+	if v < 1 { return defaultVal }
+	return v
+}
