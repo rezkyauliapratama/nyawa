@@ -9,11 +9,11 @@ func TestInferType(t *testing.T) {
 	c := NewClassifier()
 	for _, tt := range []struct{ content string; want types.MemoryType }{
 		{"We decided to use Go", types.TypeDecision},
-		{"I discovered that HNSW is faster", types.TypeInsight},
+		{"I discovered that HNSW outperforms", types.TypeInsight},
 		{"Step 1: Install Go. Step 2: Build", types.TypeProcedure},
 		{"The database is PostgreSQL", types.TypeFact},
 		{"I prefer dark mode", types.TypePreference},
-		{"Currently working on HNSW index", types.TypeContext},
+		{"Currently working on HNSW", types.TypeContext},
 		{"The meeting happened yesterday", types.TypeEvent},
 		{"See the docs at https://example.com", types.TypeReference},
 		{"Just a random note", types.TypeNote},
@@ -26,14 +26,13 @@ func TestInferType(t *testing.T) {
 
 func TestExtractEntities(t *testing.T) {
 	c := NewClassifier()
-	e := c.ExtractEntities("Deployed to GCP on 2026-07-21 using Go v1.23.0 at https://example.com")
-	if len(e.URLs) == 0 { t.Error("expected URL") }
-	if len(e.Dates) == 0 { t.Error("expected date") }
-	_ = e
+	entities := c.ExtractEntities("Deployed to GCP with Kubernetes at https://console.cloud.google.com on 2026-07-21")
+	if len(entities.URLs) == 0 { t.Error("expected URL extraction") }
+	if len(entities.Dates) == 0 { t.Error("expected date extraction") }
 }
 
 func TestProcess(t *testing.T) {
 	c := NewClassifier()
-	_, mt := c.Process("We decided to deploy to AWS using Terraform")
-	if mt != types.TypeDecision { t.Errorf("expected decision, got %v", mt) }
+	_, memType := c.Process("We decided to deploy to AWS using Terraform on 2026-07-20")
+	if memType != types.TypeDecision { t.Errorf("expected decision, got %v", memType) }
 }
