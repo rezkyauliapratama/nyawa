@@ -54,6 +54,8 @@ func (s *Store) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories(namespace);
 	CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(mem_type);
 	CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
+	CREATE INDEX IF NOT EXISTS idx_memories_ns_type ON memories(namespace, mem_type);
+	CREATE INDEX IF NOT EXISTS idx_memories_ns_created ON memories(namespace, created_at);
 	CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content,tokenize='porter unicode61', content='memories', content_rowid='rowid');
 	CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN INSERT INTO memories_fts(rowid,content) VALUES(new.rowid,new.content); END;
 	CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN INSERT INTO memories_fts(memories_fts,rowid,content) VALUES('delete',old.rowid,old.content); END;
