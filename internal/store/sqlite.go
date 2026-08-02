@@ -74,6 +74,7 @@ func (s *Store) InsertMemory(m *types.Memory) error {
 			if n, e := s.graph.InsertMemoryEntities(m.ID, s.classify.ExtractEntities(m.Content)); e == nil && n > 0 {
 				s.db.Exec(`UPDATE memories SET edge_count=? WHERE id=?`, n, m.ID)
 			}
+			s.graph.InferTypedEdges(m.ID, m.Content)
 		}
 	}
 	if s.embedder != nil && s.embedder.Available() {

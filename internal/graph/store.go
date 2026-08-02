@@ -4,11 +4,17 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"github.com/rezkyauliapratama/nyawa/internal/extract"
 )
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db           *sql.DB
+	inferTotal   int64
+	inferMatched int64
+	mu           sync.Mutex
+}
 
 func NewStore(db *sql.DB) (*Store, error) {
 	s := &Store{db: db}
@@ -56,6 +62,7 @@ func (s *Store) InsertMemoryEntities(memoryID string, entities extract.Entities)
 	var names, categories []string
 	for _, e := range entities.Tech { names = append(names, e); categories = append(categories, "tech") }
 	for _, e := range entities.People { names = append(names, e); categories = append(categories, "person") }
+	for _, e := range entities.Locations { names = append(names, e); categories = append(categories, "place") }
 	for _, e := range entities.URLs {
 		if len(e) > 64 { e = e[:64] }
 		names = append(names, e); categories = append(categories, "url")
@@ -134,5 +141,27 @@ func (s *Store) Stats() (map[string]any, error) {
 	s.db.QueryRow(`SELECT COUNT(*) FROM entity_nodes`).Scan(&nodes)
 	s.db.QueryRow(`SELECT COUNT(*) FROM entity_edges`).Scan(&edges)
 	s.db.QueryRow(`SELECT COUNT(*) FROM entity_entity_edges`).Scan(&eeEdges)
-	return map[string]any{"entity_nodes": nodes, "entity_edges": edges, "entity_entity_edges": eeEdges}, nil
+
+	var typedEdges int
+	s.db.QueryRow(`SELECT COUNT(*) FROM entity_entity_edges WHERE rel_type != 'related_to'`).Scan(&typedEdges)
+
+	s.mu.Lock()
+	total := s.inferTotal
+	matched := s.inferMatched
+	s.mu.Unlock()
+
+	missRate := 0.0
+	if total > 0 {
+		missRate = 1.0 - float64(matched)/float64(total)
+	}
+
+	return map[string]any{
+		"entity_nodes":        nodes,
+		"entity_edges":        edges,
+		"entity_entity_edges": eeEdges,
+		"typed_edges":         typedEdges,
+		"infer_total":         total,
+		"infer_matched":       matched,
+		"infer_miss_rate":     missRate,
+	}, nil
 }
