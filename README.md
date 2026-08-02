@@ -107,6 +107,52 @@ Available via REST API (`/v1/rag/`) or MCP tools (`rag_query`, `rag_ingest_file`
 
 ---
 
+## Hybrid Search & RRF (Ranked Reciprocal Fusion)
+
+Nyawa runs **two** search strategies on every recall and fuses them into a single final ranking:
+
+- **Vector search** (HNSW) — finds memories by *meaning* (semantic embedding)
+- **Keyword search** (SQLite FTS5) — finds memories by *literal terms*
+
+Each has complementary blind spots: vector search excels at synonyms and paraphrases ("how do I buy BTC") but can miss exact identifiers; FTS5 nails exact matches ("mcp-trading-crypto") but ignores semantics. RRF combines both so the final ranking is stronger than either alone.
+
+### The formula
+
+```
+score(item) = Σ 1 / (k + rank(item))
+
+k    = constant (60 in Nyawa)
+rank = position of the item in each engine's result list
+```
+
+Only *positions* matter — raw similarity scores are never compared across engines (they live on different scales). An item that ranks #1 in vector search and #3 in FTS5 gets:
+
+```
+1/(60+1) + 1/(60+3) = 0.0164 + 0.0159 = 0.0323
+```
+
+### Why it works
+
+- Items appearing in **both** result lists accumulate score from both engines → strongly favored
+- Items found by only one engine rank lower — they're likely one-sided matches
+- No score normalization needed — rank is scale-free and robust to engine drift
+
+### The full recall pipeline
+
+```
+Query
+ ├─ HNSW vector search ──────────────┐
+ ├─ FTS5 keyword search ─────────────┤
+ └─ RRF fusion (k=60) ───────────────┘
+      └─ Entity graph boost (related memories rank higher)
+           └─ Filter (namespace, min_score, exclude_types)
+                └─ Top-K results
+```
+
+Implementation: [`internal/search/rrf.go`](internal/search/rrf.go)
+
+---
+
 ## Performance
 
 | Metric | Nyawa | Alternative (Qdrant + Docker) |
