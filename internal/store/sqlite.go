@@ -228,6 +228,19 @@ func (s *Store) IncrementAccessCount(id string) error {
 	_, err := s.db.Exec(`UPDATE memories SET access_count=access_count+1 WHERE id=?`, id)
 	return err
 }
+func (s *Store) TraverseGraph(seedNames []string, depth, limit int) ([]graph.TraversalResult, error) {
+	if s.graph == nil { return nil, nil }
+	return s.graph.Traverse(seedNames, depth, limit)
+}
+func (s *Store) ListEntityNames(limit int) ([]string, error) {
+	if limit <= 0 { limit = 10000 }
+	rows, err := s.db.Query(`SELECT name FROM entity_nodes ORDER BY access_count DESC LIMIT ?`, limit)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	var names []string
+	for rows.Next() { var n string; rows.Scan(&n); names = append(names, n) }
+	return names, nil
+}
 func (s *Store) GetMemoriesByIDs(ids []string) ([]*types.Memory, error) {
 	if len(ids) == 0 { return nil, nil }
 	q := `SELECT id,content,mem_type,namespace,importance,access_count,pinned,created_at,updated_at,superseded_at,edge_count FROM memories WHERE id IN (?` + strings.Repeat(",?", len(ids)-1) + `) AND superseded_at IS NULL`

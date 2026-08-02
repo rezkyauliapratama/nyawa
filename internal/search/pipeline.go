@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/rezkyauliapratama/nyawa/internal/embedder"
+	"github.com/rezkyauliapratama/nyawa/internal/graph"
 	"github.com/rezkyauliapratama/nyawa/internal/pool"
 	"github.com/rezkyauliapratama/nyawa/internal/store"
 	"github.com/rezkyauliapratama/nyawa/internal/types"
@@ -33,6 +36,8 @@ type StoreReader interface {
 	IncrementAccessCount(id string) error
 	ListNamespaces() (map[string]int, error)
 	ArchiveSuperseded(archivePath string) (int, error)
+	TraverseGraph(seedNames []string, depth, limit int) ([]graph.TraversalResult, error)
+	ListEntityNames(limit int) ([]string, error)
 }
 
 func NewPipeline(store StoreReader, emb *embedder.PriorityChain, cfg types.SearchConfig) *Pipeline {
@@ -87,6 +92,10 @@ func (p *Pipeline) Search(q types.StoreQuery) ([]*types.MemoryResult, error) {
 	for _, m := range memories { memMap[m.ID] = m }
 	now := float64(time.Now().Unix()) / 3600.0
 	results := p.post.Process(fused, memMap, now)
+
+	// Phase 5.4: graph-injected recall
+	results = p.mergeGraphResults(q, results)
+
 	if q.TimeTravel != nil { results = p.filterByTime(results, *q.TimeTravel) }
 	if q.MinScore > 0 {
 		filtered := results[:0]
@@ -117,6 +126,108 @@ func (p *Pipeline) ReleaseResults(results []*types.MemoryResult) {
 }
 
 func forceMin(v, min int) int { if v < min { return min }; return v }
+
+// graphSeeds matches entity names that appear in the query text.
+// Names shorter than 3 chars are skipped to avoid false positives.
+// Returns up to 3 matched entity names.
+func (p *Pipeline) graphSeeds(q types.StoreQuery) []string {
+	names, err := p.store.ListEntityNames(10000)
+	if err != nil || len(names) == 0 {
+		return nil
+	}
+	queryLower := strings.ToLower(q.QueryText)
+	var seeds []string
+	for _, name := range names {
+		if len(name) < 3 {
+			continue
+		}
+		if strings.Contains(queryLower, strings.ToLower(name)) {
+			seeds = append(seeds, name)
+			if len(seeds) >= 3 {
+				break
+			}
+		}
+	}
+	return seeds
+}
+
+// mergeGraphResults runs graph traversal from query-matched entity seeds
+// and merges graph-reachable memories into the RRF results.
+// Overlapping memories (already in RRF) get a 1.5x score boost.
+// Graph-only memories are injected at 0.1 weight.
+// Falls back to pure RRF when no entity seeds match.
+func (p *Pipeline) mergeGraphResults(q types.StoreQuery, results []*types.MemoryResult) []*types.MemoryResult {
+	seeds := p.graphSeeds(q)
+	if len(seeds) == 0 {
+		return results // pure RRF fallback
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = types.DefaultQueryLimit
+	}
+	graphResults, err := p.store.TraverseGraph(seeds, 2, limit*2)
+	if err != nil || len(graphResults) == 0 {
+		return results
+	}
+	// Build score map for graph traversal results
+	graphScoreMap := make(map[string]float64, len(graphResults))
+	for _, gr := range graphResults {
+		graphScoreMap[gr.MemoryID] = gr.Score
+	}
+	// Index existing RRF results
+	existingMap := make(map[string]*types.MemoryResult, len(results))
+	for _, r := range results {
+		existingMap[r.ID] = r
+	}
+	// Boost overlapping memories (+50% = x1.5)
+	var newIDs []string
+	for memID := range graphScoreMap {
+		if existing, ok := existingMap[memID]; ok {
+			existing.Score = existing.Score * 1.5
+		} else {
+			newIDs = append(newIDs, memID)
+		}
+	}
+	// Fetch full memories for graph-only results
+	if len(newIDs) > 0 {
+		newMems, err := p.store.GetMemoriesByIDs(newIDs)
+		if err == nil {
+			for _, mem := range newMems {
+				if mem == nil {
+					continue
+				}
+				graphScore := graphScoreMap[mem.ID] * 0.1
+				r := p.resultPool.Get()
+				r.Memory = *mem
+				r.RRFScore = 0
+				r.Score = graphScore
+				// Compute simple boosts for consistency
+				now := float64(time.Now().Unix()) / 3600.0
+				ageHours := now - float64(mem.CreatedAt.Unix())/3600.0
+				if ageHours < 0 {
+					ageHours = 0
+				}
+				tau := mem.Type.DecayHours()
+				r.TemporalBoost = p.post.RecencyWeight * math.Exp(-ageHours/tau)
+				accessFactor := math.Min(float64(mem.AccessCount)/10.0, 1.0)
+				r.ImportanceBoost = p.post.ImportanceWeight * mem.Type.Weight() * accessFactor
+				pinBoost := 0.0
+				if mem.Pinned {
+					pinBoost = 0.1
+				}
+				graphBoost := math.Log1p(float64(mem.EdgeCount)) * 0.03
+				r.Score += r.TemporalBoost + r.ImportanceBoost + pinBoost + graphBoost
+				results = append(results, r)
+			}
+		}
+	}
+	// Re-sort by Score desc and reassign Rank
+	sort.Slice(results, func(i, j int) bool { return results[i].Score > results[j].Score })
+	for i := range results {
+		results[i].Rank = i + 1
+	}
+	return results
+}
 
 type cacheEntry struct {
 	results   []*types.MemoryResult

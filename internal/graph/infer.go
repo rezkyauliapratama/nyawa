@@ -20,7 +20,7 @@ var relationPatterns = []RelationPattern{
 		SourceCat: "person",
 		TargetCat: "org",
 		Re: regexp.MustCompile(
-			`(?i)\b([\w][\w .\-]+)\s+(?:bekerja di|kerja di|bergabung dengan|joined|works at)\s+([\w][\w .\-]+)(?:\.|,|;|\s*$|\s+dan\s|\s+di\s|\s+untuk\s|\s+dengan\s|\s+pada\s|\s+yang\s|\s+sejak\s)`,
+			`(?i)\b([\w][\w .\-]+?)\s+(?:bekerja di|kerja di|bergabung dengan|joined|works at)\s+([\w][\w .\-]+?)(?:\.|,|;|\s*$|\s+dan\s|\s+di\s|\s+untuk\s|\s+dengan\s|\s+pada\s|\s+yang\s|\s+sejak\s|\s+sebagai\s|\s+adalah\s)`,
 		),
 	},
 	// uses: entity -> tech (Indonesian + English)
@@ -29,7 +29,7 @@ var relationPatterns = []RelationPattern{
 		SourceCat: "",
 		TargetCat: "tech",
 		Re: regexp.MustCompile(
-			`(?i)\b([\w][\w .\-]+)\s+(?:menggunakan|pakai|memakai|uses)\s+([\w][\w .\-]+)(?:\.|,|;|\s*$|\s+dan\s|\s+di\s|\s+untuk\s|\s+dengan\s|\s+pada\s|\s+yang\s|\s+sebagai\s)`,
+			`(?i)\b([\w][\w .\-]+?)\s+(?:menggunakan|pakai|memakai|uses)\s+([\w][\w .\-]+?)(?:\.|,|;|\s*$|\s+dan\s|\s+di\s|\s+untuk\s|\s+dengan\s|\s+pada\s|\s+yang\s|\s+sebagai\s|\s+adalah\s)`,
 		),
 	},
 	// located_in: entity -> place (Indonesian + English)
@@ -38,7 +38,7 @@ var relationPatterns = []RelationPattern{
 		SourceCat: "",
 		TargetCat: "place",
 		Re: regexp.MustCompile(
-			`(?i)\b([\w][\w .\-]+)\s+(?:berlokasi di|located in)\s+([\w][\w .\-]+)(?:\.|,|;|\s*$|\s+dan\s|\s+di\s|\s+dengan\s|\s+yang\s)`,
+			`(?i)\b([\w][\w .\-]+?)\s+(?:berlokasi di|located in)\s+([\w][\w .\-]+?)(?:\.|,|;|\s*$|\s+dan\s|\s+di\s|\s+dengan\s|\s+yang\s|\s+sebagai\s|\s+adalah\s)`,
 		),
 	},
 	// part_of: child -> group (Indonesian + English)
@@ -47,7 +47,7 @@ var relationPatterns = []RelationPattern{
 		SourceCat: "",
 		TargetCat: "group",
 		Re: regexp.MustCompile(
-			`(?i)\b([\w][\w .\-]+)\s+(?:bagian dari|part of)\s+([\w][\w .\-]+)(?:\.|,|;|\s*$|\s+dan\s|\s+di\s|\s+dengan\s|\s+yang\s)`,
+			`(?i)\b([\w][\w .\-]+?)\s+(?:adalah\s+)?(?:bagian dari|part of)\s+([\w][\w .\-]+?)(?:\.|,|;|\s*$|\s+dan\s|\s+di\s|\s+dengan\s|\s+yang\s|\s+sebagai\s|\s+adalah\s)`,
 		),
 	},
 }
