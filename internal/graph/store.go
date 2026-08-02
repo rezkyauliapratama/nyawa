@@ -28,7 +28,25 @@ func (s *Store) migrate() error {
 		weight REAL NOT NULL DEFAULT 1.0, created_at TEXT NOT NULL DEFAULT (datetime('now')),
 		FOREIGN KEY (entity_id) REFERENCES entity_nodes(id), UNIQUE(memory_id, entity_id));
 	CREATE INDEX IF NOT EXISTS idx_edge_memory ON entity_edges(memory_id);
-	CREATE INDEX IF NOT EXISTS idx_edge_entity ON entity_edges(entity_id);`)
+	CREATE INDEX IF NOT EXISTS idx_edge_entity ON entity_edges(entity_id);
+	CREATE TABLE IF NOT EXISTS entity_entity_edges (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		source_id INTEGER NOT NULL REFERENCES entity_nodes(id),
+		target_id INTEGER NOT NULL REFERENCES entity_nodes(id),
+		rel_type TEXT NOT NULL DEFAULT 'related_to',
+		weight REAL NOT NULL DEFAULT 1.0,
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		UNIQUE(source_id, target_id, rel_type));
+	CREATE INDEX IF NOT EXISTS idx_ee_source ON entity_entity_edges(source_id);
+	CREATE INDEX IF NOT EXISTS idx_ee_target ON entity_entity_edges(target_id);
+	CREATE INDEX IF NOT EXISTS idx_ee_type ON entity_entity_edges(rel_type);
+	CREATE TABLE IF NOT EXISTS entity_pair_counts (
+		source_id INTEGER NOT NULL,
+		target_id INTEGER NOT NULL,
+		count INTEGER NOT NULL DEFAULT 1,
+		UNIQUE(source_id, target_id));
+	CREATE INDEX IF NOT EXISTS idx_epc_source ON entity_pair_counts(source_id);
+	CREATE INDEX IF NOT EXISTS idx_epc_target ON entity_pair_counts(target_id);`)
 	return err
 }
 
@@ -44,13 +62,36 @@ func (s *Store) InsertMemoryEntities(memoryID string, entities extract.Entities)
 	}
 	if len(names) == 0 { return 0, nil }
 	count := 0
+	entityIDs := make(map[int]bool)
 	for i, name := range names {
 		if name == "" { continue }
-		s.db.Exec(`INSERT INTO entity_nodes (name, category) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET access_count = access_count + 1`, strings.TrimSpace(name), categories[i])
+		name = strings.TrimSpace(name)
+		s.db.Exec(`INSERT INTO entity_nodes (name, category) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET access_count = access_count + 1`, name, categories[i])
 		var entityID int
-		s.db.QueryRow(`SELECT id FROM entity_nodes WHERE name = ?`, strings.TrimSpace(name)).Scan(&entityID)
+		s.db.QueryRow(`SELECT id FROM entity_nodes WHERE name = ?`, name).Scan(&entityID)
 		if entityID == 0 { continue }
+		entityIDs[entityID] = true
 		if _, err := s.db.Exec(`INSERT OR IGNORE INTO entity_edges (memory_id, entity_id, weight, created_at) VALUES (?, ?, ?, ?)`, memoryID, entityID, 1.0, time.Now().UTC().Format(time.RFC3339)); err == nil { count++ }
+	}
+	if len(entityIDs) >= 2 {
+		ids := make([]int, 0, len(entityIDs))
+		for id := range entityIDs { ids = append(ids, id) }
+		for i := 0; i < len(ids); i++ {
+			for j := i + 1; j < len(ids); j++ {
+				sid, tid := ids[i], ids[j]
+				if sid > tid { sid, tid = tid, sid }
+				if _, err := s.db.Exec(`INSERT INTO entity_pair_counts (source_id, target_id, count) VALUES (?, ?, 1) ON CONFLICT(source_id, target_id) DO UPDATE SET count = count + 1`, sid, tid); err != nil {
+					continue
+				}
+				var pairCount int
+				if err := s.db.QueryRow(`SELECT count FROM entity_pair_counts WHERE source_id = ? AND target_id = ?`, sid, tid).Scan(&pairCount); err != nil {
+					continue
+				}
+				if pairCount >= 2 {
+					s.db.Exec(`INSERT INTO entity_entity_edges (source_id, target_id, rel_type, weight) VALUES (?, ?, 'related_to', ?) ON CONFLICT(source_id, target_id, rel_type) DO UPDATE SET weight = ?`, sid, tid, float64(pairCount), float64(pairCount))
+				}
+			}
+		}
 	}
 	return count, nil
 }
@@ -89,8 +130,9 @@ func (s *Store) SearchByEntityName(entityName string, limit int) ([]string, erro
 }
 
 func (s *Store) Stats() (map[string]any, error) {
-	var nodes, edges int
+	var nodes, edges, eeEdges int
 	s.db.QueryRow(`SELECT COUNT(*) FROM entity_nodes`).Scan(&nodes)
 	s.db.QueryRow(`SELECT COUNT(*) FROM entity_edges`).Scan(&edges)
-	return map[string]any{"entity_nodes": nodes, "entity_edges": edges}, nil
+	s.db.QueryRow(`SELECT COUNT(*) FROM entity_entity_edges`).Scan(&eeEdges)
+	return map[string]any{"entity_nodes": nodes, "entity_edges": edges, "entity_entity_edges": eeEdges}, nil
 }
