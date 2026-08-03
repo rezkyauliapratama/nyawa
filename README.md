@@ -157,6 +157,11 @@ You should see memories about Kafka **and** entities connected to it (MCP, Tim b
 
 The dashboard shows memories, RAG collections, and graph stats in one page.
 
+> **Important — `serve` must keep running for background features:**
+> The Dream Cycle (7-phase maintenance) and REST API only run **while `nyawa serve` is alive**.
+> CLI commands (`store`, `recall`, `graph`, ...) are one-shot and do NOT start the Dream Cycle.
+> For long-term use, run `nyawa serve` as a persistent service — see [Running as a Service](#running-as-a-service).
+
 ### 7. (Optional) Run the Dream Cycle manually
 
 ```bash
@@ -392,10 +397,87 @@ chmod +x ./nyawa
 
 ### Docker
 
+The image runs `nyawa serve` as its default entrypoint (Dream Cycle active while container is up):
+
 ```bash
 docker pull ghcr.io/rezkyauliapratama/nyawa:latest
-docker run -d --name nyawa -v ./memory.db:/data/memory.db -p 3300:3300 ghcr.io/rezkyauliapratama/nyawa:latest
+docker run -d --name nyawa --restart unless-stopped \
+  -v ./memory.db:/data/memory.db -p 3300:3300 \
+  ghcr.io/rezkyauliapratama/nyawa:latest
 ```
+
+---
+
+## Running as a Service
+
+`nyawa serve` is a **foreground process** — the Dream Cycle (7-phase maintenance), REST API, and dashboard only run while it stays alive. For production / long-term use, run it as a persistent service:
+
+### Option A: systemd (Linux, recommended)
+
+Create `/etc/systemd/system/nyawa.service`:
+
+```ini
+[Unit]
+Description=Nyawa AI Memory Engine
+After=network.target
+
+[Service]
+Type=simple
+User=nyawa
+ExecStart=/usr/local/bin/nyawa serve /var/lib/nyawa/memory.db
+Restart=on-failure
+RestartSec=5
+# Optional: restrict the service
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now nyawa
+sudo systemctl status nyawa        # verify it's running
+```
+
+### Option B: Docker
+
+The Docker image runs `serve` as its default entrypoint, so the container stays alive with the Dream Cycle active:
+
+```bash
+docker run -d --name nyawa --restart unless-stopped \
+  -v ./memory.db:/data/memory.db -p 3300:3300 \
+  ghcr.io/rezkyauliapratama/nyawa:latest
+```
+
+`--restart unless-stopped` keeps it running across reboots.
+
+### Option C: tmux / screen / nohup (quick & dirty)
+
+```bash
+nohup ./nyawa serve /tmp/nyawa.db > nyawa.log 2>&1 &
+```
+
+### Verify it's working
+
+```bash
+curl http://localhost:3300/v1/health    # {"status":"ok",...}
+journalctl -u nyawa -f                   # watch Dream Cycle logs (systemd)
+```
+
+**Expected log pattern** — the Dream Cycle fires every hour:
+
+```
+nyawa: Dream Cycle starting
+nyawa: Dream graph build: scanned=1234 pairs=89 updated=45 pruned=3 nodes=321 edges=952 avgdeg=5.93
+nyawa: Dream Cycle done in 312.4ms: ev=0 ct=0 de=2 lk=5 pr=1 sn=0 gb=45(nd=321 ed=952)
+```
+
+If you only run one-shot CLI commands (`store`, `recall`, `graph`) without a persistent `serve`, you get **no Dream Cycle, no REST API** — data is still stored and searchable, but automatic maintenance never runs.
 
 ---
 
