@@ -195,6 +195,7 @@ func cmdServe() {
 	st := getStore(os.Args[2], emb); defer st.Close()
 
 	engine := dream.New(st.GetDB(), st.GetHNSW(), st.GetHNSWPath())
+	engine.SetGraphStore(st.GetGraph())
 	engine.Start(dream.DefaultConfig())
 
 	hc := embedder.NewHealthCheckRunner(emb, 60*time.Second); hc.Start(); defer hc.Stop()
@@ -223,6 +224,7 @@ func cmdDream() {
 	fmt.Println(string(b))
 	fmt.Println("--- Running Dream Cycle ---")
 	engine := dream.New(st.GetDB(), st.GetHNSW(), st.GetHNSWPath())
+	engine.SetGraphStore(st.GetGraph())
 	cfg := dream.DefaultConfig()
 	result := engine.Run(cfg)
 	b2, _ := json.MarshalIndent(result, "", "  ")

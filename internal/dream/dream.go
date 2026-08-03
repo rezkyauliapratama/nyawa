@@ -7,18 +7,20 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"github.com/rezkyauliapratama/nyawa/internal/graph"
 	"github.com/rezkyauliapratama/nyawa/internal/index"
 )
 
 type Engine struct {
-	db       *sql.DB
-	hnsw     *index.HNSW
-	hnswPath string
-	mu       sync.Mutex
-	running  bool
-	interval time.Duration
-	lastRun  time.Time
-	stats    Stats
+	db         *sql.DB
+	hnsw       *index.HNSW
+	hnswPath   string
+	graphStore *graph.Store
+	mu         sync.Mutex
+	running    bool
+	interval   time.Duration
+	lastRun    time.Time
+	stats      Stats
 }
 
 type Stats struct {
@@ -29,11 +31,16 @@ type Stats struct {
 	LinksCreated     int    `json:"links_created"`
 	Prioritized      int    `json:"prioritized"`
 	SnapshotsCreated int    `json:"snapshots_created"`
+	GraphBuilt       int    `json:"graph_built"`
+	GraphNodes       int    `json:"graph_nodes"`
+	GraphEdges       int    `json:"graph_edges"`
 }
 
 func New(db *sql.DB, hnsw *index.HNSW, hnswPath string) *Engine {
 	return &Engine{db: db, hnsw: hnsw, hnswPath: hnswPath, interval: 1 * time.Hour}
 }
+
+func (e *Engine) SetGraphStore(gs *graph.Store) { e.graphStore = gs }
 
 type Config struct {
 	Interval            time.Duration
@@ -68,10 +75,12 @@ func (e *Engine) Run(cfg Config) Stats {
 	s.LinksCreated = e.phaseLink()
 	s.Prioritized = e.phasePriority()
 	s.SnapshotsCreated = e.phaseSnapshot()
+	s.GraphBuilt, s.GraphNodes, s.GraphEdges = e.phaseGraphBuild()
 	s.LastRun = time.Now().UTC().Format(time.RFC3339)
 	e.lastRun = time.Now(); e.stats = s
-	log.Printf("Dream Cycle done in %v: ev=%d ct=%d de=%d lk=%d pr=%d sn=%d",
-		time.Since(start), s.Evicted, s.Contradictions, s.Deduped, s.LinksCreated, s.Prioritized, s.SnapshotsCreated)
+	log.Printf("Dream Cycle done in %v: ev=%d ct=%d de=%d lk=%d pr=%d sn=%d gb=%d(nd=%d ed=%d)",
+		time.Since(start), s.Evicted, s.Contradictions, s.Deduped, s.LinksCreated, s.Prioritized, s.SnapshotsCreated,
+		s.GraphBuilt, s.GraphNodes, s.GraphEdges)
 	return s
 }
 
@@ -219,6 +228,21 @@ func (e *Engine) phaseSnapshot() int {
 		snapID, sb.String())
 	log.Printf("Dream snapshot: %s (%d consolidated)", snapID, len(old))
 	return 1
+}
+
+func (e *Engine) phaseGraphBuild() (built, nodes, edges int) {
+	if e.graphStore == nil {
+		return 0, 0, 0
+	}
+	stats, err := e.graphStore.RebuildGraph()
+	if err != nil {
+		log.Printf("Dream graph build error: %v", err)
+		return 0, 0, 0
+	}
+	log.Printf("Dream graph build: scanned=%d pairs=%d updated=%d pruned=%d nodes=%d edges=%d avgdeg=%.2f",
+		stats.MemoriesScanned, stats.PairsCounted, stats.EdgesUpdated, stats.EdgesPruned,
+		stats.NodesTotal, stats.EdgesTotal, stats.AvgDegree)
+	return stats.EdgesUpdated, stats.NodesTotal, stats.EdgesTotal
 }
 
 func truncate(s string, max int) string {

@@ -249,6 +249,10 @@ func (s *Store) FindGraphPath(source, target string, maxDepth int) ([]graph.Path
 	if s.graph == nil { return nil, nil }
 	return s.graph.FindPath(source, target, maxDepth)
 }
+func (s *Store) RebuildGraph() (graph.RebuildStats, error) {
+	if s.graph == nil { return graph.RebuildStats{}, nil }
+	return s.graph.RebuildGraph()
+}
 func (s *Store) GetMemoriesByIDs(ids []string) ([]*types.Memory, error) {
 	if len(ids) == 0 { return nil, nil }
 	q := `SELECT id,content,mem_type,namespace,importance,access_count,pinned,created_at,updated_at,superseded_at,edge_count FROM memories WHERE id IN (?` + strings.Repeat(",?", len(ids)-1) + `) AND superseded_at IS NULL`
@@ -288,6 +292,7 @@ func (s *Store) Ready() bool  { return s.ready }
 func (s *Store) GetDB() *sql.DB       { return s.db }
 func (s *Store) GetHNSW() *index.HNSW { return s.hnsw }
 func (s *Store) GetHNSWPath() string  { return s.hnswPath }
+func (s *Store) GetGraph() *graph.Store { return s.graph }
 func boolToInt(b bool) int            { if b { return 1 }; return 0 }
 func parseTime(s string) (time.Time, error) {
 	if t, e := time.Parse(time.RFC3339, s); e == nil { return t, nil }
