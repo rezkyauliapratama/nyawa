@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/github/license/rezkyauliapratama/nyawa?color=blue&style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&style=flat-square" alt="Go">
   <img src="https://img.shields.io/badge/binary-8.1MB-green?style=flat-square" alt="Size">
-  <img src="https://img.shields.io/badge/version-v1.0.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.1.0-blue?style=flat-square" alt="Version">
 </p>
 
 <h1 align="center">Nyawa</h1>
@@ -91,7 +91,7 @@ You should see a single binary appear:
 
 ```bash
 ls -lh nyawa        # ~8.1MB
-./nyawa version     # nyawa v1.0.0
+./nyawa version     # nyawa v1.1.0
 ```
 
 ### 3. Initialize a database
