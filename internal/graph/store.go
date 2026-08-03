@@ -136,6 +136,19 @@ func (s *Store) SearchByEntityName(entityName string, limit int) ([]string, erro
 	return ids, nil
 }
 
+func (s *Store) ListEntities(name, category string, limit int) ([]Entity, error) {
+	if limit <= 0 { limit = 50 }
+	rows, err := s.db.Query(
+		`SELECT id, name, category FROM entity_nodes WHERE (?='' OR name LIKE '%'||?||'%') AND (?='' OR category=?) ORDER BY access_count DESC LIMIT ?`,
+		name, name, category, category, limit,
+	)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	var entities []Entity
+	for rows.Next() { var e Entity; rows.Scan(&e.ID, &e.Name, &e.Category); entities = append(entities, e) }
+	return entities, nil
+}
+
 func (s *Store) Stats() (map[string]any, error) {
 	var nodes, edges, eeEdges int
 	s.db.QueryRow(`SELECT COUNT(*) FROM entity_nodes`).Scan(&nodes)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/rezkyauliapratama/nyawa/internal/dream"
 	"github.com/rezkyauliapratama/nyawa/internal/embedder"
+	"github.com/rezkyauliapratama/nyawa/internal/graph"
 	"github.com/rezkyauliapratama/nyawa/internal/mcp"
 	"github.com/rezkyauliapratama/nyawa/internal/rag"
 	"github.com/rezkyauliapratama/nyawa/internal/search"
@@ -33,6 +34,7 @@ func main() {
 	case "ns": cmdNamespace()
 	case "archive": cmdArchive()
 	case "import": cmdImport()
+	case "graph": cmdGraph()
 	case "version": fmt.Println("nyawa v1.0.0")
 	default: printUsage(); os.Exit(1)
 	}
@@ -51,6 +53,7 @@ Usage:
   nyawa serve <db>                        Start HTTP + Dream Cycle
   nyawa mcp <db>                          Start MCP server
   nyawa dream <db>                        Run Dream Cycle
+  nyawa graph <db> <query> [--depth 2] [--limit 10]  Traverse entity graph
   nyawa version                           Show version
 `)
 }
@@ -224,4 +227,45 @@ func cmdDream() {
 	result := engine.Run(cfg)
 	b2, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Println(string(b2))
+}
+
+func cmdGraph() {
+	if len(os.Args) < 4 { log.Fatal("usage: nyawa graph <db> <query> [--depth 2] [--limit 10]") }
+	dbPath := os.Args[2]
+	query := os.Args[3]
+	depth := 2
+	limit := 10
+	for i := 4; i < len(os.Args); i++ {
+		if os.Args[i] == "--depth" && i+1 < len(os.Args) {
+			if d, err := fmt.Sscanf(os.Args[i+1], "%d", &depth); d != 1 || err != nil { depth = 2 }
+		}
+		if os.Args[i] == "--limit" && i+1 < len(os.Args) {
+			if l, err := fmt.Sscanf(os.Args[i+1], "%d", &limit); l != 1 || err != nil { limit = 10 }
+		}
+	}
+	s := getStore(dbPath, nil); defer s.Close()
+
+	// Seed entities from query text
+	names, err := s.ListEntityNames(10000)
+	if err != nil { log.Fatalf("list entity names: %v", err) }
+	queryLower := strings.ToLower(query)
+	var seeds []string
+	for _, name := range names {
+		if len(name) < 3 { continue }
+		if strings.Contains(queryLower, strings.ToLower(name)) {
+			seeds = append(seeds, name)
+			if len(seeds) >= 3 { break }
+		}
+	}
+
+	if len(seeds) == 0 {
+		fmt.Println(`{"seeds":[],"results":[],"count":0}`)
+		return
+	}
+
+	results, err := s.TraverseGraph(seeds, depth, limit)
+	if err != nil { log.Fatalf("traverse graph: %v", err) }
+	if results == nil { results = []graph.TraversalResult{} }
+	out, _ := json.MarshalIndent(map[string]any{"query": query, "seeds": seeds, "results": results, "count": len(results)}, "", "  ")
+	fmt.Println(string(out))
 }

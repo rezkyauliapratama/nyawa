@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rezkyauliapratama/nyawa/internal/embedder"
+	"github.com/rezkyauliapratama/nyawa/internal/graph"
 	"github.com/rezkyauliapratama/nyawa/internal/rag"
 	"github.com/rezkyauliapratama/nyawa/internal/search"
 	"github.com/rezkyauliapratama/nyawa/internal/security"
@@ -57,6 +58,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/v1/rag/ingest", s.handleRAGIngest)
 	s.mux.HandleFunc("/v1/rag/query", s.handleRAGQuery)
 	s.mux.HandleFunc("/v1/rag/stats", s.handleRAGStats)
+	s.mux.HandleFunc("/v1/graph/query", s.handleGraphQuery)
+	s.mux.HandleFunc("/v1/graph/entities", s.handleGraphEntities)
+	s.mux.HandleFunc("/v1/graph/path", s.handleGraphPath)
 	s.mux.HandleFunc("/dashboard", s.handleDashboard)
 	s.mux.HandleFunc("/", s.handleRoot)
 }
@@ -287,6 +291,74 @@ func (s *Server) handleRAGStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "use GET"}); return }
 	stats := s.ragStore.Stats()
 	writeJSON(w, http.StatusOK, stats)
+}
+
+// ─── Graph Handlers ────────────────────────────────
+
+func (s *Server) handleGraphQuery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "use GET"}); return }
+	q := r.URL.Query().Get("q")
+	if q == "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "query required"}); return }
+	depth := parseInt(r.URL.Query().Get("depth"), 2)
+	limit := parseInt(r.URL.Query().Get("limit"), 10)
+
+	seeds := matchGraphSeeds(s.store, q)
+	if len(seeds) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"query": q, "seeds": []string{}, "results": []graph.TraversalResult{}, "count": 0})
+		return
+	}
+
+	results, err := s.store.TraverseGraph(seeds, depth, limit)
+	if err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()}); return }
+	if results == nil { results = []graph.TraversalResult{} }
+	writeJSON(w, http.StatusOK, map[string]any{"query": q, "seeds": seeds, "results": results, "count": len(results)})
+}
+
+func (s *Server) handleGraphEntities(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "use GET"}); return }
+	name := r.URL.Query().Get("name")
+	category := r.URL.Query().Get("category")
+	limit := parseInt(r.URL.Query().Get("limit"), 50)
+
+	entities, err := s.store.ListEntities(name, category, limit)
+	if err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()}); return }
+	if entities == nil { entities = []graph.Entity{} }
+	writeJSON(w, http.StatusOK, map[string]any{"entities": entities, "count": len(entities)})
+}
+
+func (s *Server) handleGraphPath(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "use GET"}); return }
+	source := r.URL.Query().Get("source")
+	target := r.URL.Query().Get("target")
+	if source == "" || target == "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "source and target required"}); return }
+	maxDepth := parseInt(r.URL.Query().Get("max_depth"), 4)
+
+	path, err := s.store.FindGraphPath(source, target, maxDepth)
+	if err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()}); return }
+	if path == nil { path = []graph.PathHop{} }
+	writeJSON(w, http.StatusOK, map[string]any{"path": path, "length": len(path)})
+}
+
+// matchGraphSeeds resolves entity names from query text via substring match.
+func matchGraphSeeds(st *store.Store, query string) []string {
+	names, err := st.ListEntityNames(10000)
+	if err != nil || len(names) == 0 {
+		return nil
+	}
+	queryLower := strings.ToLower(query)
+	var seeds []string
+	for _, name := range names {
+		if len(name) < 3 {
+			continue
+		}
+		if strings.Contains(queryLower, strings.ToLower(name)) {
+			seeds = append(seeds, name)
+			if len(seeds) >= 3 {
+				break
+			}
+		}
+	}
+	return seeds
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

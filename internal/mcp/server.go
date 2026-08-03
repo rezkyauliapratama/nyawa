@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/rezkyauliapratama/nyawa/internal/graph"
 	"github.com/rezkyauliapratama/nyawa/internal/rag"
 	"github.com/rezkyauliapratama/nyawa/internal/search"
 	"github.com/rezkyauliapratama/nyawa/internal/store"
@@ -106,6 +108,24 @@ func (s *Server) tools() []toolDefinition {
 			}, Required: []string{"query"}}},
 		{Name: "rag_stats", Description: "Get RAG statistics.",
 			InputSchema: inputSchema{Type: "object", Properties: map[string]propertySchema{}}},
+		{Name: "nyawa_graph_query", Description: "Traverse the entity graph from query-matched seeds.",
+			InputSchema: inputSchema{Type: "object", Properties: map[string]propertySchema{
+				"query": {Type: "string", Description: "Text containing entity names to seed the traversal."},
+				"depth": {Type: "number", Description: "Traversal depth (default 2)."},
+				"limit": {Type: "number", Description: "Max results (default 10)."},
+			}, Required: []string{"query"}}},
+		{Name: "nyawa_graph_entities", Description: "List/filter entity nodes in the graph.",
+			InputSchema: inputSchema{Type: "object", Properties: map[string]propertySchema{
+				"name":     {Type: "string", Description: "Optional name substring filter."},
+				"category": {Type: "string", Description: "Optional category filter (person, tech, place, org, etc.)."},
+				"limit":    {Type: "number", Description: "Max results (default 50)."},
+			}}},
+		{Name: "nyawa_graph_path", Description: "Find shortest path between two entity nodes.",
+			InputSchema: inputSchema{Type: "object", Properties: map[string]propertySchema{
+				"source":    {Type: "string", Description: "Source entity name."},
+				"target":    {Type: "string", Description: "Target entity name."},
+				"max_depth": {Type: "number", Description: "Max BFS depth (default 4)."},
+			}, Required: []string{"source", "target"}}},
 	}
 }
 
@@ -166,6 +186,9 @@ func (s *Server) handleToolCall(req jsonRPCRequest) {
 	case "rag_ingest_file":        s.handleRAGIngestFile(req.ID, params.Arguments)
 	case "rag_query":              s.handleRAGQuery(req.ID, params.Arguments)
 	case "rag_stats":              s.handleRAGStats(req.ID)
+	case "nyawa_graph_query":      s.handleGraphQuery(req.ID, params.Arguments)
+	case "nyawa_graph_entities":   s.handleGraphEntities(req.ID, params.Arguments)
+	case "nyawa_graph_path":       s.handleGraphPath(req.ID, params.Arguments)
 	default: s.writeError(req.ID, -32601, fmt.Sprintf("Unknown tool: %s", params.Name))
 	}
 }
@@ -309,4 +332,77 @@ func (s *Server) writeToolResult(id any, result any) {
 
 func (s *Server) writeError(id any, code int, message string) {
 	s.writer.Encode(jsonRPCResponse{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: message}})
+}
+
+// ─── Graph tool implementations ──────────────────
+
+type graphQueryArgs struct{ Query string; Depth, Limit float64 }
+
+func (s *Server) handleGraphQuery(id any, raw json.RawMessage) {
+	var args graphQueryArgs
+	if err := json.Unmarshal(raw, &args); err != nil { s.writeError(id, -32602, "Invalid arguments"); return }
+	if args.Query == "" { s.writeError(id, -32602, "query required"); return }
+	depth := int(args.Depth); if depth <= 0 { depth = 2 }
+	limit := int(args.Limit); if limit <= 0 { limit = 10 }
+
+	seeds := matchGraphSeeds(s.store, args.Query)
+	if len(seeds) == 0 {
+		s.writeToolResult(id, map[string]any{"seeds": []string{}, "results": []graph.TraversalResult{}, "count": 0})
+		return
+	}
+
+	results, err := s.store.TraverseGraph(seeds, depth, limit)
+	if err != nil { s.writeError(id, -32603, fmt.Sprintf("graph query failed: %v", err)); return }
+	if results == nil { results = []graph.TraversalResult{} }
+	s.writeToolResult(id, map[string]any{"query": args.Query, "seeds": seeds, "results": results, "count": len(results)})
+}
+
+type graphEntitiesArgs struct{ Name, Category string; Limit float64 }
+
+func (s *Server) handleGraphEntities(id any, raw json.RawMessage) {
+	var args graphEntitiesArgs
+	if err := json.Unmarshal(raw, &args); err != nil { s.writeError(id, -32602, "Invalid arguments"); return }
+	limit := int(args.Limit); if limit <= 0 { limit = 50 }
+
+	entities, err := s.store.ListEntities(args.Name, args.Category, limit)
+	if err != nil { s.writeError(id, -32603, fmt.Sprintf("list entities failed: %v", err)); return }
+	if entities == nil { entities = []graph.Entity{} }
+	s.writeToolResult(id, map[string]any{"entities": entities, "count": len(entities)})
+}
+
+type graphPathArgs struct{ Source, Target string; MaxDepth float64 }
+
+func (s *Server) handleGraphPath(id any, raw json.RawMessage) {
+	var args graphPathArgs
+	if err := json.Unmarshal(raw, &args); err != nil { s.writeError(id, -32602, "Invalid arguments"); return }
+	if args.Source == "" || args.Target == "" { s.writeError(id, -32602, "source and target required"); return }
+	maxDepth := int(args.MaxDepth); if maxDepth <= 0 { maxDepth = 4 }
+
+	path, err := s.store.FindGraphPath(args.Source, args.Target, maxDepth)
+	if err != nil { s.writeError(id, -32603, fmt.Sprintf("find path failed: %v", err)); return }
+	if path == nil { path = []graph.PathHop{} }
+	s.writeToolResult(id, map[string]any{"path": path, "length": len(path)})
+}
+
+// matchGraphSeeds resolves entity names from query text via substring match.
+// Matches the graphSeeds pattern from internal/search/pipeline.go.
+func matchGraphSeeds(st *store.Store, query string) []string {
+	names, err := st.ListEntityNames(10000)
+	if err != nil || len(names) == 0 {
+		return nil
+	}
+	queryLower := strings.ToLower(query)
+	var seeds []string
+	for _, name := range names {
+		if len(name) < 3 {
+			continue
+		}
+		if strings.Contains(queryLower, strings.ToLower(name)) {
+			seeds = append(seeds, name)
+			if len(seeds) >= 3 {
+				break
+			}
+		}
+	}
+	return seeds
 }
