@@ -10,7 +10,7 @@
 <h1 align="center">Nyawa</h1>
 
 <p align="center">
-  <strong>Offline-First AI Memory Engine</strong><br>
+  <strong>Offline-First AI Memory Engine with GraphRAG</strong><br>
   <em>Give your AI a memory that lasts — no cloud, no Docker, no vector database required.</em>
 </p>
 
@@ -28,6 +28,7 @@ Most AI memory tools require Docker, external vector databases (Pinecone, Qdrant
 - **Zero runtime dependencies** — just SQLite
 - **100% offline** — all data stays local
 - **Fast** — ~11ms search, 22 mems/sec throughput
+- **GraphRAG built-in** — entity graph + multi-hop traversal merged into recall
 - **Dual-mode** — Memory (semantic recall) + RAG (document retrieval)
 
 > "Nyawa is what happens when you ask what the simplest thing that could work is — and refuse to add anything else."
@@ -39,64 +40,245 @@ Most AI memory tools require Docker, external vector databases (Pinecone, Qdrant
 | Feature | What It Does | Powered By |
 |---------|-------------|------------|
 | **Hybrid Search** | Semantic + keyword fused via RRF | HNSW (pure Go) + SQLite FTS5 |
-| **Entity Graph** | Auto-extract People, Tech, URLs, Locations | 18 regex patterns, zero LLM |
-| **Dream Cycle** | 6-phase autonomous memory maintenance | Background goroutine |
+| **GraphRAG** | Entity graph + typed edges + multi-hop traversal merged into recall | BFS traversal + regex inference |
+| **Entity Graph** | Auto-extract People, Tech, URLs, Locations + 4 typed relations (works_at, uses, located_in, part_of) | Regex patterns, zero LLM |
+| **Dream Cycle** | 7-phase autonomous memory + graph maintenance | Background goroutine |
 | **RAG Engine** | Document-level retrieval with chunking + reranking | HNSW + Jina/Python CrossEncoder |
 | **Web Dashboard** | Memory + RAG UI in one page | Go HTTP handler + inline JS |
 | **Namespaces** | Isolate memories by context | SQLite namespace column |
 | **Time-Travel** | Query memories as they existed at any date | Superseded_at tracking |
 | **Batch Import** | Import thousands of memories from JSON | Bulk insert |
-| **MCP Protocol** | Plug into any AI agent (10 tools) | Built-in MCP server stdio |
+| **MCP Protocol** | Plug into any AI agent (13 tools) | Built-in MCP server stdio |
 
 ---
 
-## Quick Start (30 seconds)
+## Quick Start (step by step)
+
+### 0. Prerequisites
+
+| Tool | Version | Why |
+|------|---------|-----|
+| **Go** | 1.23+ | Build from source |
+| **gcc** | any recent | SQLite CGO binding |
+| **make** | any | Convenience targets (optional, can use `go build` directly) |
+
+Check your environment:
 
 ```bash
-# 1. Clone and build
+go version        # go1.23.x or newer
+gcc --version     # any recent version
+make --version    # optional but recommended
+```
+
+> **Windows note:** use WSL2 or Git Bash. CGO requires gcc (install via MSYS2/MinGW if building natively).
+
+### 1. Clone the repository
+
+```bash
 git clone https://github.com/rezkyauliapratama/nyawa.git
 cd nyawa
+```
+
+### 2. Build the binary
+
+```bash
 make build
+# or, without make:
+go build -tags "sqlite_fts5" -ldflags="-s -w" -o nyawa ./cmd/nyawa/
+```
 
-# 2. Initialize database
+You should see a single binary appear:
+
+```bash
+ls -lh nyawa        # ~8.1MB
+./nyawa version     # nyawa v1.0.0
+```
+
+### 3. Initialize a database
+
+```bash
 ./nyawa init /tmp/nyawa.db
+```
 
-# 3. Store memories
+This creates a SQLite database file (plus FTS5 index). Output shows empty stats — that's expected:
+
+```json
+{"total_memories":0,"entity_nodes":0,"entity_edges":0}
+```
+
+### 4. Store your first memories
+
+```bash
+./nyawa store /tmp/nyawa.db "Rezky bekerja di Bank Sinarmas sebagai Solution Architect"
+./nyawa store /tmp/nyawa.db "Tim backend menggunakan Kafka untuk streaming data"
+./nyawa store /tmp/nyawa.db "Kafka adalah bagian dari platform MCP"
 ./nyawa store /tmp/nyawa.db "Go backend with PostgreSQL running on GKE"
 ./nyawa store /tmp/nyawa.db "Team decided to use microservices architecture"
-./nyawa store /tmp/nyawa.db "Deploying to production via GitHub Actions"
+```
 
-# 4. Semantic search
+Each store returns an ID:
+
+```
+Stored: mem_1785720908630614152
+```
+
+> **Embedder note:** Nyawa uses an embedder chain (BGE → Ollama → OpenAI-compatible) to generate vectors. If no embedder is available, Nyawa **still works** — it falls back to FTS5 keyword-only search (see [Embedder Setup](#embedder-setup) below).
+
+### 5. Search your memories
+
+```bash
 ./nyawa recall /tmp/nyawa.db "infrastructure architecture"
+./nyawa recall /tmp/nyawa.db "siapa yang kerja di bank?" --ns default
+```
 
-# 5. Launch the dashboard!
+Output is ranked results:
+
+```
+#1 [0.9214] Team decided to use microservices architecture
+#2 [0.8732] Go backend with PostgreSQL running on GKE
+#3 [0.6541] Rezky bekerja di Bank Sinarmas sebagai Solution Architect
+```
+
+**Try GraphRAG in action** — query by an entity and watch related memories surface via graph traversal:
+
+```bash
+# Traverse the entity graph from query-matched entities
+./nyawa graph /tmp/nyawa.db "Kafka" --depth 2 --limit 10
+```
+
+You should see memories about Kafka **and** entities connected to it (MCP, Tim backend) — even though the query text doesn't mention them. That's graph-aware recall.
+
+### 6. Launch the web dashboard
+
+```bash
 ./nyawa serve /tmp/nyawa.db
 # Open http://localhost:3300/dashboard
 ```
 
-**Search results:**
+The dashboard shows memories, RAG collections, and graph stats in one page.
+
+### 7. (Optional) Run the Dream Cycle manually
+
+```bash
+./nyawa dream /tmp/nyawa.db
 ```
-#1 [0.9214] Team decided to use microservices architecture
-#2 [0.8732] Go backend with PostgreSQL running on GKE
-#3 [0.6541] Deploying to production via GitHub Actions
+
+This runs all 7 maintenance phases immediately (instead of waiting for the hourly background cycle):
+
 ```
+[1/7] Evict      -> Soft-delete stale memories (>90d, low access)
+[2/7] Contra     -> Detect contradictions (like vs dislike)
+[3/7] Dedup      -> Merge near-duplicates (>92% overlap)
+[4/7] Link       -> Strengthen co-occurring entity connections
+[5/7] Prioritize -> Boost popular memories, decay neglected ones
+[6/7] Snapshot   -> Compress old memories into summaries
+[7/7] GraphBuild -> Rebuild co-occurrence edges, prune stale, preserve typed
+```
+
+---
+
+## Embedder Setup
+
+Nyawa's semantic search needs **embeddings**. It tries embedders in priority order and falls back gracefully:
+
+| Priority | Embedder | How to enable |
+|----------|----------|---------------|
+| 1 | **BGE** (local Python/ONNX) | Place model files under `internal/embedder/model/` (model path is configurable in code — see `internal/embedder/py_embedder.go`) |
+| 2 | **Ollama** | `ollama pull nomic-embed-text`, then run Ollama on `http://localhost:11434` |
+| 3 | **OpenAI-compatible** | Set `EMBEDDING_API_KEY` + `EMBEDDING_BASE_URL` (+ `EMBEDDING_MODEL`) |
+| 4 | **None** | Falls back to FTS5 keyword-only search — recall still works, just less semantic |
+
+Re-ranking (RAG): set `JINA_API_KEY` (or `RERANK_API_KEY`) for Jina cross-encoder reranking.
+
+**Recommended quickest path to full semantic search:**
+
+```bash
+# Option A: Ollama (easiest)
+ollama pull nomic-embed-text
+
+# Option B: OpenAI-compatible API
+export EMBEDDING_API_KEY=sk-...
+export EMBEDDING_BASE_URL=https://api.openai.com/v1
+export EMBEDDING_MODEL=text-embedding-3-small
+```
+
+---
+
+## GraphRAG
+
+Nyawa doesn't just store memories — it learns the **relationships between them** and uses that knowledge during recall.
+
+### How it works
+
+```
+Memory store
+   └─ Entity extraction (regex, zero LLM)
+        └─ Entity nodes (people, tech, places, orgs)
+             ├─ Co-occurrence edges (entities seen together in ≥2 memories)
+             └─ Typed edges (works_at, uses, located_in, part_of — bilingual ID/EN)
+                    └─ Multi-hop BFS traversal (decay 0.5/hop)
+                           └─ Merged into RRF recall (boost 1.5x overlap, inject 0.1x graph-only)
+```
+
+### Typed relations (auto-inferred, zero LLM)
+
+| Relation | Indonesian | English |
+|----------|-----------|---------|
+| `works_at` | "Rezky **bekerja di** Bank Sinarmas" | "Rezky **works at** Bank Sinarmas" |
+| `uses` | "Tim **menggunakan** Kafka" | "Tim **uses** Kafka" |
+| `located_in` | "Kantor **berlokasi di** Jakarta" | "Office **located in** Jakarta" |
+| `part_of` | "Kafka **bagian dari** MCP" | "Kafka **part of** MCP" |
+
+### Query it yourself
+
+**CLI:**
+```bash
+./nyawa graph /tmp/nyawa.db "Kafka" --depth 2 --limit 10
+./nyawa graph /tmp/nyawa.db "Bank Sinarmas" --depth 3 --limit 20
+```
+
+**REST:**
+```bash
+curl "http://localhost:3300/v1/graph/query?q=Kafka&depth=2&limit=10"
+curl "http://localhost:3300/v1/graph/entities?name=Kaf&category=tech"
+curl "http://localhost:3300/v1/graph/path?source=Rezky&target=MCP&max_depth=4"
+```
+
+**MCP tools:** `nyawa_graph_query`, `nyawa_graph_entities`, `nyawa_graph_path`
+
+### Maintenance
+
+The Dream Cycle **Phase 7 (GRAPH BUILD)** rebuilds co-occurrence edges from scratch each cycle:
+- Recomputes pair counts from all memories
+- **Preserves** typed edges (works_at, uses, etc.)
+- Prunes stale co-occurrence edges (count < 2)
+- Logs stats: `nodes, edges, avg degree`
 
 ---
 
 ## RAG — Retrieval-Augmented Generation
 
-Nyawa includes a built-in RAG engine for document-level retrieval:
+Nyawa includes a built-in RAG engine for document-level retrieval. RAG is exposed via **REST API** and **MCP tools** (no CLI subcommand):
+
+**Via REST (requires `nyawa serve`):**
 
 ```bash
 # 1. Create a collection
-./nyawa rag /tmp/nyawa.db create-collection my-docs --chunk-size 500
+curl -X POST http://localhost:3300/v1/rag/collections \
+  -H "Content-Type: application/json" \
+  -d '{"name":"my-docs","chunk_size":500}'
 
 # 2. Ingest documents (txt, md, json, csv)
-./nyawa rag /tmp/nyawa.db ingest my-docs ./document.md
+curl -X POST http://localhost:3300/v1/rag/ingest \
+  -F "collection=my-docs" -F "file=@./document.md"
 
 # 3. Query your documents
-./nyawa rag /tmp/nyawa.db query "What does the system architecture look like?"
+curl -X POST http://localhost:3300/v1/rag/query \
+  -H "Content-Type: application/json" \
+  -d '{"collection":"my-docs","query":"What does the system architecture look like?"}'
 ```
+
+**Via MCP tools:** `rag_create_collection`, `rag_list_collections`, `rag_delete_collection`, `rag_ingest_file`, `rag_query`, `rag_stats`
 
 **RAG Pipeline:**
 ```
@@ -137,19 +319,20 @@ Only *positions* matter — raw similarity scores are never compared across engi
 - Items found by only one engine rank lower — they're likely one-sided matches
 - No score normalization needed — rank is scale-free and robust to engine drift
 
-### The full recall pipeline
+### The full recall pipeline (with GraphRAG)
 
 ```
 Query
  ├─ HNSW vector search ──────────────┐
  ├─ FTS5 keyword search ─────────────┤
+ ├─ Entity graph traversal (multi-hop)┤
  └─ RRF fusion (k=60) ───────────────┘
-      └─ Entity graph boost (related memories rank higher)
+      └─ Graph merge (overlap ×1.5, graph-only ×0.1)
            └─ Filter (namespace, min_score, exclude_types)
                 └─ Top-K results
 ```
 
-Implementation: [`internal/search/rrf.go`](internal/search/rrf.go)
+Implementation: [`internal/search/rrf.go`](internal/search/rrf.go), [`internal/search/pipeline.go`](internal/search/pipeline.go)
 
 ---
 
@@ -169,16 +352,17 @@ Implementation: [`internal/search/rrf.go`](internal/search/rrf.go)
 
 ## Dream Cycle
 
-Nyawa runs a Dream Cycle — a background process that maintains memory automatically:
+Nyawa runs a Dream Cycle — a background process that maintains memory and the entity graph automatically:
 
 ```
 Dream Cycle running every 1h...
- [1/6] Evict      -> Soft-delete stale memories (>90d, low access)
- [2/6] Contra     -> Detect contradictions (like vs dislike)
- [3/6] Dedup      -> Merge near-duplicates (>92% overlap)
- [4/6] Link       -> Strengthen co-occurring entity connections
- [5/6] Prioritize -> Boost popular memories, decay neglected ones
- [6/6] Snapshot   -> Compress old memories into summaries
+ [1/7] Evict      -> Soft-delete stale memories (>90d, low access)
+ [2/7] Contra     -> Detect contradictions (like vs dislike)
+ [3/7] Dedup      -> Merge near-duplicates (>92% overlap)
+ [4/7] Link       -> Strengthen co-occurring entity connections
+ [5/7] Prioritize -> Boost popular memories, decay neglected ones
+ [6/7] Snapshot   -> Compress old memories into summaries
+ [7/7] GraphBuild -> Rebuild co-occurrence edges, prune stale, preserve typed
 ```
 
 No LLM calls. No API bills. All algorithmic — 100% free and private.
@@ -221,13 +405,14 @@ docker run -d --name nyawa -v ./memory.db:/data/memory.db -p 3300:3300 ghcr.io/r
 |---------|-------------|
 | `nyawa init <db>` | Initialize a new database |
 | `nyawa store <db> <content>` | Store a memory |
-| `nyawa recall <db> <query>` | Semantic search |
+| `nyawa recall <db> <query> [--ns <ns>] [--at <time>]` | Semantic search (alias: `search`) |
 | `nyawa import <db> <file.json>` | Batch import from JSON |
-| `nyawa stats <db>` | Engine statistics |
+| `nyawa stats <db>` | Engine statistics (incl. graph stats) |
 | `nyawa ns <db>` | List namespaces |
-| `nyawa serve <db>` | Start HTTP server + dashboard |
+| `nyawa graph <db> <query> [--depth 2] [--limit 10]` | Traverse entity graph |
+| `nyawa serve <db>` | Start HTTP server + dashboard + Dream Cycle |
 | `nyawa mcp <db>` | Start MCP server |
-| `nyawa dream <db>` | Run Dream Cycle manually |
+| `nyawa dream <db>` | Run Dream Cycle manually (all 7 phases) |
 | `nyawa archive <db> <out>` | Archive old memories |
 | `nyawa version` | Check version |
 
@@ -247,6 +432,13 @@ GET    /v1/namespaces          List namespaces
 DELETE /v1/forget/:id          Forget a memory
 ```
 
+**Graph (GraphRAG):**
+```
+GET    /v1/graph/query?q=...&depth=2&limit=10    Traverse graph from query entities
+GET    /v1/graph/entities?name=...&category=...   List/filter entity nodes
+GET    /v1/graph/path?source=...&target=...       Find path between two entities
+```
+
 **RAG:**
 ```
 GET    /v1/rag/collections      List collections
@@ -259,16 +451,21 @@ GET    /v1/rag/stats            RAG statistics
 
 **Dashboard:**
 ```
-GET    /dashboard              Web dashboard (Memory + RAG)
+GET    /dashboard              Web dashboard (Memory + RAG + Graph stats)
 ```
 
-### MCP Tools (10 tools)
+### MCP Tools (13 tools)
 
 **Memory Tools:**
 - `nyawa_store` — Store a new memory
 - `nyawa_recall` — Semantic search across memories
 - `nyawa_stats` — Memory statistics
 - `nyawa_forget` — Soft-delete a memory by ID
+
+**Graph Tools (GraphRAG):**
+- `nyawa_graph_query` — Traverse the entity graph from query-matched seeds
+- `nyawa_graph_entities` — List/filter entity nodes
+- `nyawa_graph_path` — Find shortest path between two entities
 
 **RAG Tools:**
 - `rag_create_collection` — Create a RAG collection
@@ -284,29 +481,30 @@ GET    /dashboard              Web dashboard (Memory + RAG)
 
 ```
 +----------------------------------------------------------+
-|              CLI / HTTP / MCP (10 tools)                  |
+||              CLI / HTTP / MCP (13 tools)                 |
 +----------------------------------------------------------+
-|                    Search Pipeline                        |
-|   +-------------+  +-----------+  +------------------+   |
-|   |   HNSW      |  |  SQLite   |  |  Entity Graph    |   |
-|   |  (semantic) |  |  FTS5     |  |  (traversal)     |   |
-|   +------+------+  +-----+-----+  +--------+---------+   |
-|          +-----------------+------------------+            |
-|                    +------+------+                        |
-|                    |  RRF Fusion |                        |
-|                    +-------------+                        |
+||                    Search Pipeline                       |
+||   +-------------+  +-----------+  +------------------+  |
+||   |   HNSW      |  |  SQLite   |  |  Entity Graph    |  |
+||   |  (semantic) |  |  FTS5     |  | (traverse+typed) |  |
+||   +------+------+  +-----+-----+  +--------+---------+  |
+||          +-----------------+------------------+          |
+||                    +------+------+                      |
+||                    |  RRF Fusion |                      |
+||                    +-------------+                      |
 +----------------------------------------------------------+
-|                    RAG Pipeline                           |
-|    Chunking → Embedding → HNSW → Rerank (Jina/Python)    |
+||                    RAG Pipeline                         |
+||    Chunking → Embedding → HNSW → Rerank (Jina/Python)  |
 +----------------------------------------------------------+
-|                    Dream Cycle (background)               |
-|            Evict -> Contra -> Dedup -> Link -> Prio -> Snap|
+||                    Dream Cycle (background)             |
+||      Evict→Contra→Dedup→Link→Prio→Snap→GraphBuild      |
 +----------------------------------------------------------+
-|                    Embedder Chain                         |
-|         BGE (ONNX) <-- priority --> Jina <-- Ollama      |
+||                    Embedder Chain                       |
+||         BGE (ONNX) <-- priority --> Ollama <-- OpenAI   |
 +----------------------------------------------------------+
-|                    SQLite (single file)                   |
-|         memories + fts5 + rag_collections + entities      |
+||                    SQLite (single file)                 |
+||   memories + fts5 + rag_collections + entity_nodes      |
+||   entity_edges + entity_entity_edges + pair_counts      |
 +----------------------------------------------------------+
 ```
 
@@ -321,7 +519,9 @@ GET    /dashboard              Web dashboard (Memory + RAG)
 | Phase 3 | Done | Entity graph, Dream Cycle |
 | Phase 4 | Done | Namespaces, time-travel, archival, dashboard |
 | Phase 5 | Done | RAG engine, MCP RAG tools, dashboard RAG UI |
+| Phase 5.1-5.6 | Done | **GraphRAG**: co-occurrence, typed edges, traversal, recall merge, graph API (MCP/REST/CLI), Dream Cycle Phase 7 |
 | Phase 6 | Coming | Prometheus metrics, auth, TLS, rate limiting |
+| Phase 7 | Planned | LLM hybrid entity extraction (regex coverage ~40-60%) |
 
 ---
 
@@ -364,5 +564,5 @@ MIT (c) [Rezky Aulia Pratama](https://github.com/rezkyauliapratama)
 ---
 
 <p align="center">
-  <sub>Built with love in <a href="https://go.dev/">Go</a> — 8.1MB, 11ms search, RAG + Memory, Dream Cycle, Zero LLM.</sub>
+  <sub>Built with love in <a href="https://go.dev/">Go</a> — 8.1MB, 11ms search, GraphRAG + RAG + Memory, Dream Cycle, Zero LLM.</sub>
 </p>
