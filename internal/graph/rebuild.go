@@ -56,19 +56,28 @@ func (s *Store) ReextractEntities() (ReextractStats, error) {
 	}
 	rows.Close()
 
+	tx, err := s.db.Begin()
+	if err != nil {
+		return stats, fmt.Errorf("reextract begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
 	for _, m := range mems {
 		stats.MemoriesScanned++
 		entities, _ := clf.Process(m.content)
 		if len(entities.Tech) == 0 && len(entities.URLs) == 0 && len(entities.People) == 0 {
 			continue
 		}
-		n, err := s.InsertMemoryEntities(m.id, entities)
+		n, err := s.insertMemoryEntities(tx, m.id, entities)
 		if err == nil && n > 0 {
 			stats.EntitiesAdded += n
 		}
-		if err := s.InferTypedEdges(m.id, m.content); err == nil {
+		if err := s.inferTypedEdges(tx, m.id, m.content); err == nil {
 			stats.EdgesAdded++
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return stats, fmt.Errorf("reextract commit tx: %w", err)
 	}
 	return stats, nil
 }
