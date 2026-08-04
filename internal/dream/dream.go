@@ -133,7 +133,10 @@ func (e *Engine) phaseContradiction() int {
 		for _, a := range aids {
 			for _, b := range bids {
 				if a == b { continue }
-				e.db.Exec(`UPDATE memories SET importance=MAX(0.3,importance*0.9) WHERE id IN(?,?)`, a, b)
+				if _, err := e.db.Exec(`UPDATE memories SET importance=MAX(0.3,importance*0.9) WHERE id IN(?,?)`, a, b); err != nil {
+					log.Printf("Dream contradiction: importance update failed: %v", err)
+					continue
+				}
 				found++
 				if found >= 20 { break }
 			}
@@ -182,9 +185,14 @@ func (e *Engine) phaseDedup(cfg Config) int {
 			if float64(minLen)/float64(len(wordsA)) < cfg.DedupThreshold { continue }
 			overlap := countOverlapSet(wordsA, setB, len(wordsA))
 			if overlap > cfg.DedupThreshold {
-				e.db.Exec(`UPDATE memories SET superseded_at=datetime('now') WHERE id=?`, mems[j].id)
+				if _, err := e.db.Exec(`UPDATE memories SET superseded_at=datetime('now') WHERE id=?`, mems[j].id); err != nil {
+					log.Printf("Dream dedup: skip %s (write busy: %v)", truncate(mems[j].id, 20), err)
+					continue
+				}
 				e.hnsw.Delete(mems[j].id)
-				e.db.Exec(`UPDATE memories SET edge_count=edge_count+1 WHERE id=?`, mems[i].id)
+				if _, err := e.db.Exec(`UPDATE memories SET edge_count=edge_count+1 WHERE id=?`, mems[i].id); err != nil {
+					log.Printf("Dream dedup: edge_count update failed: %v", err)
+				}
 				deduped++
 				log.Printf("Dream dedup: %s → %s (%.0f%%)", truncate(mems[j].id, 20), truncate(mems[i].id, 20), overlap*100)
 			}
