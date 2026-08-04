@@ -168,7 +168,7 @@ func (e *Engine) phaseDedup(cfg Config) int {
 				e.hnsw.Delete(mems[j].id)
 				e.db.Exec(`UPDATE memories SET edge_count=edge_count+1 WHERE id=?`, mems[i].id)
 				deduped++
-				log.Printf("Dream dedup: %s → %s (%.0f%%)", mems[j].id[:20], mems[i].id[:20], overlap*100)
+				log.Printf("Dream dedup: %s → %s (%.0f%%)", truncate(mems[j].id, 20), truncate(mems[i].id, 20), overlap*100)
 			}
 		}
 	}
