@@ -154,14 +154,24 @@ func (e *Engine) phaseDedup(cfg Config) int {
 	var mems []mc
 	for rows.Next() { var m mc; rows.Scan(&m.id, &m.content); mems = append(mems, m) }
 	if len(mems) < 2 { return 0 }
+
+	// Precompute token sets once per memory. Computing strings.Fields inside
+	// the O(n^2) loop is wasteful: for n memories it re-tokenizes ~n^2/2
+	// times. With 3k+ memories that dominates runtime and memory.
+	words := make([][]string, len(mems))
+	for i := range mems {
+		w := strings.Fields(strings.ToLower(mems[i].content))
+		if len(w) < 3 { w = nil }
+		words[i] = w
+	}
+
 	deduped := 0
 	for i := 0; i < len(mems)-1 && deduped < 10; i++ {
-		if mems[i].content == "" { continue }
-		wordsA := strings.Fields(strings.ToLower(mems[i].content))
-		if len(wordsA) < 3 { continue }
+		if words[i] == nil { continue }
+		wordsA := words[i]
 		for j := i + 1; j < len(mems) && deduped < 10; j++ {
-			if mems[j].content == "" { continue }
-			wordsB := strings.Fields(strings.ToLower(mems[j].content))
+			if words[j] == nil { continue }
+			wordsB := words[j]
 			overlap := countOverlap(wordsA, wordsB, len(wordsA))
 			if overlap > cfg.DedupThreshold {
 				e.db.Exec(`UPDATE memories SET superseded_at=datetime('now') WHERE id=?`, mems[j].id)
