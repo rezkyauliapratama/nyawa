@@ -18,14 +18,26 @@ type Entities struct {
 type Classifier struct {
 	entityPatterns []entityPattern
 	typePatterns   []typePattern
+	techRegexes    []techMatch
 }
 
 type entityPattern struct{ category string; pattern *regexp.Regexp }
 type typePattern struct{ memType types.MemoryType; keywords []string; weight int }
 
+// techMatch maps a regex (word-boundary, case-insensitive) to a canonical
+// entity name + category. Aliases normalize to the canonical display name
+// so the graph does not fragment ("deepseek", "DeepSeek" -> "DeepSeek").
+type techMatch struct {
+	canonical string
+	category  string
+	re        *regexp.Regexp
+}
+
 func NewClassifier() *Classifier {
 	c := &Classifier{}
-	c.registerEntityPatterns(); c.registerTypePatterns()
+	c.registerEntityPatterns()
+	c.registerTypePatterns()
+	c.registerTechPatterns()
 	return c
 }
 
@@ -55,6 +67,49 @@ func (c *Classifier) registerTypePatterns() {
 	}
 }
 
+// registerTechPatterns builds the tech dictionary. Each entry is matched with
+// word boundaries and case-insensitively, then normalized to a canonical name.
+// The canonical name is what gets stored in the graph, so aliases converge.
+func (c *Classifier) registerTechPatterns() {
+	// alias -> canonical name (keep canonical casing)
+	dict := map[string]string{
+		// cloud & infra
+		"gcp": "GCP", "google cloud": "GCP", "google cloud platform": "GCP",
+		"aws": "AWS", "amazon web services": "AWS",
+		"azure": "Azure", "microsoft azure": "Azure",
+		"kubernetes": "Kubernetes", "k8s": "Kubernetes", "eks": "EKS", "gke": "GKE", "aks": "AKS",
+		"terraform": "Terraform", "docker": "Docker", "docker compose": "Docker Compose",
+		// data & storage
+		"postgresql": "PostgreSQL", "postgres": "PostgreSQL",
+		"mysql": "MySQL", "mongodb": "MongoDB", "redis": "Redis",
+		"sqlite": "SQLite", "sql": "SQL", "nosql": "NoSQL",
+		"kafka": "Kafka", "clickhouse": "ClickHouse", "elasticsearch": "Elasticsearch",
+		"qdrant": "Qdrant", "chromadb": "ChromaDB", "pinecone": "Pinecone",
+		"hnsw": "HNSW", "fts5": "FTS5", "vectordb": "VectorDB",
+		// languages & runtimes
+		"go": "Go", "golang": "Go", "python": "Python", "rust": "Rust",
+		"typescript": "TypeScript", "javascript": "JavaScript", "node.js": "Node.js", "nodejs": "Node.js",
+		"java": "Java", "c++": "C++", "c#": "C#", "php": "PHP", "ruby": "Ruby", "bash": "Bash", "shell": "Shell",
+		// LLM & AI
+		"deepseek": "DeepSeek", "bedrock": "AWS Bedrock", "amazon bedrock": "AWS Bedrock",
+		"openai": "OpenAI", "anthropic": "Anthropic", "claude": "Claude", "sonnet": "Claude Sonnet",
+		"gemini": "Gemini", "gpt": "GPT", "llama": "Llama", "ollama": "Ollama",
+		"mcp": "MCP", "model context protocol": "MCP", "langchain": "LangChain", "langgraph": "LangGraph",
+		"crewai": "CrewAI", "n8n": "n8n", "dify": "Dify", "rag": "RAG", "graphrag": "GraphRAG",
+		"embeddings": "Embeddings", "embedding": "Embeddings", "tokenizer": "Tokenizer",
+		// dev tools & platforms
+		"github": "GitHub", "gitlab": "GitLab", "bitbucket": "Bitbucket", "jenkins": "Jenkins",
+		"notion": "Notion", "slack": "Slack", "jira": "Jira", "confluence": "Confluence",
+		"prometheus": "Prometheus", "grafana": "Grafana", "datadog": "Datadog",
+		"openwebui": "Open WebUI", "streamlit": "Streamlit", "fastapi": "FastAPI",
+	}
+	for alias, canonical := range dict {
+		// word-boundary, case-insensitive; skip pure "c" etc. to avoid over-match
+		re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(alias) + `\b`)
+		c.techRegexes = append(c.techRegexes, techMatch{canonical: canonical, category: "tech", re: re})
+	}
+}
+
 func (c *Classifier) ExtractEntities(content string) Entities {
 	var entities Entities; seen := make(map[string]bool)
 	for _, ep := range c.entityPatterns {
@@ -69,8 +124,13 @@ func (c *Classifier) ExtractEntities(content string) Entities {
 			}
 		}
 	}
-	for _, tech := range []string{"GCP","AWS","Azure","Kubernetes","Docker","Terraform","Go","Python","TypeScript","JavaScript","Rust","SQL","NoSQL","Redis","PostgreSQL","MySQL","MongoDB","Qdrant","ChromaDB","llama","GPT","Ollama","HNSW","FTS5","SQLite","Kafka"} {
-		if strings.Contains(content, tech) { entities.Tech = append(entities.Tech, tech) }
+	// Tech dictionary: word-boundary + case-insensitive + alias normalization
+	techSeen := make(map[string]bool)
+	for _, tm := range c.techRegexes {
+		if tm.re.MatchString(content) && !techSeen[tm.canonical] {
+			techSeen[tm.canonical] = true
+			entities.Tech = append(entities.Tech, tm.canonical)
+		}
 	}
 	return entities
 }

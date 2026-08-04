@@ -2,6 +2,8 @@ package graph
 
 import (
 	"fmt"
+
+	"github.com/rezkyauliapratama/nyawa/internal/extract"
 )
 
 // RebuildStats reports what the batch graph rebuild did.
@@ -13,6 +15,62 @@ type RebuildStats struct {
 	NodesTotal      int
 	EdgesTotal      int
 	AvgDegree       float64
+}
+
+// ReextractStats reports how many entities/edges were backfilled.
+type ReextractStats struct {
+	MemoriesScanned int
+	EntitiesAdded   int
+	EdgesAdded      int
+}
+
+// ReextractEntities re-runs entity extraction over all non-superseded
+// memories using the current classifier dictionary, then upserts entity
+// nodes/edges and re-infers typed edges. This backfills entities that were
+// missed by older classifier versions (e.g. new tech aliases like DeepSeek,
+// AWS Bedrock) without requiring a full DB reset. It is idempotent:
+// existing entity_edges rows are untouched (INSERT OR IGNORE), and node
+// access_count is bumped on conflict.
+func (s *Store) ReextractEntities() (ReextractStats, error) {
+	var stats ReextractStats
+	clf := extract.NewClassifier()
+
+	rows, err := s.db.Query(`SELECT id, content FROM memories WHERE superseded_at IS NULL`)
+	if err != nil {
+		return stats, fmt.Errorf("reextract query memories: %w", err)
+	}
+
+	// Collect all rows FIRST, then close the rows before doing any writes.
+	// Critical for SQLite :memory: databases: with an open rows cursor the
+	// driver pins one connection, and a write via sql.DB may open a SECOND
+	// connection pointing at a different empty :memory: database, silently
+	// dropping every insert.
+	type memRow struct{ id, content string }
+	var mems []memRow
+	for rows.Next() {
+		var m memRow
+		if err := rows.Scan(&m.id, &m.content); err != nil {
+			continue
+		}
+		mems = append(mems, m)
+	}
+	rows.Close()
+
+	for _, m := range mems {
+		stats.MemoriesScanned++
+		entities, _ := clf.Process(m.content)
+		if len(entities.Tech) == 0 && len(entities.URLs) == 0 && len(entities.People) == 0 {
+			continue
+		}
+		n, err := s.InsertMemoryEntities(m.id, entities)
+		if err == nil && n > 0 {
+			stats.EntitiesAdded += n
+		}
+		if err := s.InferTypedEdges(m.id, m.content); err == nil {
+			stats.EdgesAdded++
+		}
+	}
+	return stats, nil
 }
 
 // RebuildGraph rebuilds all co-occurrence related_to edges from entity_pair_counts,

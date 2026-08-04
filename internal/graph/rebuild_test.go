@@ -226,3 +226,87 @@ func TestRebuildEmptyGraph(t *testing.T) {
 		t.Errorf("expected AvgDegree=0 for empty graph, got %f", stats.AvgDegree)
 	}
 }
+
+// TestReextractBackfillsTech verifies that memories stored before the tech
+// dictionary grew (e.g. DeepSeek, AWS Bedrock, MCP) get their entities
+// backfilled by ReextractEntities, with alias normalization to canonical
+// names.
+func TestReextractBackfillsTech(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	s, err := NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Graph store does not own the memories table — create a minimal copy
+	// for the re-extract test.
+	if _, err := db.Exec(
+		`CREATE TABLE IF NOT EXISTS memories (
+			id TEXT PRIMARY KEY, content TEXT NOT NULL,
+			mem_type TEXT, namespace TEXT, importance REAL DEFAULT 0.5,
+			pinned INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT,
+			superseded_at TEXT, access_count INTEGER DEFAULT 0)`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate an OLD memory stored before the dictionary had DeepSeek/Bedrock:
+	// insert the memory row directly (no entities) — the old pipeline missed them.
+	if _, err := db.Exec(
+		`INSERT INTO memories (id, content, mem_type, namespace, importance, pinned, created_at, updated_at)
+		 VALUES ('mem_old', 'running deepseek via AWS Bedrock in jakarta', 'note', 'default', 0.5, 0, datetime('now'), datetime('now'))`,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// A newer memory with MCP (also in new dictionary)
+	if _, err := db.Exec(
+		`INSERT INTO memories (id, content, mem_type, namespace, importance, pinned, created_at, updated_at)
+		 VALUES ('mem_new', 'hermes uses MCP over stdio', 'note', 'default', 0.5, 0, datetime('now'), datetime('now'))`,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// Before re-extract: no entity nodes at all
+	var nodesBefore int
+	db.QueryRow(`SELECT COUNT(*) FROM entity_nodes`).Scan(&nodesBefore)
+	if nodesBefore != 0 {
+		t.Fatalf("expected 0 nodes before reextract, got %d", nodesBefore)
+	}
+
+	stats, err := s.ReextractEntities()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.MemoriesScanned != 2 {
+		t.Errorf("expected 2 memories scanned, got %d", stats.MemoriesScanned)
+	}
+	if stats.EntitiesAdded < 3 {
+		t.Errorf("expected >= 3 entities added (DeepSeek, AWS, AWS Bedrock, MCP), got %d", stats.EntitiesAdded)
+	}
+
+	// Verify canonical nodes exist
+	for _, want := range []string{"DeepSeek", "AWS Bedrock", "MCP"} {
+		var id int
+		err := db.QueryRow(`SELECT id FROM entity_nodes WHERE name = ? COLLATE NOCASE`, want).Scan(&id)
+		if err != nil {
+			t.Errorf("expected entity node %q to exist after reextract (err=%v)", want, err)
+		}
+	}
+
+	// Idempotent: second run should not duplicate entity_edges rows
+	var edgesBefore int
+	db.QueryRow(`SELECT COUNT(*) FROM entity_edges`).Scan(&edgesBefore)
+	if _, err := s.ReextractEntities(); err != nil {
+		t.Fatal(err)
+	}
+	var edgesAfter int
+	db.QueryRow(`SELECT COUNT(*) FROM entity_edges`).Scan(&edgesAfter)
+	if edgesAfter != edgesBefore {
+		t.Errorf("reextract not idempotent: edges %d -> %d", edgesBefore, edgesAfter)
+	}
+}

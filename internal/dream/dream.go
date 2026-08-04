@@ -234,6 +234,16 @@ func (e *Engine) phaseGraphBuild() (built, nodes, edges int) {
 	if e.graphStore == nil {
 		return 0, 0, 0
 	}
+	// Re-extract entities with the current classifier dictionary so new
+	// aliases (DeepSeek, AWS Bedrock, MCP, ...) backfill older memories,
+	// then rebuild co-occurrence edges from the enriched graph.
+	re, err := e.graphStore.ReextractEntities()
+	if err != nil {
+		log.Printf("Dream re-extract error: %v", err)
+	} else if re.MemoriesScanned > 0 {
+		log.Printf("Dream re-extract: scanned=%d entities=%d edges=%d",
+			re.MemoriesScanned, re.EntitiesAdded, re.EdgesAdded)
+	}
 	stats, err := e.graphStore.RebuildGraph()
 	if err != nil {
 		log.Printf("Dream graph build error: %v", err)
