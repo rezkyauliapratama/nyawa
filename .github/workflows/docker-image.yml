@@ -26,8 +26,11 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN cannot push to user-scoped packages (403 Forbidden).
+          # User packages (ghcr.io/<user>/<pkg>) require a PAT with
+          # write:packages scope — stored as GHCR_PAT repo secret.
+          username: ${{ secrets.GHCR_PAT_USER }}
+          password: ${{ secrets.GHCR_PAT }}
 
       - name: Extract metadata (tags, labels)
         id: meta
