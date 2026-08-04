@@ -159,10 +159,14 @@ func (e *Engine) phaseDedup(cfg Config) int {
 	// the O(n^2) loop is wasteful: for n memories it re-tokenizes ~n^2/2
 	// times. With 3k+ memories that dominates runtime and memory.
 	words := make([][]string, len(mems))
+	wordSets := make([]map[string]bool, len(mems))
 	for i := range mems {
 		w := strings.Fields(strings.ToLower(mems[i].content))
-		if len(w) < 3 { w = nil }
+		if len(w) < 3 { continue }
 		words[i] = w
+		set := make(map[string]bool, len(w))
+		for _, tok := range w { set[tok] = true }
+		wordSets[i] = set
 	}
 
 	deduped := 0
@@ -171,8 +175,12 @@ func (e *Engine) phaseDedup(cfg Config) int {
 		wordsA := words[i]
 		for j := i + 1; j < len(mems) && deduped < 10; j++ {
 			if words[j] == nil { continue }
-			wordsB := words[j]
-			overlap := countOverlap(wordsA, wordsB, len(wordsA))
+			// Quick pre-check: overlap can't exceed min(lenA, lenB)
+			setB := wordSets[j]
+			minLen := len(wordsA)
+			if len(setB) < minLen { minLen = len(setB) }
+			if float64(minLen)/float64(len(wordsA)) < cfg.DedupThreshold { continue }
+			overlap := countOverlapSet(wordsA, setB, len(wordsA))
 			if overlap > cfg.DedupThreshold {
 				e.db.Exec(`UPDATE memories SET superseded_at=datetime('now') WHERE id=?`, mems[j].id)
 				e.hnsw.Delete(mems[j].id)
@@ -185,12 +193,12 @@ func (e *Engine) phaseDedup(cfg Config) int {
 	return deduped
 }
 
-func countOverlap(a, b []string, totalA int) float64 {
+// countOverlapSet returns |a ∩ setB| / totalA without allocating a new map
+// per call. setB is the precomputed token set of memory B.
+func countOverlapSet(a []string, setB map[string]bool, totalA int) float64 {
 	if totalA == 0 { return 0 }
-	set := make(map[string]bool, len(b))
-	for _, w := range b { set[w] = true }
 	match := 0
-	for _, w := range a { if set[w] { match++ } }
+	for _, w := range a { if setB[w] { match++ } }
 	return float64(match) / float64(totalA)
 }
 
