@@ -213,12 +213,21 @@ func countOverlapSet(a []string, setB map[string]bool, totalA int) float64 {
 func (e *Engine) phaseLink() int {
 	rows, err := e.db.Query(`SELECT e1.entity_id, e2.entity_id, COUNT(*) as c FROM entity_edges e1 JOIN entity_edges e2 ON e1.memory_id=e2.memory_id AND e1.entity_id<e2.entity_id GROUP BY e1.entity_id,e2.entity_id HAVING c>=2 ORDER BY c DESC LIMIT 50`)
 	if err != nil { return 0 }
-	defer rows.Close()
-	linked := 0
+	type pair struct{ a, b int }
+	var pairs []pair
 	for rows.Next() {
-		var e1, e2, cnt int
-		rows.Scan(&e1, &e2, &cnt)
-		e.db.Exec(`UPDATE entity_nodes SET access_count=access_count+1 WHERE id IN(?,?)`, e1, e2)
+		var p pair
+		var cnt int
+		rows.Scan(&p.a, &p.b, &cnt)
+		pairs = append(pairs, p)
+	}
+	rows.Close()
+	linked := 0
+	for _, p := range pairs {
+		// Exec AFTER rows are closed: with SetMaxOpenConns(1) the SELECT pins
+		// the single connection, and an Exec inside rows.Next() would wait for
+		// that same connection forever (deadlock).
+		e.db.Exec(`UPDATE entity_nodes SET access_count=access_count+1 WHERE id IN(?,?)`, p.a, p.b)
 		linked++
 	}
 	if linked > 0 { log.Printf("Dream linked %d entity pairs", linked) }
