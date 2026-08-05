@@ -57,6 +57,10 @@ var relationPatterns = []RelationPattern{
 // (InsertMemoryEntities should be called first). Never returns an error that
 // breaks the caller: DB errors are logged and skipped.
 func (s *Store) InferTypedEdges(memoryID string, content string) error {
+	return s.inferTypedEdges(s.db, memoryID, content)
+}
+
+func (s *Store) inferTypedEdges(q execQuerier, memoryID string, content string) error {
 	s.mu.Lock()
 	s.inferTotal++
 	s.mu.Unlock()
@@ -83,11 +87,11 @@ func (s *Store) InferTypedEdges(memoryID string, content string) error {
 				// Resolve entity names to IDs; auto-register missing entities
 				// so typed inference works even when the classifier extractor
 				// does not recognize the entity category.
-				sourceID, err := s.resolveOrCreateEntity(sourceName, p.SourceCat)
+				sourceID, err := s.resolveOrCreateEntityQ(q, sourceName, p.SourceCat)
 				if err != nil {
 					continue
 				}
-				targetID, err := s.resolveOrCreateEntity(targetName, p.TargetCat)
+				targetID, err := s.resolveOrCreateEntityQ(q, targetName, p.TargetCat)
 				if err != nil {
 					continue
 				}
@@ -96,7 +100,7 @@ func (s *Store) InferTypedEdges(memoryID string, content string) error {
 				}
 
 				// Insert typed edge with UPSERT
-				if _, err := s.db.Exec(
+				if _, err := q.Exec(
 					`INSERT INTO entity_entity_edges (source_id, target_id, rel_type, weight)
 					 VALUES (?, ?, ?, 1.0)
 					 ON CONFLICT(source_id, target_id, rel_type) DO UPDATE SET weight = weight + 1`,
@@ -141,18 +145,24 @@ func splitTargets(s string) []string {
 // resolveOrCreateEntity returns the entity node ID for name, auto-registering
 // the node (with category) if it does not exist yet. Returns 0 on error.
 func (s *Store) resolveOrCreateEntity(name string, category string) (int, error) {
+	return s.resolveOrCreateEntityQ(s.db, name, category)
+}
+
+// resolveOrCreateEntityQ is the tx-aware variant used by inferTypedEdges so
+// reextract can batch all writes in a single transaction.
+func (s *Store) resolveOrCreateEntityQ(q execQuerier, name string, category string) (int, error) {
 	if category == "" {
 		category = "unknown"
 	}
 	var id int
-	err := s.db.QueryRow(`SELECT id FROM entity_nodes WHERE name = ? COLLATE NOCASE`, name).Scan(&id)
+	err := q.QueryRow(`SELECT id FROM entity_nodes WHERE name = ? COLLATE NOCASE`, name).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
-	if _, err := s.db.Exec(`INSERT INTO entity_nodes (name, category) VALUES (?, ?)`, name, category); err != nil {
+	if _, err := q.Exec(`INSERT INTO entity_nodes (name, category) VALUES (?, ?)`, name, category); err != nil {
 		return 0, err
 	}
-	if err := s.db.QueryRow(`SELECT id FROM entity_nodes WHERE name = ? COLLATE NOCASE`, name).Scan(&id); err != nil {
+	if err := q.QueryRow(`SELECT id FROM entity_nodes WHERE name = ? COLLATE NOCASE`, name).Scan(&id); err != nil {
 		return 0, err
 	}
 	return id, nil

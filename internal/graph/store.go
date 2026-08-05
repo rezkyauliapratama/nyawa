@@ -59,6 +59,19 @@ func (s *Store) migrate() error {
 type Entity struct{ ID int; Name string; Category string }
 
 func (s *Store) InsertMemoryEntities(memoryID string, entities extract.Entities) (int, error) {
+	return s.insertMemoryEntities(s.db, memoryID, entities)
+}
+
+// execQuerier is satisfied by both *sql.DB and *sql.Tx so reextract can run
+// inside a single transaction instead of N autocommit writes (each of which
+// contends for the SQLite write lock with other writers like the trading cron).
+type execQuerier interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+func (s *Store) insertMemoryEntities(q execQuerier, memoryID string, entities extract.Entities) (int, error) {
 	var names, categories []string
 	for _, e := range entities.Tech { names = append(names, e); categories = append(categories, "tech") }
 	for _, e := range entities.People { names = append(names, e); categories = append(categories, "person") }
@@ -73,12 +86,12 @@ func (s *Store) InsertMemoryEntities(memoryID string, entities extract.Entities)
 	for i, name := range names {
 		if name == "" { continue }
 		name = strings.TrimSpace(name)
-		s.db.Exec(`INSERT INTO entity_nodes (name, category) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET access_count = access_count + 1`, name, categories[i])
+		q.Exec(`INSERT INTO entity_nodes (name, category) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET access_count = access_count + 1`, name, categories[i])
 		var entityID int
-		s.db.QueryRow(`SELECT id FROM entity_nodes WHERE name = ?`, name).Scan(&entityID)
+		q.QueryRow(`SELECT id FROM entity_nodes WHERE name = ?`, name).Scan(&entityID)
 		if entityID == 0 { continue }
 		entityIDs[entityID] = true
-		if _, err := s.db.Exec(`INSERT OR IGNORE INTO entity_edges (memory_id, entity_id, weight, created_at) VALUES (?, ?, ?, ?)`, memoryID, entityID, 1.0, time.Now().UTC().Format(time.RFC3339)); err == nil { count++ }
+		if _, err := q.Exec(`INSERT OR IGNORE INTO entity_edges (memory_id, entity_id, weight, created_at) VALUES (?, ?, ?, ?)`, memoryID, entityID, 1.0, time.Now().UTC().Format(time.RFC3339)); err == nil { count++ }
 	}
 	if len(entityIDs) >= 2 {
 		ids := make([]int, 0, len(entityIDs))
@@ -87,15 +100,15 @@ func (s *Store) InsertMemoryEntities(memoryID string, entities extract.Entities)
 			for j := i + 1; j < len(ids); j++ {
 				sid, tid := ids[i], ids[j]
 				if sid > tid { sid, tid = tid, sid }
-				if _, err := s.db.Exec(`INSERT INTO entity_pair_counts (source_id, target_id, count) VALUES (?, ?, 1) ON CONFLICT(source_id, target_id) DO UPDATE SET count = count + 1`, sid, tid); err != nil {
+				if _, err := q.Exec(`INSERT INTO entity_pair_counts (source_id, target_id, count) VALUES (?, ?, 1) ON CONFLICT(source_id, target_id) DO UPDATE SET count = count + 1`, sid, tid); err != nil {
 					continue
 				}
 				var pairCount int
-				if err := s.db.QueryRow(`SELECT count FROM entity_pair_counts WHERE source_id = ? AND target_id = ?`, sid, tid).Scan(&pairCount); err != nil {
+				if err := q.QueryRow(`SELECT count FROM entity_pair_counts WHERE source_id = ? AND target_id = ?`, sid, tid).Scan(&pairCount); err != nil {
 					continue
 				}
 				if pairCount >= 2 {
-					s.db.Exec(`INSERT INTO entity_entity_edges (source_id, target_id, rel_type, weight) VALUES (?, ?, 'related_to', ?) ON CONFLICT(source_id, target_id, rel_type) DO UPDATE SET weight = ?`, sid, tid, float64(pairCount), float64(pairCount))
+					q.Exec(`INSERT INTO entity_entity_edges (source_id, target_id, rel_type, weight) VALUES (?, ?, 'related_to', ?) ON CONFLICT(source_id, target_id, rel_type) DO UPDATE SET weight = ?`, sid, tid, float64(pairCount), float64(pairCount))
 				}
 			}
 		}
