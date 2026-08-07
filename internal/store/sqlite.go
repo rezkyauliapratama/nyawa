@@ -32,7 +32,7 @@ type Store struct {
 func NewStore(dbPath string, emb Embedder) (*Store, error) {
 	db, err := sql.Open("sqlite3", fmt.Sprintf("%s?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000&_cache_size=-8000", dbPath))
 	if err != nil { return nil, fmt.Errorf("sqlite: %w", err) }
-	db.SetMaxOpenConns(1); db.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(2); db.SetMaxIdleConns(2)
 	dim := 768; if emb != nil { dim = emb.Dims() }
 	s := &Store{db: db, hnsw: index.NewHNSW(index.DefaultHNSWConfig(dim)), hnswPath: dbPath + ".hnsw", embedder: emb, classify: extract.NewClassifier()}
 	if gs, err := graph.NewStore(db); err == nil { s.graph = gs }
@@ -59,7 +59,8 @@ func (s *Store) migrate() error {
 	CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content,tokenize='porter unicode61', content='memories', content_rowid='rowid');
 	CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN INSERT INTO memories_fts(rowid,content) VALUES(new.rowid,new.content); END;
 	CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN INSERT INTO memories_fts(memories_fts,rowid,content) VALUES('delete',old.rowid,old.content); END;
-	CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN INSERT INTO memories_fts(memories_fts,rowid,content) VALUES('delete',old.rowid,old.content); INSERT INTO memories_fts(rowid,content) VALUES(new.rowid,new.content); END;`)
+	CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN INSERT INTO memories_fts(memories_fts,rowid,content) VALUES('delete',old.rowid,old.content); INSERT INTO memories_fts(rowid,content) VALUES(new.rowid,new.content); END;
+	CREATE TABLE IF NOT EXISTS compaction_log(session_key TEXT, old_session_id TEXT, new_session_id TEXT, summary_id TEXT, created_at TEXT DEFAULT (datetime('now')));`)
 	return err
 }
 
@@ -285,6 +286,13 @@ func (s *Store) Stats() (map[string]any, error) {
 		"total_memories": t, "superseded": sup, "pinned_memories": p,
 		"vector_indexed": s.hnsw.Size(), "entity_nodes": en, "entity_edges": ee, "namespaces": nsMap,
 	}, nil
+}
+
+// LogCompaction records a compaction event in the compaction_log table.
+func (s *Store) LogCompaction(sessionKey, oldSessionID, newSessionID, summaryID string) error {
+	_, err := s.db.Exec(`INSERT INTO compaction_log(session_key, old_session_id, new_session_id, summary_id) VALUES(?,?,?,?)`,
+		sessionKey, oldSessionID, newSessionID, summaryID)
+	return err
 }
 
 func (s *Store) Close() error { return s.db.Close() }
