@@ -61,6 +61,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/v1/graph/query", s.handleGraphQuery)
 	s.mux.HandleFunc("/v1/graph/entities", s.handleGraphEntities)
 	s.mux.HandleFunc("/v1/graph/path", s.handleGraphPath)
+	s.mux.HandleFunc("/v1/compact", s.handleCompact)
 	s.mux.HandleFunc("/dashboard", s.handleDashboard)
 	s.mux.HandleFunc("/", s.handleRoot)
 }

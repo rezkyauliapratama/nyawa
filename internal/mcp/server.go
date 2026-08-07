@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/rezkyauliapratama/nyawa/internal/graph"
+	"github.com/rezkyauliapratama/nyawa/internal/compact"
 	"github.com/rezkyauliapratama/nyawa/internal/rag"
 	"github.com/rezkyauliapratama/nyawa/internal/search"
 	"github.com/rezkyauliapratama/nyawa/internal/store"
@@ -126,6 +127,18 @@ func (s *Server) tools() []toolDefinition {
 				"target":    {Type: "string", Description: "Target entity name."},
 				"max_depth": {Type: "number", Description: "Max BFS depth (default 4)."},
 			}, Required: []string{"source", "target"}}},
+		{Name: "compact_context", Description: "Compress a conversation transcript (OpenAI-format messages) into a compact summary block. Stores the summary in Nyawa (namespace=context) and returns the compacted message list + stats. LLM summarization is used when NYAWA_LLM_API_KEY is set, otherwise deterministic fallback.",
+			InputSchema: inputSchema{Type: "object", Properties: map[string]propertySchema{
+				"messages":          {Type: "string", Description: "JSON array of OpenAI-format messages: [{\"role\": \"user\", \"content\": \"...\"}]"},
+				"focus_topic":       {Type: "string", Description: "Optional focus topic to prioritize in summarization."},
+				"preserve_recent_n": {Type: "number", Description: "Keep last N messages verbatim (default 30)."},
+				"segment_size":      {Type: "number", Description: "Messages per segment (default 40)."},
+				"segment_overlap":   {Type: "number", Description: "Overlap between segments (default 5)."},
+				"dry_run":           {Type: "string", Description: "true = return stats without storing anything."},
+				"session_key":       {Type: "string", Description: "Session identifier for compaction_log."},
+				"old_session_id":    {Type: "string", Description: "Previous Hermes session id (compression boundary)."},
+				"new_session_id":    {Type: "string", Description: "New Hermes session id (compression boundary)."},
+			}, Required: []string{"messages"}}},
 	}
 }
 
@@ -189,6 +202,7 @@ func (s *Server) handleToolCall(req jsonRPCRequest) {
 	case "nyawa_graph_query":      s.handleGraphQuery(req.ID, params.Arguments)
 	case "nyawa_graph_entities":   s.handleGraphEntities(req.ID, params.Arguments)
 	case "nyawa_graph_path":       s.handleGraphPath(req.ID, params.Arguments)
+	case "compact_context":        s.handleCompactContext(req.ID, params.Arguments)
 	default: s.writeError(req.ID, -32601, fmt.Sprintf("Unknown tool: %s", params.Name))
 	}
 }
@@ -382,6 +396,125 @@ func (s *Server) handleGraphPath(id any, raw json.RawMessage) {
 	if err != nil { s.writeError(id, -32603, fmt.Sprintf("find path failed: %v", err)); return }
 	if path == nil { path = []graph.PathHop{} }
 	s.writeToolResult(id, map[string]any{"path": path, "length": len(path)})
+}
+
+// ─── Context compaction tool ─────────────────────
+
+type compactArgs struct {
+	Messages        string `json:"messages"`
+	FocusTopic      string `json:"focus_topic"`
+	PreserveRecentN float64 `json:"preserve_recent_n"`
+	SegmentSize     float64 `json:"segment_size"`
+	SegmentOverlap  float64 `json:"segment_overlap"`
+	DryRun          string `json:"dry_run"`
+	SessionKey      string `json:"session_key"`
+	OldSessionID    string `json:"old_session_id"`
+	NewSessionID    string `json:"new_session_id"`
+}
+
+func (s *Server) handleCompactContext(id any, raw json.RawMessage) {
+	var args compactArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		s.writeError(id, -32602, "Invalid arguments"); return
+	}
+	if args.Messages == "" {
+		s.writeError(id, -32602, "messages required (JSON array string)"); return
+	}
+
+	var rawMsgs []map[string]interface{}
+	if err := json.Unmarshal([]byte(args.Messages), &rawMsgs); err != nil {
+		s.writeError(id, -32602, "messages must be a JSON array: "+err.Error()); return
+	}
+
+	preserveRecentN := int(args.PreserveRecentN)
+	if preserveRecentN <= 0 { preserveRecentN = 30 }
+	segmentSize := int(args.SegmentSize)
+	if segmentSize <= 0 { segmentSize = 40 }
+	segmentOverlap := int(args.SegmentOverlap)
+	if segmentOverlap < 0 { segmentOverlap = 5 }
+
+	msgs := compact.FromOpenAI(rawMsgs)
+	inputTokens := compact.TokensIn(msgs)
+
+	prunedMsgs, pruned := compact.PruneToolResults(msgs, 8192)
+	segments := compact.Segment(prunedMsgs, segmentSize, segmentOverlap, preserveRecentN)
+
+	// No-op guard: too-short transcript -> return unchanged.
+	if len(segments) == 0 {
+		s.writeToolResult(id, map[string]any{
+			"summary_block": compact.ToOpenAIList(msgs),
+			"memory_ids":    []string{},
+			"stats": compact.CompactionStats{
+				InputMessages:  len(msgs),
+				OutputMessages: len(msgs),
+				InputTokens:    inputTokens,
+				OutputTokens:   inputTokens,
+				ReductionPct:   0,
+			},
+			"noop": true,
+		})
+		return
+	}
+
+	var tail []compact.Message
+	if len(prunedMsgs) > preserveRecentN {
+		tail = prunedMsgs[len(prunedMsgs)-preserveRecentN:]
+	}
+
+	summaries := compact.SummarizeSegments(segments, args.FocusTopic)
+	summaryText := strings.Join(summaries, "\n\n---\n\n")
+
+	summaryBlock := compact.BuildSummaryBlock(summaryText, args.SessionKey)
+	outputMsgs := append([]compact.Message{}, summaryBlock...)
+	if len(tail) > 0 {
+		outputMsgs = append(outputMsgs, tail...)
+	}
+	outputTokens := compact.TokensIn(outputMsgs)
+
+	reductionPct := 0.0
+	if inputTokens > 0 {
+		reductionPct = float64(inputTokens-outputTokens) / float64(inputTokens) * 100
+		if reductionPct < 0 { reductionPct = 0 }
+	}
+
+	stats := compact.CompactionStats{
+		InputMessages:     len(msgs),
+		OutputMessages:    len(outputMsgs),
+		InputTokens:       inputTokens,
+		OutputTokens:      outputTokens,
+		ReductionPct:      reductionPct,
+		Segments:          len(segments),
+		PrunedToolResults: pruned,
+	}
+
+	memoryIDs := []string{}
+	if !strings.EqualFold(args.DryRun, "true") && s.store != nil {
+		summaryID := fmt.Sprintf("summary_%d", time.Now().UnixNano())
+		summaryMem := &types.Memory{
+			ID:        summaryID,
+			Content:   summaryText,
+			Type:      types.TypeContext,
+			Namespace: "context",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+		if err := s.store.InsertMemory(summaryMem); err == nil {
+			memoryIDs = append(memoryIDs, summaryID)
+		}
+		sessionKey := args.SessionKey
+		if sessionKey == "" {
+			sessionKey = args.OldSessionID
+		}
+		if sessionKey != "" {
+			_ = s.store.LogCompaction(sessionKey, args.OldSessionID, args.NewSessionID, summaryID)
+		}
+	}
+
+	s.writeToolResult(id, map[string]any{
+		"summary_block": compact.ToOpenAIList(outputMsgs),
+		"memory_ids":    memoryIDs,
+		"stats":         stats,
+	})
 }
 
 // matchGraphSeeds resolves entity names from query text via substring match.
