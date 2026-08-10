@@ -84,6 +84,7 @@ func SummarizeSegment(segment []Message, focus string) (string, error) {
 		Model: model,
 		Messages: []chatMessage{
 			{Role: "system", Content: summarizePrompt(segment, focus)},
+			{Role: "user", Content: "Summarize the conversation segment above."},
 		},
 		MaxTokens:   2048,
 		Temperature: 0.3,
