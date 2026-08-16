@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/github/license/rezkyauliapratama/nyawa?color=blue&style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&style=flat-square" alt="Go">
   <img src="https://img.shields.io/badge/binary-8.1MB-green?style=flat-square" alt="Size">
-  <img src="https://img.shields.io/badge/version-v1.1.0-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.1.9-blue?style=flat-square" alt="Version">
 </p>
 
 <h1 align="center">Nyawa</h1>
@@ -91,7 +91,7 @@ You should see a single binary appear:
 
 ```bash
 ls -lh nyawa        # ~8.1MB
-./nyawa version     # nyawa v1.1.0
+./nyawa version     # nyawa v1.1.9
 ```
 
 ### 3. Initialize a database
@@ -360,7 +360,7 @@ Implementation: [`internal/search/rrf.go`](internal/search/rrf.go), [`internal/s
 Nyawa runs a Dream Cycle — a background process that maintains memory and the entity graph automatically:
 
 ```
-Dream Cycle running every 1h...
+Dream Cycle running every 2h (random phase offset 0-15m)...
  [1/7] Evict      -> Soft-delete stale memories (>90d, low access)
  [2/7] Contra     -> Detect contradictions (like vs dislike)
  [3/7] Dedup      -> Merge near-duplicates (>92% overlap)
