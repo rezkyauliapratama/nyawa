@@ -198,6 +198,22 @@ func cmdServe() {
 	engine.SetGraphStore(st.GetGraph())
 	engine.Start(dream.DefaultConfig())
 
+	// Periodic WAL checkpoint (safety net besides the post-Dream checkpoint):
+	// keeps memory.db-wal from ballooning between Dream cycles, which once
+	// reached 200MB and made every write slow + concurrent stores fail with
+	// "database is locked".
+	go func() {
+		t := time.NewTicker(30 * time.Minute)
+		defer t.Stop()
+		for range t.C {
+			if truncated, err := st.CheckpointWAL(); err != nil {
+				log.Printf("WAL checkpoint ticker: %v", err)
+			} else if truncated {
+				log.Printf("WAL checkpoint ticker: truncated")
+			}
+		}
+	}()
+
 	hc := embedder.NewHealthCheckRunner(emb, 60*time.Second); hc.Start(); defer hc.Stop()
 	p := search.NewPipeline(st, emb, types.DefaultConfig().Search)
 	rs := rag.NewRAGStore(st.GetDB(), st.GetHNSW(), st.GetHNSWPath(), emb)
