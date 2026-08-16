@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -51,7 +52,7 @@ type Config struct {
 }
 
 func DefaultConfig() Config {
-	return Config{Interval: 1 * time.Hour, StaleDays: 90, StaleMinAccess: 2, ImportanceThreshold: 0.3, DedupThreshold: 0.92}
+	return Config{Interval: 2 * time.Hour, StaleDays: 90, StaleMinAccess: 2, ImportanceThreshold: 0.3, DedupThreshold: 0.92}
 }
 
 func (e *Engine) Start(cfg Config) {
@@ -88,6 +89,10 @@ func (e *Engine) Stats() Stats { e.mu.Lock(); defer e.mu.Unlock(); return e.stat
 func (e *Engine) Running() bool { e.mu.Lock(); defer e.mu.Unlock(); return e.running }
 
 func (e *Engine) loop(cfg Config) {
+	// Random phase offset (0-15m) on first sleep so Dream Cycle doesn't always
+	// collide with the 30-minute trading cron's write window (was the cause of
+	// recurring "database is locked" store failures).
+	time.Sleep(time.Duration(rand.Int63n(int64(15 * time.Minute))))
 	for {
 		time.Sleep(e.interval)
 		e.mu.Lock()
@@ -95,6 +100,14 @@ func (e *Engine) loop(cfg Config) {
 		e.mu.Unlock()
 		if !running { return }
 		e.Run(cfg)
+		// Dream Cycle is the heaviest writer; checkpoint the WAL right after it
+		// finishes so the WAL never balloons (a 200MB WAL caused every write to
+		// slow down and "database is locked" errors on concurrent stores).
+		if _, err := e.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+			log.Printf("Dream WAL checkpoint: %v", err)
+		} else {
+			log.Printf("Dream WAL checkpoint: truncated")
+		}
 	}
 }
 

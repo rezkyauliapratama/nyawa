@@ -30,7 +30,10 @@ type Store struct {
 }
 
 func NewStore(dbPath string, emb Embedder) (*Store, error) {
-	db, err := sql.Open("sqlite3", fmt.Sprintf("%s?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=5000&_cache_size=-8000", dbPath))
+	// _busy_timeout=20000: write contention (e.g. Dream Cycle holding the
+	// write lock) used to fail fast at 5s. 20s gives concurrent stores a real
+	// chance to wait out the lock instead of returning "database is locked".
+	db, err := sql.Open("sqlite3", fmt.Sprintf("%s?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=20000&_cache_size=-8000", dbPath))
 	if err != nil { return nil, fmt.Errorf("sqlite: %w", err) }
 	db.SetMaxOpenConns(2); db.SetMaxIdleConns(2)
 	dim := 768; if emb != nil { dim = emb.Dims() }
@@ -39,6 +42,56 @@ func NewStore(dbPath string, emb Embedder) (*Store, error) {
 	s.hnsw.Load(s.hnswPath)
 	if err := s.migrate(); err != nil { return nil, fmt.Errorf("migrate: %w", err) }
 	s.ready = true; return s, nil
+}
+
+// isLocked reports whether err is a SQLite transient "database is locked"
+// (SQLITE_BUSY) error that is safe to retry after a short backoff.
+func isLocked(err error) bool {
+	if err == nil { return false }
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "database is busy")
+}
+
+// execRetry runs Exec, retrying transient SQLITE_BUSY errors with a short
+// linear backoff (1s, 2s, 3s). The 20s busy_timeout handles lock waits at the
+// driver level; this catches the residual races where the lock is re-acquired
+// by another writer immediately after the timeout expires.
+func (s *Store) execRetry(query string, args ...any) (sql.Result, error) {
+	var res sql.Result
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		res, err = s.db.Exec(query, args...)
+		if err == nil || !isLocked(err) { return res, err }
+		time.Sleep(time.Duration(attempt) * time.Second)
+	}
+	return res, err
+}
+
+// CheckpointWAL truncates the SQLite WAL file back to zero bytes so it can
+// never balloon (a 200MB WAL once slowed every write and caused "database
+// locked" errors). TRUNCATE requires no active readers/writers beyond this
+// connection; when the DB is busy it falls back to a PASSIVE checkpoint.
+// Returns true when the WAL was fully truncated.
+func (s *Store) CheckpointWAL() (bool, error) {
+	var busy, logFrames, checkpointed int
+	err := s.db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &logFrames, &checkpointed)
+	if err == nil && busy == 0 {
+		return true, nil
+	}
+	if err == nil && busy > 0 {
+		if _, e2 := s.db.Exec(`PRAGMA wal_checkpoint(PASSIVE)`); e2 != nil {
+			return false, fmt.Errorf("wal checkpoint passive: %w", e2)
+		}
+		return false, nil
+	}
+	if err != nil && isLocked(err) {
+		// TRUNCATE hit a busy DB; PASSIVE never blocks, so try it once more.
+		if _, e2 := s.db.Exec(`PRAGMA wal_checkpoint(PASSIVE)`); e2 != nil {
+			return false, fmt.Errorf("wal checkpoint passive after busy: %w", e2)
+		}
+		return false, nil
+	}
+	return false, fmt.Errorf("wal checkpoint: %w", err)
 }
 
 func (s *Store) persistHNSW() { s.hnsw.Save(s.hnswPath) }
@@ -66,7 +119,7 @@ func (s *Store) migrate() error {
 
 func (s *Store) InsertMemory(m *types.Memory) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.Exec(`INSERT INTO memories(id,content,mem_type,namespace,importance,access_count,pinned,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+	_, err := s.execRetry(`INSERT INTO memories(id,content,mem_type,namespace,importance,access_count,pinned,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
 		m.ID, m.Content, string(m.Type), m.Namespace, m.Importance, m.AccessCount, boolToInt(m.Pinned), now, now)
 	if err != nil { return fmt.Errorf("insert: %w", err) }
 	if s.classify != nil {
