@@ -109,7 +109,7 @@ This creates a SQLite database file (plus FTS5 index). Output shows empty stats 
 ### 4. Store your first memories
 
 ```bash
-./nyawa store /tmp/nyawa.db "Rezky bekerja di Bank Sinarmas sebagai Solution Architect"
+./nyawa store /tmp/nyawa.db "Andi bekerja di PT Maju sebagai Data Engineer"
 ./nyawa store /tmp/nyawa.db "Tim backend menggunakan Kafka untuk streaming data"
 ./nyawa store /tmp/nyawa.db "Kafka adalah bagian dari platform MCP"
 ./nyawa store /tmp/nyawa.db "Go backend with PostgreSQL running on GKE"
@@ -136,7 +136,7 @@ Output is ranked results:
 ```
 #1 [0.9214] Team decided to use microservices architecture
 #2 [0.8732] Go backend with PostgreSQL running on GKE
-#3 [0.6541] Rezky bekerja di Bank Sinarmas sebagai Solution Architect
+#3 [0.6541] Andi bekerja di PT Maju sebagai Data Engineer
 ```
 
 **Try GraphRAG in action** — query by an entity and watch related memories surface via graph traversal:
@@ -229,9 +229,9 @@ Memory store
 
 | Relation | Indonesian | English |
 |----------|-----------|---------|
-| `works_at` | "Rezky **bekerja di** Bank Sinarmas" | "Rezky **works at** Bank Sinarmas" |
+| `works_at` | "Andi **bekerja di** PT Maju" | "Andi **works at** PT Maju" |
 | `uses` | "Tim **menggunakan** Kafka" | "Tim **uses** Kafka" |
-| `located_in` | "Kantor **berlokasi di** Jakarta" | "Office **located in** Jakarta" |
+| `located_in` | "Kantor **berlokasi di** Bandung" | "Office **located in** Bandung" |
 | `part_of` | "Kafka **bagian dari** MCP" | "Kafka **part of** MCP" |
 
 ### Query it yourself
@@ -239,14 +239,14 @@ Memory store
 **CLI:**
 ```bash
 ./nyawa graph /tmp/nyawa.db "Kafka" --depth 2 --limit 10
-./nyawa graph /tmp/nyawa.db "Bank Sinarmas" --depth 3 --limit 20
+./nyawa graph /tmp/nyawa.db "PT Maju" --depth 3 --limit 20
 ```
 
 **REST:**
 ```bash
 curl "http://localhost:3300/v1/graph/query?q=Kafka&depth=2&limit=10"
 curl "http://localhost:3300/v1/graph/entities?name=Kaf&category=tech"
-curl "http://localhost:3300/v1/graph/path?source=Rezky&target=MCP&max_depth=4"
+curl "http://localhost:3300/v1/graph/path?source=Andi&target=MCP&max_depth=4"
 ```
 
 **MCP tools:** `nyawa_graph_query`, `nyawa_graph_entities`, `nyawa_graph_path`
@@ -641,7 +641,7 @@ Nyawa is open source and welcoming! See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT (c) [Rezky Aulia Pratama](https://github.com/rezkyauliapratama)
+MIT (c) 2026 Nyawa Contributors
 
 ---
 
