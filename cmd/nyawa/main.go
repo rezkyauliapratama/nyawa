@@ -35,13 +35,13 @@ func main() {
 	case "archive": cmdArchive()
 	case "import": cmdImport()
 	case "graph": cmdGraph()
-	case "version": fmt.Println("nyawa v1.1.9")
+	case "version": fmt.Println("nyawa v1.1.10")
 	default: printUsage(); os.Exit(1)
 	}
 }
 
 func printUsage() {
-	fmt.Printf(`Nyawa — Offline-First AI Memory Engine v1.1.9
+	fmt.Printf(`Nyawa — Offline-First AI Memory Engine v1.1.10
 
 Usage:
   nyawa init <db-path>
