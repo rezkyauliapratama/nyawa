@@ -140,7 +140,16 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.store.GetDB().Query(query, args...)
 	if err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query failed"}); return }
 	defer rows.Close()
-	type item struct{ ID, Content, Type, Namespace, CreatedAt string; Importance float64; Pinned bool; EdgeCount int }
+	type item struct {
+		ID        string  `json:"id"`
+		Content   string  `json:"content"`
+		Type      string  `json:"type"`
+		Namespace string  `json:"namespace"`
+		CreatedAt string  `json:"created_at"`
+		Importance float64 `json:"importance"`
+		Pinned    bool    `json:"pinned"`
+		EdgeCount int     `json:"edge_count"`
+	}
 	var items []item
 	for rows.Next() {
 		var m item; var mt, cs, us string; var pi, ei, ac int; var ss *string
