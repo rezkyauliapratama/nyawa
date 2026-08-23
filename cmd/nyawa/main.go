@@ -35,6 +35,7 @@ func main() {
 	case "archive": cmdArchive()
 	case "import": cmdImport()
 	case "graph": cmdGraph()
+	case "reindex": cmdReindex()
 	case "version": fmt.Println("nyawa v1.1.10")
 	default: printUsage(); os.Exit(1)
 	}
@@ -54,6 +55,7 @@ Usage:
   nyawa mcp <db>                          Start MCP server
   nyawa dream <db>                        Run Dream Cycle
   nyawa graph <db> <query> [--depth 2] [--limit 10]  Traverse entity graph
+  nyawa reindex <db>                      Re-embed memories missing from HNSW
   nyawa version                           Show version
 `)
 }
@@ -286,4 +288,30 @@ func cmdGraph() {
 	if results == nil { results = []graph.TraversalResult{} }
 	out, _ := json.MarshalIndent(map[string]any{"query": query, "seeds": seeds, "results": results, "count": len(results)}, "", "  ")
 	fmt.Println(string(out))
+}
+
+// cmdReindex embeds every active memory that is missing a vector in the HNSW
+// index and persists the updated index once at the end. Existing vectors are
+// left untouched (HNSW.Contains guards against duplicates).
+func cmdReindex() {
+	if len(os.Args) < 3 { log.Fatal("usage: nyawa reindex <db>") }
+	emb := getEmbedder(); defer emb.StopAll()
+	s := getStore(os.Args[2], emb); defer s.Close()
+
+	mems, err := s.ListAllMemories()
+	if err != nil { log.Fatalf("list memories: %v", err) }
+
+	hnsw := s.GetHNSW()
+	already, reindexed, failed := 0, 0, 0
+	for _, m := range mems {
+		if hnsw.Contains(m.ID) { already++; continue }
+		v, e := emb.Embed(m.Content)
+		if e != nil || len(v) == 0 { failed++; continue }
+		hnsw.Insert(m.ID, v)
+		reindexed++
+	}
+	if reindexed > 0 {
+		if err := hnsw.Save(s.GetHNSWPath()); err != nil { log.Fatalf("persist hnsw: %v", err) }
+	}
+	fmt.Printf("Reindexed %d memories (%d already indexed, %d failed)\n", reindexed, already, failed)
 }
