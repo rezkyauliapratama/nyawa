@@ -149,6 +149,22 @@ func (s *Store) GetMemory(id string) (*types.Memory, error) {
 	return m, nil
 }
 
+// ListAllMemories returns all active (non-superseded) memories, newest last.
+func (s *Store) ListAllMemories() ([]*types.Memory, error) {
+	rows, err := s.db.Query(`SELECT id,content,mem_type,namespace,importance,access_count,pinned,created_at,updated_at,superseded_at,edge_count FROM memories WHERE superseded_at IS NULL ORDER BY created_at`)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	var mems []*types.Memory
+	for rows.Next() {
+		m := &types.Memory{}; var mt, cs, us string; var pi, ei int; var ss *string
+		if err := rows.Scan(&m.ID, &m.Content, &mt, &m.Namespace, &m.Importance, &m.AccessCount, &pi, &cs, &us, &ss, &ei); err != nil { return nil, err }
+		m.Type = types.MemoryType(mt); m.Pinned = pi != 0; m.EdgeCount = ei; m.CreatedAt, _ = parseTime(cs); m.UpdatedAt, _ = parseTime(us)
+		if ss != nil { if t, e := parseTime(*ss); e == nil { m.SupersededAt = &t } }
+		mems = append(mems, m)
+	}
+	return mems, rows.Err()
+}
+
 func (s *Store) DeleteMemory(id string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(`UPDATE memories SET superseded_at=? WHERE id=?`, now, id)

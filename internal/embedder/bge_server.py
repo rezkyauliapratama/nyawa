@@ -18,6 +18,7 @@ class BgeEmbedder:
 		if not os.path.exists(tok_path): raise RuntimeError(f"Tokenizer not found: {tok_path}")
 		opts = onnxruntime.SessionOptions(); opts.intra_op_num_threads = 2; opts.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
 		self.session = onnxruntime.InferenceSession(model_path, opts)
+		self.input_names = {i.name for i in self.session.get_inputs()}
 		self.tokenizer = Tokenizer.from_file(tok_path)
 		self.tokenizer.enable_padding(pad_id=0, pad_token="[PAD]", length=128)
 		self.tokenizer.enable_truncation(max_length=128)
@@ -28,6 +29,8 @@ class BgeEmbedder:
 		input_ids = np.array([encoded.ids], dtype=np.int64)
 		attention_mask = np.array([encoded.attention_mask], dtype=np.int64)
 		onnx_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
+		if "token_type_ids" in self.input_names:
+			onnx_inputs["token_type_ids"] = np.zeros_like(input_ids)
 		outputs = self.session.run(None, onnx_inputs)
 		embedding = outputs[0]; mask = np.expand_dims(attention_mask.astype(np.float32), axis=-1)
 		embedding = (embedding * mask).sum(axis=1) / mask.sum(axis=1).clip(min=1e-9)

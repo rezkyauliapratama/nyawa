@@ -27,3 +27,7 @@ Thumbs.db
 
 # Build artifacts
 /dist/
+
+# Local embedding model (downloaded at runtime, ~133MB)
+/internal/embedder/model/
+/bin/

@@ -155,6 +155,13 @@ func (h *HNSW) Delete(id string) {
 
 func (h *HNSW) Size() int { h.mu.RLock(); defer h.mu.RUnlock(); return len(h.nodes) }
 
+// Contains reports whether a node with the given id is already indexed.
+func (h *HNSW) Contains(id string) bool {
+	h.mu.RLock(); defer h.mu.RUnlock()
+	_, ok := h.nodes[id]
+	return ok
+}
+
 type hnswData struct {
 	EntryPoint string                             `json:"ep"`
 	MaxLevel   int                                `json:"ml"`
