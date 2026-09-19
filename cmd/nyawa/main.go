@@ -36,7 +36,7 @@ func main() {
 	case "import": cmdImport()
 	case "graph": cmdGraph()
 	case "reindex": cmdReindex()
-	case "version": fmt.Println("nyawa v1.1.12")
+	case "version": fmt.Println("nyawa v1.1.13")
 	default: printUsage(); os.Exit(1)
 	}
 }
