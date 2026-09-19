@@ -30,6 +30,17 @@ type compactRequest struct {
 	SessionKey      string                   `json:"session_key,omitempty"`
 	OldSessionID    string                   `json:"old_session_id,omitempty"`
 	NewSessionID    string                   `json:"new_session_id,omitempty"`
+	Namespace       string                   `json:"namespace,omitempty"`
+}
+
+// resolveCompactNamespace returns the namespace a compaction summary should be
+// stored in, defaulting to compactNamespace ("context") when unset so callers
+// that do not pass one keep the historical behaviour.
+func resolveCompactNamespace(ns string) string {
+	if ns == "" {
+		return compactNamespace
+	}
+	return ns
 }
 
 // handleCompact implements POST /v1/compact.
@@ -67,6 +78,8 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		pruneMaxBytes = defaultPruneMaxBytes
 	}
 
+	ns := resolveCompactNamespace(req.Namespace)
+
 	// Parse messages to internal format.
 	rawMsgs := make([]map[string]interface{}, len(req.Messages))
 	for i, m := range req.Messages {
@@ -93,6 +106,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"summary_block": compact.ToOpenAIList(msgs),
 			"memory_ids":    []string{},
+			"namespace":     ns,
 			"stats": compact.CompactionStats{
 				InputMessages:  len(msgs),
 				OutputMessages: len(msgs),
@@ -144,7 +158,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 			ID:        summaryID,
 			Content:   summaryText,
 			Type:      types.TypeContext,
-			Namespace: compactNamespace,
+			Namespace: ns,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
 		}
@@ -164,6 +178,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"summary_block": compact.ToOpenAIList(outputMsgs),
 		"memory_ids":    memoryIDs,
+		"namespace":     ns,
 		"stats":         stats,
 	})
 }
