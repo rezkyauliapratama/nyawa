@@ -34,20 +34,33 @@ func NewStore(dbPath string, emb Embedder) (*Store, error) {
 	// write lock) used to fail fast at 5s. 20s gives concurrent stores a real
 	// chance to wait out the lock instead of returning "database is locked".
 	db, err := sql.Open("sqlite3", fmt.Sprintf("%s?_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=20000&_cache_size=-8000", dbPath))
-	if err != nil { return nil, fmt.Errorf("sqlite: %w", err) }
-	db.SetMaxOpenConns(2); db.SetMaxIdleConns(2)
-	dim := 768; if emb != nil { dim = emb.Dims() }
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: %w", err)
+	}
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(2)
+	dim := 768
+	if emb != nil {
+		dim = emb.Dims()
+	}
 	s := &Store{db: db, hnsw: index.NewHNSW(index.DefaultHNSWConfig(dim)), hnswPath: dbPath + ".hnsw", embedder: emb, classify: extract.NewClassifier()}
-	if gs, err := graph.NewStore(db); err == nil { s.graph = gs }
+	if gs, err := graph.NewStore(db); err == nil {
+		s.graph = gs
+	}
 	s.hnsw.Load(s.hnswPath)
-	if err := s.migrate(); err != nil { return nil, fmt.Errorf("migrate: %w", err) }
-	s.ready = true; return s, nil
+	if err := s.migrate(); err != nil {
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	s.ready = true
+	return s, nil
 }
 
 // isLocked reports whether err is a SQLite transient "database is locked"
 // (SQLITE_BUSY) error that is safe to retry after a short backoff.
 func isLocked(err error) bool {
-	if err == nil { return false }
+	if err == nil {
+		return false
+	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "database is busy")
 }
@@ -61,7 +74,9 @@ func (s *Store) execRetry(query string, args ...any) (sql.Result, error) {
 	var err error
 	for attempt := 1; attempt <= 3; attempt++ {
 		res, err = s.db.Exec(query, args...)
-		if err == nil || !isLocked(err) { return res, err }
+		if err == nil || !isLocked(err) {
+			return res, err
+		}
 		time.Sleep(time.Duration(attempt) * time.Second)
 	}
 	return res, err
@@ -121,9 +136,13 @@ func (s *Store) InsertMemory(m *types.Memory) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.execRetry(`INSERT INTO memories(id,content,mem_type,namespace,importance,access_count,pinned,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
 		m.ID, m.Content, string(m.Type), m.Namespace, m.Importance, m.AccessCount, boolToInt(m.Pinned), now, now)
-	if err != nil { return fmt.Errorf("insert: %w", err) }
+	if err != nil {
+		return fmt.Errorf("insert: %w", err)
+	}
 	if s.classify != nil {
-		if m.Type == "" || m.Type == types.TypeNote { m.Type = s.classify.InferType(m.Content) }
+		if m.Type == "" || m.Type == types.TypeNote {
+			m.Type = s.classify.InferType(m.Content)
+		}
 		if s.graph != nil {
 			if n, e := s.graph.InsertMemoryEntities(m.ID, s.classify.ExtractEntities(m.Content)); e == nil && n > 0 {
 				s.db.Exec(`UPDATE memories SET edge_count=? WHERE id=?`, n, m.ID)
@@ -133,33 +152,118 @@ func (s *Store) InsertMemory(m *types.Memory) error {
 	}
 	if s.embedder != nil && s.embedder.Available() {
 		if v, e := s.embedder.Embed(m.Content); e == nil && len(v) > 0 {
-			s.hnsw.Insert(m.ID, v); s.persistHNSW()
+			s.hnsw.Insert(m.ID, v)
+			s.persistHNSW()
 		}
 	}
 	return nil
 }
 
 func (s *Store) GetMemory(id string) (*types.Memory, error) {
-	m := &types.Memory{}; var mt, cs, us string; var pi, ei int; var ss *string
+	m := &types.Memory{}
+	var mt, cs, us string
+	var pi, ei int
+	var ss *string
 	err := s.db.QueryRow(`SELECT id,content,mem_type,namespace,importance,access_count,pinned,created_at,updated_at,superseded_at,edge_count FROM memories WHERE id=?`, id).
 		Scan(&m.ID, &m.Content, &mt, &m.Namespace, &m.Importance, &m.AccessCount, &pi, &cs, &us, &ss, &ei)
-	if err != nil { return nil, err }
-	m.Type = types.MemoryType(mt); m.Pinned = pi != 0; m.EdgeCount = ei; m.CreatedAt, _ = parseTime(cs); m.UpdatedAt, _ = parseTime(us)
-	if ss != nil { if t, e := parseTime(*ss); e == nil { m.SupersededAt = &t } }
+	if err != nil {
+		return nil, err
+	}
+	m.Type = types.MemoryType(mt)
+	m.Pinned = pi != 0
+	m.EdgeCount = ei
+	m.CreatedAt, _ = parseTime(cs)
+	m.UpdatedAt, _ = parseTime(us)
+	if ss != nil {
+		if t, e := parseTime(*ss); e == nil {
+			m.SupersededAt = &t
+		}
+	}
 	return m, nil
 }
 
 // ListAllMemories returns all active (non-superseded) memories, newest last.
 func (s *Store) ListAllMemories() ([]*types.Memory, error) {
 	rows, err := s.db.Query(`SELECT id,content,mem_type,namespace,importance,access_count,pinned,created_at,updated_at,superseded_at,edge_count FROM memories WHERE superseded_at IS NULL ORDER BY created_at`)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var mems []*types.Memory
 	for rows.Next() {
-		m := &types.Memory{}; var mt, cs, us string; var pi, ei int; var ss *string
-		if err := rows.Scan(&m.ID, &m.Content, &mt, &m.Namespace, &m.Importance, &m.AccessCount, &pi, &cs, &us, &ss, &ei); err != nil { return nil, err }
-		m.Type = types.MemoryType(mt); m.Pinned = pi != 0; m.EdgeCount = ei; m.CreatedAt, _ = parseTime(cs); m.UpdatedAt, _ = parseTime(us)
-		if ss != nil { if t, e := parseTime(*ss); e == nil { m.SupersededAt = &t } }
+		m := &types.Memory{}
+		var mt, cs, us string
+		var pi, ei int
+		var ss *string
+		if err := rows.Scan(&m.ID, &m.Content, &mt, &m.Namespace, &m.Importance, &m.AccessCount, &pi, &cs, &us, &ss, &ei); err != nil {
+			return nil, err
+		}
+		m.Type = types.MemoryType(mt)
+		m.Pinned = pi != 0
+		m.EdgeCount = ei
+		m.CreatedAt, _ = parseTime(cs)
+		m.UpdatedAt, _ = parseTime(us)
+		if ss != nil {
+			if t, e := parseTime(*ss); e == nil {
+				m.SupersededAt = &t
+			}
+		}
+		mems = append(mems, m)
+	}
+	return mems, rows.Err()
+}
+
+// ListMemories returns active (non-superseded) memories filtered by an optional
+// namespace and memory type, ordered deterministically by created_at. The limit
+// defaults to 20 and is hard-capped at 200.
+func (s *Store) ListMemories(ns, memType string, limit int, newestFirst bool) ([]*types.Memory, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	q := `SELECT id,content,mem_type,namespace,importance,access_count,pinned,created_at,updated_at,superseded_at,edge_count FROM memories WHERE superseded_at IS NULL`
+	var args []any
+	if ns != "" {
+		q += ` AND namespace=?`
+		args = append(args, ns)
+	}
+	if memType != "" {
+		q += ` AND mem_type=?`
+		args = append(args, memType)
+	}
+	if newestFirst {
+		q += ` ORDER BY created_at DESC`
+	} else {
+		q += ` ORDER BY created_at ASC`
+	}
+	q += ` LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var mems []*types.Memory
+	for rows.Next() {
+		m := &types.Memory{}
+		var mt, cs, us string
+		var pi, ei int
+		var ss *string
+		if err := rows.Scan(&m.ID, &m.Content, &mt, &m.Namespace, &m.Importance, &m.AccessCount, &pi, &cs, &us, &ss, &ei); err != nil {
+			return nil, err
+		}
+		m.Type = types.MemoryType(mt)
+		m.Pinned = pi != 0
+		m.EdgeCount = ei
+		m.CreatedAt, _ = parseTime(cs)
+		m.UpdatedAt, _ = parseTime(us)
+		if ss != nil {
+			if t, e := parseTime(*ss); e == nil {
+				m.SupersededAt = &t
+			}
+		}
 		mems = append(mems, m)
 	}
 	return mems, rows.Err()
@@ -168,7 +272,10 @@ func (s *Store) ListAllMemories() ([]*types.Memory, error) {
 func (s *Store) DeleteMemory(id string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(`UPDATE memories SET superseded_at=? WHERE id=?`, now, id)
-	if err == nil { s.hnsw.Delete(id); s.persistHNSW() }
+	if err == nil {
+		s.hnsw.Delete(id)
+		s.persistHNSW()
+	}
 	return err
 }
 
@@ -179,7 +286,9 @@ type TimeQuery struct {
 }
 
 func (s *Store) FTS5SearchAt(query string, tq TimeQuery) ([]string, error) {
-	if tq.Limit <= 0 { tq.Limit = 10 }
+	if tq.Limit <= 0 {
+		tq.Limit = 10
+	}
 	var q string
 	var args []any
 	if tq.Time.IsZero() {
@@ -201,19 +310,31 @@ func (s *Store) FTS5SearchAt(query string, tq TimeQuery) ([]string, error) {
 		}
 	}
 	rows, err := s.db.Query(q, args...)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var ids []string
-	for rows.Next() { var id string; rows.Scan(&id); ids = append(ids, id) }
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		ids = append(ids, id)
+	}
 	return ids, nil
 }
 
 func (s *Store) VectorSearchAt(q []float32, tq TimeQuery) ([]string, error) {
-	if len(q) == 0 { return nil, nil }
+	if len(q) == 0 {
+		return nil, nil
+	}
 	r := s.hnsw.Search(q, tq.Limit*3)
-	if len(r) == 0 { return nil, nil }
+	if len(r) == 0 {
+		return nil, nil
+	}
 	ids := make([]string, 0, len(r))
-	for _, v := range r { ids = append(ids, v.ID) }
+	for _, v := range r {
+		ids = append(ids, v.ID)
+	}
 	if tq.NS != "" || !tq.Time.IsZero() {
 		return s.filterActiveIDs(ids, tq)
 	}
@@ -221,19 +342,29 @@ func (s *Store) VectorSearchAt(q []float32, tq TimeQuery) ([]string, error) {
 }
 
 func (s *Store) filterActiveIDs(ids []string, tq TimeQuery) ([]string, error) {
-	if len(ids) == 0 { return nil, nil }
+	if len(ids) == 0 {
+		return nil, nil
+	}
 	q := `SELECT id FROM memories WHERE id IN (?` + strings.Repeat(",?", len(ids)-1) + `) AND superseded_at IS NULL`
 	args := make([]any, len(ids))
-	for i, id := range ids { args[i] = id }
+	for i, id := range ids {
+		args[i] = id
+	}
 	if tq.NS != "" {
 		q += ` AND namespace=?`
 		args = append(args, tq.NS)
 	}
 	rows, err := s.db.Query(q, args...)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var filtered []string
-	for rows.Next() { var id string; rows.Scan(&id); filtered = append(filtered, id) }
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		filtered = append(filtered, id)
+	}
 	return filtered, nil
 }
 
@@ -247,19 +378,30 @@ func (s *Store) VectorSearch(q []float32, k int, ns string) ([]string, error) {
 
 func (s *Store) ListNamespaces() (map[string]int, error) {
 	rows, err := s.db.Query(`SELECT namespace, COUNT(*) FROM memories WHERE superseded_at IS NULL GROUP BY namespace ORDER BY namespace`)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	ns := make(map[string]int)
-	for rows.Next() { var n string; var c int; rows.Scan(&n, &c); ns[n] = c }
+	for rows.Next() {
+		var n string
+		var c int
+		rows.Scan(&n, &c)
+		ns[n] = c
+	}
 	return ns, nil
 }
 
 func (s *Store) ArchiveSuperseded(archivePath string) (int, error) {
 	rows, err := s.db.Query(`SELECT id,content,mem_type,namespace,importance,access_count,pinned,created_at,updated_at,superseded_at,edge_count FROM memories WHERE superseded_at IS NOT NULL`)
-	if err != nil { return 0, err }
+	if err != nil {
+		return 0, err
+	}
 	defer rows.Close()
 	archDB, err := sql.Open("sqlite3", archivePath)
-	if err != nil { return 0, fmt.Errorf("archive open: %w", err) }
+	if err != nil {
+		return 0, fmt.Errorf("archive open: %w", err)
+	}
 	defer archDB.Close()
 	archDB.Exec(`CREATE TABLE IF NOT EXISTS memories (
 		id TEXT PRIMARY KEY, content TEXT, mem_type TEXT, namespace TEXT,
@@ -272,10 +414,15 @@ func (s *Store) ArchiveSuperseded(archivePath string) (int, error) {
 	tx, _ := archDB.Begin()
 	stmt, _ := tx.Prepare(`INSERT OR IGNORE INTO memories(id,content,mem_type,namespace,importance,access_count,pinned,created_at,updated_at,superseded_at,edge_count) VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
 	for rows.Next() {
-		var id, content, mt, ns, cs, us string; var pi, ei, ac int; var ss *string; var imp float64
+		var id, content, mt, ns, cs, us string
+		var pi, ei, ac int
+		var ss *string
+		var imp float64
 		rows.Scan(&id, &content, &mt, &ns, &imp, &ac, &pi, &cs, &us, &ss, &ei)
 		sup := ""
-		if ss != nil { sup = *ss }
+		if ss != nil {
+			sup = *ss
+		}
 		stmt.Exec(id, content, mt, ns, imp, ac, pi, cs, us, sup, ei)
 		count++
 	}
@@ -287,11 +434,15 @@ func (s *Store) ArchiveSuperseded(archivePath string) (int, error) {
 }
 
 func (s *Store) SearchByEntity(name string, limit int) ([]string, error) {
-	if s.graph == nil { return nil, nil }
+	if s.graph == nil {
+		return nil, nil
+	}
 	return s.graph.SearchByEntityName(name, limit)
 }
 func (s *Store) GetRelated(memoryID string, limit int) ([]graph.RelatedMemory, error) {
-	if s.graph == nil { return nil, nil }
+	if s.graph == nil {
+		return nil, nil
+	}
 	return s.graph.FindRelatedMemories(memoryID, limit)
 }
 func (s *Store) IncrementAccessCount(id string) error {
@@ -299,44 +450,79 @@ func (s *Store) IncrementAccessCount(id string) error {
 	return err
 }
 func (s *Store) TraverseGraph(seedNames []string, depth, limit int) ([]graph.TraversalResult, error) {
-	if s.graph == nil { return nil, nil }
+	if s.graph == nil {
+		return nil, nil
+	}
 	return s.graph.Traverse(seedNames, depth, limit)
 }
 func (s *Store) ListEntityNames(limit int) ([]string, error) {
-	if limit <= 0 { limit = 10000 }
+	if limit <= 0 {
+		limit = 10000
+	}
 	rows, err := s.db.Query(`SELECT name FROM entity_nodes ORDER BY access_count DESC LIMIT ?`, limit)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var names []string
-	for rows.Next() { var n string; rows.Scan(&n); names = append(names, n) }
+	for rows.Next() {
+		var n string
+		rows.Scan(&n)
+		names = append(names, n)
+	}
 	return names, nil
 }
 func (s *Store) ListEntities(name, category string, limit int) ([]graph.Entity, error) {
-	if s.graph == nil { return nil, nil }
+	if s.graph == nil {
+		return nil, nil
+	}
 	return s.graph.ListEntities(name, category, limit)
 }
 func (s *Store) FindGraphPath(source, target string, maxDepth int) ([]graph.PathHop, error) {
-	if s.graph == nil { return nil, nil }
+	if s.graph == nil {
+		return nil, nil
+	}
 	return s.graph.FindPath(source, target, maxDepth)
 }
 func (s *Store) RebuildGraph() (graph.RebuildStats, error) {
-	if s.graph == nil { return graph.RebuildStats{}, nil }
+	if s.graph == nil {
+		return graph.RebuildStats{}, nil
+	}
 	return s.graph.RebuildGraph()
 }
 func (s *Store) GetMemoriesByIDs(ids []string) ([]*types.Memory, error) {
-	if len(ids) == 0 { return nil, nil }
+	if len(ids) == 0 {
+		return nil, nil
+	}
 	q := `SELECT id,content,mem_type,namespace,importance,access_count,pinned,created_at,updated_at,superseded_at,edge_count FROM memories WHERE id IN (?` + strings.Repeat(",?", len(ids)-1) + `) AND superseded_at IS NULL`
 	args := make([]any, len(ids))
-	for i, id := range ids { args[i] = id }
+	for i, id := range ids {
+		args[i] = id
+	}
 	rows, err := s.db.Query(q, args...)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var mems []*types.Memory
 	for rows.Next() {
-		m := &types.Memory{}; var mt, cs, us string; var pi, ei int; var ss *string
-		if err := rows.Scan(&m.ID, &m.Content, &mt, &m.Namespace, &m.Importance, &m.AccessCount, &pi, &cs, &us, &ss, &ei); err != nil { return nil, err }
-		m.Type = types.MemoryType(mt); m.Pinned = pi != 0; m.EdgeCount = ei; m.CreatedAt, _ = parseTime(cs); m.UpdatedAt, _ = parseTime(us)
-		if ss != nil { if t, e := parseTime(*ss); e == nil { m.SupersededAt = &t } }
+		m := &types.Memory{}
+		var mt, cs, us string
+		var pi, ei int
+		var ss *string
+		if err := rows.Scan(&m.ID, &m.Content, &mt, &m.Namespace, &m.Importance, &m.AccessCount, &pi, &cs, &us, &ss, &ei); err != nil {
+			return nil, err
+		}
+		m.Type = types.MemoryType(mt)
+		m.Pinned = pi != 0
+		m.EdgeCount = ei
+		m.CreatedAt, _ = parseTime(cs)
+		m.UpdatedAt, _ = parseTime(us)
+		if ss != nil {
+			if t, e := parseTime(*ss); e == nil {
+				m.SupersededAt = &t
+			}
+		}
 		mems = append(mems, m)
 	}
 	return mems, nil
@@ -350,7 +536,12 @@ func (s *Store) Stats() (map[string]any, error) {
 	s.db.QueryRow(`SELECT COUNT(*) FROM memories WHERE superseded_at IS NOT NULL`).Scan(&sup)
 	nsMap, _ := s.ListNamespaces()
 	en, ee := 0, 0
-	if s.graph != nil { if st, e := s.graph.Stats(); e == nil { en = st["entity_nodes"].(int); ee = st["entity_edges"].(int) } }
+	if s.graph != nil {
+		if st, e := s.graph.Stats(); e == nil {
+			en = st["entity_nodes"].(int)
+			ee = st["entity_edges"].(int)
+		}
+	}
 	return map[string]any{
 		"total_memories": t, "superseded": sup, "pinned_memories": p,
 		"vector_indexed": s.hnsw.Size(), "entity_nodes": en, "entity_edges": ee, "namespaces": nsMap,
@@ -364,15 +555,24 @@ func (s *Store) LogCompaction(sessionKey, oldSessionID, newSessionID, summaryID 
 	return err
 }
 
-func (s *Store) Close() error { return s.db.Close() }
-func (s *Store) Ready() bool  { return s.ready }
-func (s *Store) GetDB() *sql.DB       { return s.db }
-func (s *Store) GetHNSW() *index.HNSW { return s.hnsw }
-func (s *Store) GetHNSWPath() string  { return s.hnswPath }
+func (s *Store) Close() error           { return s.db.Close() }
+func (s *Store) Ready() bool            { return s.ready }
+func (s *Store) GetDB() *sql.DB         { return s.db }
+func (s *Store) GetHNSW() *index.HNSW   { return s.hnsw }
+func (s *Store) GetHNSWPath() string    { return s.hnswPath }
 func (s *Store) GetGraph() *graph.Store { return s.graph }
-func boolToInt(b bool) int            { if b { return 1 }; return 0 }
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
 func parseTime(s string) (time.Time, error) {
-	if t, e := time.Parse(time.RFC3339, s); e == nil { return t, nil }
-	if t, e := time.Parse("2006-01-02 15:04:05", s); e == nil { return t, nil }
+	if t, e := time.Parse(time.RFC3339, s); e == nil {
+		return t, nil
+	}
+	if t, e := time.Parse("2006-01-02 15:04:05", s); e == nil {
+		return t, nil
+	}
 	return time.Time{}, fmt.Errorf("bad: %s", s)
 }
