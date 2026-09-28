@@ -2,11 +2,18 @@ package index
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 )
+
+// tmpSeq makes temp file names unique across concurrent saves in one process
+// (pid alone is not enough when two goroutines save the same path at once).
+var tmpSeq uint64
 
 type HNSWConfig struct {
 	M, Mmax, EfConstruction, EfSearch int
@@ -44,6 +51,12 @@ func (h *HNSW) randomLevel() int {
 
 func (h *HNSW) Insert(id string, vec []float32) {
 	h.mu.Lock(); defer h.mu.Unlock()
+	h.insertLocked(id, vec)
+}
+
+// insertLocked adds a node without taking the write mutex; callers must hold
+// h.mu for writing. Behaviour is identical to Insert.
+func (h *HNSW) insertLocked(id string, vec []float32) {
 	if _, exists := h.nodes[id]; exists { return }
 	level := h.randomLevel()
 	h.nodes[id] = &Node{ID: id, Vec: vec, Level: level}
@@ -170,21 +183,114 @@ type hnswData struct {
 	Graph      []map[string]map[string]float64     `json:"g"`
 }
 
+// Save atomically persists the index to path: the payload is marshalled in
+// memory, written to a unique temp file in the same directory, fsync'd and
+// renamed over path, so a concurrent reader always sees either the old or the
+// new index, never a partial one. Writers and readers of the same path are
+// serialised by a cross-process flock (path + ".lock").
 func (h *HNSW) Save(path string) error {
+	lk, err := acquireFileLock(path+lockSuffix, fileLockTimeout)
+	if err != nil { return err }
+	defer lk.release()
+
 	h.mu.RLock(); defer h.mu.RUnlock()
+	return h.saveNoLock(path)
+}
+
+// saveNoLock marshals and atomically writes the index without taking any lock.
+// Callers must hold h.mu for reading and, when another process may touch the
+// same path, the file lock.
+func (h *HNSW) saveNoLock(path string) error {
 	data := hnswData{EntryPoint: h.entryPoint, MaxLevel: h.maxLevel, Config: h.config, Nodes: h.nodes, Graph: h.graph}
 	b, err := json.Marshal(data)
 	if err != nil { return err }
-	return os.WriteFile(path, b, 0644)
+	return atomicWriteFile(path, b)
 }
 
+// atomicWriteFile writes data to a temp file in the same directory, fsyncs it
+// and renames it over path. An existing file's permissions are preserved,
+// otherwise 0644 is used.
+func atomicWriteFile(path string, data []byte) error {
+	mode := os.FileMode(0644)
+	if fi, err := os.Stat(path); err == nil { mode = fi.Mode().Perm() }
+
+	tmp := fmt.Sprintf("%s.tmp-%d-%d", path, os.Getpid(), atomic.AddUint64(&tmpSeq, 1))
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil { return fmt.Errorf("hnsw save: create temp %s: %w", tmp, err) }
+	if _, err := f.Write(data); err != nil {
+		f.Close(); os.Remove(tmp)
+		return fmt.Errorf("hnsw save: write temp %s: %w", tmp, err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close(); os.Remove(tmp)
+		return fmt.Errorf("hnsw save: sync temp %s: %w", tmp, err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("hnsw save: close temp %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("hnsw save: rename %s -> %s: %w", tmp, path, err)
+	}
+	if d, err := os.Open(filepath.Dir(path)); err == nil { d.Sync(); d.Close() } // best-effort directory fsync
+	return nil
+}
+
+// MergeAndSave merges the in-memory index with the on-disk index at path and
+// atomically writes the union back, all under the cross-process lock, so a
+// concurrent writer (e.g. a running gateway) cannot lose vectors. Nodes already
+// on disk keep their stored vectors and graph links; in-memory nodes missing
+// from disk are re-inserted through the normal insert path. It returns the
+// number of nodes recovered from disk and the total number written.
+func (h *HNSW) MergeAndSave(path string) (merged, total int, err error) {
+	lk, err := acquireFileLock(path+lockSuffix, fileLockTimeout)
+	if err != nil { return 0, 0, err }
+	defer lk.release()
+
+	h.mu.RLock()
+	local := make([]*Node, 0, len(h.nodes))
+	for _, n := range h.nodes { local = append(local, &Node{ID: n.ID, Vec: n.Vec, Level: n.Level}) }
+	cfg := h.config
+	h.mu.RUnlock()
+
+	disk := NewHNSW(cfg)
+	if e := disk.loadFromDisk(path); e != nil && !os.IsNotExist(e) { return 0, 0, e }
+
+	diskBefore := len(disk.nodes)
+	skipped := 0
+	for _, n := range local {
+		if _, ok := disk.nodes[n.ID]; ok { skipped++; continue }
+		disk.insertLocked(n.ID, n.Vec)
+	}
+	merged = diskBefore - skipped // nodes on disk that memory did not have
+	if merged < 0 { merged = 0 }
+	total = len(disk.nodes)
+
+	if e := disk.saveNoLock(path); e != nil { return 0, 0, e }
+	return merged, total, nil
+}
+
+// Load reads the index from path under the same cross-process lock as Save, so
+// it never observes a partial write.
 func (h *HNSW) Load(path string) error {
+	lk, err := acquireFileLock(path+lockSuffix, fileLockTimeout)
+	if err != nil { return err }
+	defer lk.release()
+
 	h.mu.Lock(); defer h.mu.Unlock()
+	return h.loadFromDisk(path)
+}
+
+// loadFromDisk reads and installs the on-disk index without taking any lock.
+func (h *HNSW) loadFromDisk(path string) error {
 	b, err := os.ReadFile(path)
 	if err != nil { return err }
 	var data hnswData
 	if err := json.Unmarshal(b, &data); err != nil { return err }
 	h.entryPoint, h.maxLevel, h.config, h.nodes, h.graph = data.EntryPoint, data.MaxLevel, data.Config, data.Nodes, data.Graph
+	if h.nodes == nil { h.nodes = make(map[string]*Node) }
+	if h.graph == nil { h.graph = make([]map[string]map[string]float64, 1); h.graph[0] = make(map[string]map[string]float64) }
 	h.rng = rand.New(rand.NewSource(42))
 	return nil
 }

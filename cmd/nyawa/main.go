@@ -291,8 +291,12 @@ func cmdGraph() {
 }
 
 // cmdReindex embeds every active memory that is missing a vector in the HNSW
-// index and persists the updated index once at the end. Existing vectors are
-// left untouched (HNSW.Contains guards against duplicates).
+// index and persists the updated index. Existing vectors are left untouched
+// (HNSW.Contains guards against duplicates).
+//
+// Persisting goes through HNSW.MergeAndSave: under the cross-process lock it
+// reloads the on-disk index, merges vectors written by a running gateway while
+// the reindex was in flight, and writes the union once, atomically.
 func cmdReindex() {
 	if len(os.Args) < 3 { log.Fatal("usage: nyawa reindex <db>") }
 	emb := getEmbedder(); defer emb.StopAll()
@@ -300,8 +304,10 @@ func cmdReindex() {
 
 	mems, err := s.ListAllMemories()
 	if err != nil { log.Fatalf("list memories: %v", err) }
+	total := len(mems)
 
 	hnsw := s.GetHNSW()
+	before := hnsw.Size()
 	already, reindexed, failed := 0, 0, 0
 	for _, m := range mems {
 		if hnsw.Contains(m.ID) { already++; continue }
@@ -310,8 +316,24 @@ func cmdReindex() {
 		hnsw.Insert(m.ID, v)
 		reindexed++
 	}
+	after := hnsw.Size()
+
 	if reindexed > 0 {
-		if err := hnsw.Save(s.GetHNSWPath()); err != nil { log.Fatalf("persist hnsw: %v", err) }
+		merged, persisted, err := hnsw.MergeAndSave(s.GetHNSWPath())
+		if err != nil { log.Fatalf("persist hnsw: %v", err) }
+		coverage := 0.0
+		if total > 0 { coverage = float64(persisted) / float64(total) * 100 }
+		log.Printf("hnsw merge: persisted %d vectors (%d recovered from disk during reindex, in-memory %d -> %d), coverage %.1f%% of %d active memories",
+			persisted, merged, before, after, coverage, total)
+	} else {
+		log.Printf("hnsw: nothing to reindex, %d vectors in memory (coverage %.1f%% of %d active memories)",
+			before, coveragePct(before, total), total)
 	}
 	fmt.Printf("Reindexed %d memories (%d already indexed, %d failed)\n", reindexed, already, failed)
+}
+
+// coveragePct returns indexed as a percentage of total, or 0 when total is 0.
+func coveragePct(indexed, total int) float64 {
+	if total == 0 { return 0 }
+	return float64(indexed) / float64(total) * 100
 }

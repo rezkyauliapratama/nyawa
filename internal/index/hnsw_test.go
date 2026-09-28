@@ -1,7 +1,12 @@
 package index
 
 import (
+	"encoding/json"
 	"math"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -87,4 +92,233 @@ func TestHNSWManyInserts(t *testing.T) {
 	for j := 0; j < 64; j++ { q[j] = float32(math.Sin(float64(j))) }
 	results := h.Search(q, 5)
 	if len(results) != 5 { t.Errorf("expected 5, got %d", len(results)) }
+}
+
+// --- durability / concurrency tests -----------------------------------------
+
+func newTestIndex(n int) *HNSW {
+	h := NewHNSW(DefaultHNSWConfig(4))
+	for i := 0; i < n; i++ {
+		h.Insert(f("n%d", i), []float32{float32(i), float32(i + 1), float32(i + 2), float32(i + 3)})
+	}
+	return h
+}
+
+func countTempFiles(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	n := 0
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp-") {
+			n++
+		}
+	}
+	return n
+}
+
+// (a) Save then Load round-trips node count and vectors.
+func TestHNSWSaveLoadRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "idx.hnsw")
+	h := newTestIndex(50)
+	if err := h.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	g := NewHNSW(DefaultHNSWConfig(4))
+	if err := g.Load(path); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if g.Size() != h.Size() {
+		t.Fatalf("node count mismatch: saved %d, loaded %d", h.Size(), g.Size())
+	}
+	for id, n := range h.nodes {
+		m, ok := g.nodes[id]
+		if !ok {
+			t.Fatalf("node %s missing after load", id)
+		}
+		if len(m.Vec) != len(n.Vec) {
+			t.Fatalf("node %s vector length mismatch: %d != %d", id, len(m.Vec), len(n.Vec))
+		}
+		for i := range n.Vec {
+			if m.Vec[i] != n.Vec[i] {
+				t.Fatalf("node %s vector[%d] mismatch: %v != %v", id, i, m.Vec[i], n.Vec[i])
+			}
+		}
+	}
+}
+
+// (b) Repeated Save atomically overwrites the previous file: the final file is
+// always valid JSON, permissions are preserved, and no temp files leak.
+func TestHNSWSaveAtomicOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "idx.hnsw")
+
+	h := newTestIndex(5)
+	if err := h.Save(path); err != nil {
+		t.Fatalf("initial save: %v", err)
+	}
+	// Simulate a pre-existing non-default mode that must not be widened.
+	if err := os.Chmod(path, 0640); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	for i := 0; i < 5; i++ {
+		h.Insert(f("extra-%d", i), []float32{float32(i), 0, 0, 1})
+		if err := h.Save(path); err != nil {
+			t.Fatalf("save %d: %v", i, err)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read after save %d: %v", i, err)
+		}
+		var probe map[string]any
+		if err := json.Unmarshal(b, &probe); err != nil {
+			t.Fatalf("file is not valid JSON after save %d: %v", i, err)
+		}
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if fi.Mode().Perm() != 0640 {
+		t.Errorf("permissions changed: got %v, want 0640", fi.Mode().Perm())
+	}
+	if n := countTempFiles(t, dir); n != 0 {
+		t.Errorf("expected no temp files left behind, found %d", n)
+	}
+
+	// The final file must reload to the latest state.
+	g := NewHNSW(DefaultHNSWConfig(4))
+	if err := g.Load(path); err != nil {
+		t.Fatalf("load final: %v", err)
+	}
+	if g.Size() != h.Size() {
+		t.Errorf("final size mismatch: got %d, want %d", g.Size(), h.Size())
+	}
+}
+
+// (c) Concurrent Saves from multiple goroutines to the same path must never
+// produce a corrupt file.
+func TestHNSWConcurrentSaveSamePath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "idx.hnsw")
+
+	h := newTestIndex(200)
+	const writers = 8
+	errs := make([]error, writers)
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = h.Save(path)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("writer %d: %v", i, err)
+		}
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var probe map[string]any
+	if err := json.Unmarshal(b, &probe); err != nil {
+		t.Fatalf("concurrent save produced invalid JSON: %v", err)
+	}
+	g := NewHNSW(DefaultHNSWConfig(4))
+	if err := g.Load(path); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if g.Size() != h.Size() {
+		t.Errorf("size mismatch after concurrent saves: got %d, want %d", g.Size(), h.Size())
+	}
+	if n := countTempFiles(t, dir); n != 0 {
+		t.Errorf("expected no temp files left behind, found %d", n)
+	}
+}
+
+// MergeAndSave must union the in-memory nodes with the on-disk nodes so a
+// concurrent writer's vectors are not lost.
+func TestHNSWMergeAndSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "idx.hnsw")
+
+	// On-disk index as if written by a running gateway.
+	disk := newTestIndex(10)
+	if err := disk.Save(path); err != nil {
+		t.Fatalf("save disk: %v", err)
+	}
+
+	// In-memory index holds a fresh set of vectors plus a shared overlap.
+	mem := NewHNSW(DefaultHNSWConfig(4))
+	for i := 0; i < 10; i++ {
+		mem.Insert(f("n%d", i), []float32{float32(i), float32(i + 1), float32(i + 2), float32(i + 3)})
+	}
+	mem.Insert("fresh-1", []float32{100, 100, 100, 100})
+	mem.Insert("fresh-2", []float32{200, 200, 200, 200})
+
+	merged, total, err := mem.MergeAndSave(path)
+	if err != nil {
+		t.Fatalf("merge and save: %v", err)
+	}
+	if merged != 0 {
+		t.Errorf("expected 0 recovered (disk subset of memory), got %d", merged)
+	}
+	if total != 12 {
+		t.Errorf("expected 12 total vectors, got %d", total)
+	}
+
+	g := NewHNSW(DefaultHNSWConfig(4))
+	if err := g.Load(path); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for _, id := range []string{"fresh-1", "fresh-2", "n0", "n9"} {
+		if !g.Contains(id) {
+			t.Errorf("node %s missing after merge", id)
+		}
+	}
+}
+
+// MergeAndSave must also preserve vectors that exist only on disk (written by
+// another process while this one was working).
+func TestHNSWMergeAndSaveRecoversDiskOnlyNodes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "idx.hnsw")
+
+	disk := newTestIndex(10)
+	disk.Insert("gateway-1", []float32{7, 7, 7, 7})
+	if err := disk.Save(path); err != nil {
+		t.Fatalf("save disk: %v", err)
+	}
+
+	mem := NewHNSW(DefaultHNSWConfig(4))
+	mem.Insert("local-1", []float32{1, 2, 3, 4})
+
+	merged, total, err := mem.MergeAndSave(path)
+	if err != nil {
+		t.Fatalf("merge and save: %v", err)
+	}
+	if merged != 11 {
+		t.Errorf("expected 11 nodes recovered from disk, got %d", merged)
+	}
+	if total != 12 {
+		t.Errorf("expected 12 total vectors, got %d", total)
+	}
+
+	g := NewHNSW(DefaultHNSWConfig(4))
+	if err := g.Load(path); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for _, id := range []string{"local-1", "gateway-1", "n0", "n9"} {
+		if !g.Contains(id) {
+			t.Errorf("node %s missing after merge", id)
+		}
+	}
 }

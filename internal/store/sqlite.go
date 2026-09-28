@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -109,7 +110,23 @@ func (s *Store) CheckpointWAL() (bool, error) {
 	return false, fmt.Errorf("wal checkpoint: %w", err)
 }
 
-func (s *Store) persistHNSW() { s.hnsw.Save(s.hnswPath) }
+// persistHNSW writes the index to disk. Save can fail on cross-process lock
+// contention (e.g. `nyawa reindex` holding the lock) or on a filesystem error;
+// previously that error was silently dropped, so the in-memory index and the
+// file could drift apart unnoticed. Retry briefly and always log the failure.
+func (s *Store) persistHNSW() {
+	const attempts = 3
+	for attempt := 1; ; attempt++ {
+		err := s.hnsw.Save(s.hnswPath)
+		if err == nil { return }
+		if attempt >= attempts {
+			log.Printf("persist hnsw: giving up after %d attempts (path=%s, %d vectors): %v", attempts, s.hnswPath, s.hnsw.Size(), err)
+			return
+		}
+		log.Printf("persist hnsw: attempt %d/%d failed (path=%s): %v — retrying", attempt, attempts, s.hnswPath, err)
+		time.Sleep(time.Duration(attempt) * 250 * time.Millisecond)
+	}
+}
 
 func (s *Store) migrate() error {
 	_, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS memories (
