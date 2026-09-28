@@ -272,10 +272,34 @@ func (s *Server) handleRAGCollectionsByName(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// ragIngestRequest is the JSON body for RAG file ingestion. It accepts both the
+// canonical `file_path` field (used by the dashboard and named in the error
+// message) and the legacy `filepath` spelling that previously worked by
+// accident, so existing clients keep working.
+type ragIngestRequest struct {
+	FilePath    string `json:"file_path"`
+	FilePathAlt string `json:"filepath"`
+	Collection  string `json:"collection"`
+}
+
+func (req *ragIngestRequest) UnmarshalJSON(data []byte) error {
+	// Decode via an alias type so this method is not re-entered.
+	type alias ragIngestRequest
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*req = ragIngestRequest(a)
+	if req.FilePath == "" {
+		req.FilePath = req.FilePathAlt
+	}
+	return nil
+}
+
 func (s *Server) handleRAGIngest(w http.ResponseWriter, r *http.Request) {
 	if s.ragStore == nil { writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "RAG not available"}); return }
 	if r.Method != http.MethodPost { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "use POST"}); return }
-	var req struct{ FilePath, Collection string }
+	var req ragIngestRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"}); return }
 	if req.FilePath == "" || req.Collection == "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "file_path and collection required"}); return }
 	doc, err := s.ragStore.IngestFile(req.FilePath, req.Collection, nil)
