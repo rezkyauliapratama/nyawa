@@ -1,5 +1,5 @@
 # Binaries
-nyawa
+/nyawa
 nyawa.exe
 nyawa-*
 
@@ -8,6 +8,8 @@ nyawa-*
 *.db-wal
 *.db-shm
 *.db.hnsw
+*.db.hnsw.lock
+*.db.hnsw.tmp-*
 
 # Cache
 /tmp/gocache/
