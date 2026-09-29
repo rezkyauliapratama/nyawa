@@ -20,8 +20,7 @@ class BgeEmbedder:
 		self.session = onnxruntime.InferenceSession(model_path, opts)
 		self.input_names = {i.name for i in self.session.get_inputs()}
 		self.tokenizer = Tokenizer.from_file(tok_path)
-		self.tokenizer.enable_padding(pad_id=0, pad_token="[PAD]", length=128)
-		self.tokenizer.enable_truncation(max_length=128)
+		self.tokenizer.enable_truncation(max_length=256)
 		self.dim = self.session.get_outputs()[0].shape[-1] or 384
 		print(f"Model loaded: dim={self.dim}", file=sys.stderr)
 	def embed(self, text):
