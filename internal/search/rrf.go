@@ -35,11 +35,17 @@ func (r *RRF) Fuse(vectorIDs, fts5IDs []string) []FusionResult {
 		} else { seen[id].FTS5Rank = rank + 1 }
 	}
 	results := make([]FusionResult, 0, len(seen))
+	// Normalise the fused score to [0,1]: 2/(k+1) is the maximum possible RRF
+	// score (rank 1 in both lists). Without this the raw RRF score tops out at
+	// ~2/(k+1) ~= 0.033, which is smaller than any single recency/importance/
+	// graph boost added later, so a weakly-relevant but "important" memory
+	// outranks the true nearest neighbour.
+	norm := 2.0 / float64(r.k+1)
 	for _, fr := range seen {
 		rrfScore := 0.0
 		if fr.VectorRank < math.MaxInt32 { rrfScore += 1.0 / float64(r.k+fr.VectorRank) }
 		if fr.FTS5Rank < math.MaxInt32 { rrfScore += 1.0 / float64(r.k+fr.FTS5Rank) }
-		fr.Score = rrfScore
+		fr.Score = rrfScore / norm
 		results = append(results, *fr)
 	}
 	sort.Slice(results, func(i, j int) bool { return results[i].Score > results[j].Score })

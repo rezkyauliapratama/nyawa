@@ -171,8 +171,12 @@ func (p *Pipeline) mergeGraphResults(q types.StoreQuery, results []*types.Memory
 	}
 	// Build score map for graph traversal results
 	graphScoreMap := make(map[string]float64, len(graphResults))
+	maxGraphScore := 0.0
 	for _, gr := range graphResults {
 		graphScoreMap[gr.MemoryID] = gr.Score
+		if gr.Score > maxGraphScore {
+			maxGraphScore = gr.Score
+		}
 	}
 	// Index existing RRF results
 	existingMap := make(map[string]*types.MemoryResult, len(results))
@@ -196,7 +200,14 @@ func (p *Pipeline) mergeGraphResults(q types.StoreQuery, results []*types.Memory
 				if mem == nil {
 					continue
 				}
-				graphScore := graphScoreMap[mem.ID] * 0.1
+				// Graph traversal scores are unbounded sums over paths, so the
+				// documented 0.1 injection weight assumed a [0,1] score. Normalise
+				// to the best graph hit first, otherwise a graph-only memory can
+				// get a score (e.g. 0.5+) that dwarfs every RRF-ranked result.
+				graphScore := 0.0
+				if maxGraphScore > 0 {
+					graphScore = graphScoreMap[mem.ID] / maxGraphScore * 0.1
+				}
 				r := p.resultPool.Get()
 				r.Memory = *mem
 				r.RRFScore = 0

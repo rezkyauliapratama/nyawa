@@ -70,6 +70,80 @@ func TestHNSWEmptySearch(t *testing.T) {
 	if len(results) != 0 { t.Errorf("empty index should return 0 results, got %d", len(results)) }
 }
 
+// A node that has outgoing edges but no incoming edge at layer 0 is invisible to
+// Search, which only walks edges forward from the entry point. A persisted index
+// can contain such nodes after pruning drops their reverse links. Load must
+// restore reciprocity so a nearest neighbour that is stored is still returned.
+func TestHNSWLoadRestoresReachability(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "idx.hnsw")
+
+	h := NewHNSW(HNSWConfig{M: 2, Mmax: 2, EfConstruction: 10, EfSearch: 10, ML: 0.5, Dim: 2})
+	// Triangle a->b->c->a plus "d" pointing at "a" with no edge back to "d":
+	// "d" has out-degree 1 and in-degree 0, so it is unreachable from entry "a".
+	h.nodes = map[string]*Node{
+		"a": {ID: "a", Vec: []float32{1, 0}, Level: 0},
+		"b": {ID: "b", Vec: []float32{0, 1}, Level: 0},
+		"c": {ID: "c", Vec: []float32{1, 1}, Level: 0},
+		"d": {ID: "d", Vec: []float32{0.99, 0.01}, Level: 0},
+	}
+	h.graph = []map[string]map[string]float64{{
+		"a": {"b": 1}, "b": {"c": 1}, "c": {"a": 1}, "d": {"a": 0.02},
+	}}
+	h.entryPoint = "a"
+	h.maxLevel = 0
+
+	if err := h.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	g := NewHNSW(h.config)
+	if err := g.Load(path); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// "d" is the closest vector to the query, so it must come back first.
+	res := g.Search([]float32{0.99, 0.01}, 4)
+	if len(res) == 0 || res[0].ID != "d" {
+		t.Fatalf("expected nearest node 'd' to be searched after load, got %v", resultIDs(res))
+	}
+	if len(res) != 4 {
+		t.Errorf("expected all 4 nodes reachable after load, got %d", len(res))
+	}
+}
+
+// Inserting a node whose neighbours are full must still leave it with an
+// incoming edge, otherwise it is dropped from every future Search.
+func TestHNSWInsertLeavesIncomingEdge(t *testing.T) {
+	h := NewHNSW(DefaultHNSWConfig(4))
+	for i := 0; i < 200; i++ {
+		h.Insert(f("c%d", i), []float32{float32(i%7), float32(i%5), float32(i%3), float32(i%11)})
+	}
+	h.Insert("needle", []float32{9, 9, 9, 9})
+
+	indeg := make(map[string]int, len(h.nodes))
+	for _, neighbours := range h.graph[0] {
+		for dst := range neighbours {
+			indeg[dst]++
+		}
+	}
+	for id := range h.nodes {
+		if indeg[id] == 0 {
+			t.Errorf("node %s has no incoming layer-0 edge, it can never be returned by Search", id)
+		}
+	}
+	res := h.Search([]float32{9, 9, 9, 9}, 3)
+	if len(res) == 0 || res[0].ID != "needle" {
+		t.Fatalf("expected 'needle' first, got %v", resultIDs(res))
+	}
+}
+
+func resultIDs(res []SearchResult) []string {
+	out := make([]string, len(res))
+	for i, r := range res {
+		out[i] = r.ID
+	}
+	return out
+}
+
 func TestHNSWSimilarity(t *testing.T) {
 	h := NewHNSW(DefaultHNSWConfig(3))
 	h.Insert("A", []float32{1, 0, 0}); h.Insert("B", []float32{0.95, 0.1, 0})
