@@ -77,6 +77,18 @@ func (h *HNSW) insertLocked(id string, vec []float32) {
 			h.graph[l][nID][id] = h.distance(h.nodes[nID].Vec, vec)
 			if len(h.graph[l][nID]) > h.config.Mmax { h.pruneNeighbors(l, nID) }
 		}
+		// pruneNeighbors above can drop every reverse edge to the new node when
+		// each neighbour is already full, leaving id with no incoming links. Such
+		// a node is unreachable by Search, which only follows edges forward from
+		// the entry point, so re-assert one inbound link from the nearest thing
+		// the search found (candidates[0] is the closest at this layer).
+		nearest := candidates[0]
+		if nearest != id {
+			if h.graph[l][nearest] == nil {
+				h.graph[l][nearest] = make(map[string]float64)
+			}
+			h.graph[l][nearest][id] = h.distance(h.nodes[nearest].Vec, vec)
+		}
 		if len(h.graph[l][id]) > h.config.Mmax { h.pruneNeighbors(l, id) }
 		curr = candidates[0]
 	}
@@ -291,8 +303,41 @@ func (h *HNSW) loadFromDisk(path string) error {
 	h.entryPoint, h.maxLevel, h.config, h.nodes, h.graph = data.EntryPoint, data.MaxLevel, data.Config, data.Nodes, data.Graph
 	if h.nodes == nil { h.nodes = make(map[string]*Node) }
 	if h.graph == nil { h.graph = make([]map[string]map[string]float64, 1); h.graph[0] = make(map[string]map[string]float64) }
+	h.symmetrizeLocked()
 	h.rng = rand.New(rand.NewSource(42))
 	return nil
+}
+
+// symmetrizeLocked restores reciprocity on every layer: for each edge a->b it
+// adds the missing reverse edge b->a. HNSW links are conceptually undirected,
+// but pruning while inserting can drop the reverse half, and an on-disk index
+// that accumulated such drops contains nodes with no incoming links at layer 0.
+// Search only walks edges forward from the entry point, so those nodes are
+// invisible to it even when they hold the closest vector. Making the graph
+// symmetric guarantees every stored node is reachable. Callers must hold h.mu.
+func (h *HNSW) symmetrizeLocked() {
+	type edge struct {
+		src, dst string
+		d        float64
+	}
+	for _, layer := range h.graph {
+		var missing []edge
+		for src, neighbours := range layer {
+			for dst, d := range neighbours {
+				if rev, ok := layer[dst]; !ok || rev == nil {
+					missing = append(missing, edge{src, dst, d})
+				} else if _, ok := rev[src]; !ok {
+					missing = append(missing, edge{src, dst, d})
+				}
+			}
+		}
+		for _, e := range missing {
+			if layer[e.dst] == nil {
+				layer[e.dst] = make(map[string]float64)
+			}
+			layer[e.dst][e.src] = e.d
+		}
+	}
 }
 
 type candidate struct{ id string; dist float64 }
