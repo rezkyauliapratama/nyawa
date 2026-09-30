@@ -242,7 +242,11 @@ func (s *Server) handleToolCall(req jsonRPCRequest) {
 	}
 }
 
-type storeArgs struct{ Content, Namespace, Type string }
+type storeArgs struct {
+	Content   string `json:"content"`
+	Namespace string `json:"namespace"`
+	Type      string `json:"type"`
+}
 
 func (s *Server) handleStore(id any, raw json.RawMessage) {
 	var args storeArgs
@@ -271,8 +275,9 @@ func (s *Server) handleStore(id any, raw json.RawMessage) {
 }
 
 type recallArgs struct {
-	Query, Namespace string
-	Limit            float64
+	Query     string  `json:"query"`
+	Namespace string  `json:"namespace"`
+	Limit     float64 `json:"limit"`
 }
 
 func (s *Server) handleRecall(id any, raw json.RawMessage) {
@@ -309,8 +314,10 @@ func (s *Server) handleRecall(id any, raw json.RawMessage) {
 }
 
 type listArgs struct {
-	Namespace, Type, Order string
-	Limit                  float64
+	Namespace string  `json:"namespace"`
+	Type      string  `json:"type"`
+	Order     string  `json:"order"`
+	Limit     float64 `json:"limit"`
 }
 
 func (s *Server) handleList(id any, raw json.RawMessage) {
@@ -353,7 +360,9 @@ func (s *Server) handleStats(id any) {
 	s.writeToolResult(id, stats)
 }
 
-type forgetArgs struct{ ID string }
+type forgetArgs struct {
+	ID string `json:"id"`
+}
 
 func (s *Server) handleForget(id any, raw json.RawMessage) {
 	var args forgetArgs
@@ -374,9 +383,19 @@ func (s *Server) handleForget(id any, raw json.RawMessage) {
 
 // ─── RAG tool implementations ──────────────────────
 
+// ChunkSize is the canonical schema property (chunk_size); ChunkSizeLegacy
+// keeps the pre-v1.2.0 camelCase spelling working for existing clients.
 type ragCreateCollectionArgs struct {
-	Name, Description string
-	ChunkSize         float64
+	Name            string  `json:"name"`
+	Description     string  `json:"description"`
+	ChunkSize       float64 `json:"chunk_size"`
+	ChunkSizeLegacy float64 `json:"chunkSize"`
+}
+
+func (a *ragCreateCollectionArgs) resolve() {
+	if a.ChunkSize <= 0 {
+		a.ChunkSize = a.ChunkSizeLegacy
+	}
 }
 
 func (s *Server) handleRAGCreateCollection(id any, raw json.RawMessage) {
@@ -389,6 +408,7 @@ func (s *Server) handleRAGCreateCollection(id any, raw json.RawMessage) {
 		s.writeError(id, -32602, "name required")
 		return
 	}
+	args.resolve()
 	chunkSize := int(args.ChunkSize)
 	if chunkSize <= 0 {
 		chunkSize = 500
@@ -416,7 +436,9 @@ func (s *Server) handleRAGListCollections(id any) {
 	s.writeToolResult(id, map[string]any{"collections": cols, "count": len(cols)})
 }
 
-type ragDeleteCollectionArgs struct{ Name string }
+type ragDeleteCollectionArgs struct {
+	Name string `json:"name"`
+}
 
 func (s *Server) handleRAGDeleteCollection(id any, raw json.RawMessage) {
 	var args ragDeleteCollectionArgs
@@ -436,7 +458,20 @@ func (s *Server) handleRAGDeleteCollection(id any, raw json.RawMessage) {
 	s.writeToolResult(id, delResult{Name: args.Name, Status: "deleted"})
 }
 
-type ragIngestFileArgs struct{ FilePath, Collection string }
+// FilePath is the canonical schema property (file_path); FilePathLegacy keeps
+// the pre-v1.2.0 single-word spelling ("filepath") working for existing
+// clients, including the documented manual workaround.
+type ragIngestFileArgs struct {
+	FilePath       string `json:"file_path"`
+	Collection     string `json:"collection"`
+	FilePathLegacy string `json:"filepath"`
+}
+
+func (a *ragIngestFileArgs) resolve() {
+	if a.FilePath == "" {
+		a.FilePath = a.FilePathLegacy
+	}
+}
 
 func (s *Server) handleRAGIngestFile(id any, raw json.RawMessage) {
 	var args ragIngestFileArgs
@@ -444,6 +479,7 @@ func (s *Server) handleRAGIngestFile(id any, raw json.RawMessage) {
 		s.writeError(id, -32602, "Invalid arguments")
 		return
 	}
+	args.resolve()
 	if args.FilePath == "" {
 		s.writeError(id, -32602, "file_path required")
 		return
@@ -465,9 +501,19 @@ func (s *Server) handleRAGIngestFile(id any, raw json.RawMessage) {
 		ChunkCount: doc.ChunkCount, SourceType: doc.SourceType, Status: "ingested"})
 }
 
+// TopK is the canonical schema property (top_k); TopKLegacy keeps the
+// pre-v1.2.0 camelCase spelling ("topK") working for existing clients.
 type ragQueryArgs struct {
-	Query, Collection string
-	TopK              float64
+	Query      string  `json:"query"`
+	Collection string  `json:"collection"`
+	TopK       float64 `json:"top_k"`
+	TopKLegacy float64 `json:"topK"`
+}
+
+func (a *ragQueryArgs) resolve() {
+	if a.TopK <= 0 {
+		a.TopK = a.TopKLegacy
+	}
 }
 
 func (s *Server) handleRAGQuery(id any, raw json.RawMessage) {
@@ -476,6 +522,7 @@ func (s *Server) handleRAGQuery(id any, raw json.RawMessage) {
 		s.writeError(id, -32602, "Invalid arguments")
 		return
 	}
+	args.resolve()
 	if args.Query == "" {
 		s.writeError(id, -32602, "query required")
 		return
@@ -515,8 +562,9 @@ func (s *Server) writeError(id any, code int, message string) {
 // ─── Graph tool implementations ──────────────────
 
 type graphQueryArgs struct {
-	Query        string
-	Depth, Limit float64
+	Query string  `json:"query"`
+	Depth float64 `json:"depth"`
+	Limit float64 `json:"limit"`
 }
 
 func (s *Server) handleGraphQuery(id any, raw json.RawMessage) {
@@ -556,8 +604,9 @@ func (s *Server) handleGraphQuery(id any, raw json.RawMessage) {
 }
 
 type graphEntitiesArgs struct {
-	Name, Category string
-	Limit          float64
+	Name     string  `json:"name"`
+	Category string  `json:"category"`
+	Limit    float64 `json:"limit"`
 }
 
 func (s *Server) handleGraphEntities(id any, raw json.RawMessage) {
@@ -582,9 +631,19 @@ func (s *Server) handleGraphEntities(id any, raw json.RawMessage) {
 	s.writeToolResult(id, map[string]any{"entities": entities, "count": len(entities)})
 }
 
+// MaxDepth is the canonical schema property (max_depth); MaxDepthLegacy keeps
+// the pre-v1.2.0 camelCase spelling ("maxDepth") working for existing clients.
 type graphPathArgs struct {
-	Source, Target string
-	MaxDepth       float64
+	Source         string  `json:"source"`
+	Target         string  `json:"target"`
+	MaxDepth       float64 `json:"max_depth"`
+	MaxDepthLegacy float64 `json:"maxDepth"`
+}
+
+func (a *graphPathArgs) resolve() {
+	if a.MaxDepth <= 0 {
+		a.MaxDepth = a.MaxDepthLegacy
+	}
 }
 
 func (s *Server) handleGraphPath(id any, raw json.RawMessage) {
@@ -593,6 +652,7 @@ func (s *Server) handleGraphPath(id any, raw json.RawMessage) {
 		s.writeError(id, -32602, "Invalid arguments")
 		return
 	}
+	args.resolve()
 	if args.Source == "" || args.Target == "" {
 		s.writeError(id, -32602, "source and target required")
 		return
