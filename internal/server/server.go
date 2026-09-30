@@ -15,6 +15,7 @@ import (
 	"github.com/rezkyauliapratama/nyawa/internal/security"
 	"github.com/rezkyauliapratama/nyawa/internal/store"
 	"github.com/rezkyauliapratama/nyawa/internal/types"
+	"github.com/rezkyauliapratama/nyawa/internal/version"
 )
 
 type Server struct {
@@ -97,7 +98,7 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" { writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"}); return }
-	writeJSON(w, http.StatusOK, map[string]string{"service": "nyawa", "version": "0.1.0", "status": "running"})
+	writeJSON(w, http.StatusOK, map[string]string{"service": "nyawa", "version": version.Version, "status": "running"})
 }
 
 func (s *Server) handleMemories(w http.ResponseWriter, r *http.Request) {
@@ -196,13 +197,13 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"}); return }
 	storeStats, err := s.store.Stats()
 	if err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "stats failed"}); return }
-	writeJSON(w, http.StatusOK, map[string]any{"store": storeStats, "version": "0.1.0"})
+	writeJSON(w, http.StatusOK, map[string]any{"store": storeStats, "version": version.Version})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusOK; statusText := "healthy"
 	if !s.store.Ready() { status = http.StatusServiceUnavailable; statusText = "degraded" }
-	writeJSON(w, status, map[string]any{"status": statusText, "version": "0.1.0"})
+	writeJSON(w, status, map[string]any{"status": statusText, "version": version.Version})
 }
 
 func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {

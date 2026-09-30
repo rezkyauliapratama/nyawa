@@ -17,6 +17,7 @@ import (
 	"github.com/rezkyauliapratama/nyawa/internal/search"
 	"github.com/rezkyauliapratama/nyawa/internal/store"
 	"github.com/rezkyauliapratama/nyawa/internal/types"
+	"github.com/rezkyauliapratama/nyawa/internal/version"
 )
 
 type Server struct {
@@ -187,7 +188,7 @@ func (s *Server) handleInitialize(req jsonRPCRequest) {
 	s.writeResult(req.ID, map[string]any{
 		"protocolVersion": "2025-03-26",
 		"capabilities":    map[string]any{"tools": map[string]bool{"listChanged": false}},
-		"serverInfo":      map[string]string{"name": "nyawa", "version": "0.9.0"},
+		"serverInfo":      map[string]string{"name": "nyawa", "version": version.Version},
 	})
 }
 
