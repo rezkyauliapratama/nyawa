@@ -2,6 +2,8 @@ package types
 
 import (
 	"encoding/json"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -94,11 +96,37 @@ func (r *MemoryResult) Reset() {
 }
 
 type StoreQuery struct {
-	QueryText  string     `json:"query"`
-	Namespace  string     `json:"namespace,omitempty"`
-	Limit      int        `json:"limit,omitempty"`
-	TimeTravel *time.Time `json:"time_travel,omitempty"`
-	MinScore   float64    `json:"min_score,omitempty"`
+	QueryText    string     `json:"query"`
+	Namespace    string     `json:"namespace,omitempty"`
+	Limit        int        `json:"limit,omitempty"`
+	TimeTravel   *time.Time `json:"time_travel,omitempty"`
+	MinScore     float64    `json:"min_score,omitempty"`
+	ExcludeTypes []string   `json:"exclude_types,omitempty"`
+}
+
+// CacheKey identifies a fully-resolved query. Every field that changes the
+// result set must take part, otherwise a filtered query can be served from the
+// cache entry of an unfiltered one (and vice versa).
+func (q StoreQuery) CacheKey() string {
+	var b strings.Builder
+	b.WriteString(q.QueryText)
+	b.WriteByte(0)
+	b.WriteString(q.Namespace)
+	b.WriteByte(0)
+	b.WriteString(strconv.Itoa(q.Limit))
+	if q.MinScore > 0 {
+		b.WriteByte(0)
+		b.WriteString(strconv.FormatFloat(q.MinScore, 'g', -1, 64))
+	}
+	if len(q.ExcludeTypes) > 0 {
+		b.WriteByte(0)
+		b.WriteString(strings.Join(q.ExcludeTypes, ","))
+	}
+	if q.TimeTravel != nil {
+		b.WriteByte(0)
+		b.WriteString(q.TimeTravel.UTC().Format(time.RFC3339Nano))
+	}
+	return b.String()
 }
 
 const DefaultQueryLimit = 20

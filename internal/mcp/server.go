@@ -68,9 +68,10 @@ type inputSchema struct {
 	Required   []string                  `json:"required,omitempty"`
 }
 type propertySchema struct {
-	Type        string   `json:"type"`
-	Description string   `json:"description,omitempty"`
-	Enum        []string `json:"enum,omitempty"`
+	Type        string          `json:"type"`
+	Description string          `json:"description,omitempty"`
+	Enum        []string        `json:"enum,omitempty"`
+	Items       *propertySchema `json:"items,omitempty"`
 }
 
 func (s *Server) tools() []toolDefinition {
@@ -82,7 +83,11 @@ func (s *Server) tools() []toolDefinition {
 			}, Required: []string{"content"}}},
 		{Name: "nyawa_recall", Description: "Semantic search across memories.",
 			InputSchema: inputSchema{Type: "object", Properties: map[string]propertySchema{
-				"query": {Type: "string"}, "namespace": {Type: "string"}, "limit": {Type: "number"},
+				"query":         {Type: "string"},
+				"namespace":     {Type: "string"},
+				"limit":         {Type: "number", Description: "Max results after filtering (default 10)."},
+				"min_score":     {Type: "number", Description: "Drop results scoring below this threshold; 0 disables."},
+				"exclude_types": {Type: "array", Items: &propertySchema{Type: "string"}, Description: "Memory types to omit, e.g. [\"note\",\"conversation\"]."},
 			}, Required: []string{"query"}}},
 		{Name: "nyawa_stats", Description: "Memory statistics.",
 			InputSchema: inputSchema{Type: "object", Properties: map[string]propertySchema{}}},
@@ -276,9 +281,11 @@ func (s *Server) handleStore(id any, raw json.RawMessage) {
 }
 
 type recallArgs struct {
-	Query     string  `json:"query"`
-	Namespace string  `json:"namespace"`
-	Limit     float64 `json:"limit"`
+	Query        string   `json:"query"`
+	Namespace    string   `json:"namespace"`
+	Limit        float64  `json:"limit"`
+	MinScore     float64  `json:"min_score"`
+	ExcludeTypes []string `json:"exclude_types"`
 }
 
 func (s *Server) handleRecall(id any, raw json.RawMessage) {
@@ -295,7 +302,13 @@ func (s *Server) handleRecall(id any, raw json.RawMessage) {
 	if limit <= 0 {
 		limit = 10
 	}
-	q := types.StoreQuery{QueryText: args.Query, Namespace: args.Namespace, Limit: limit}
+	q := types.StoreQuery{
+		QueryText:    args.Query,
+		Namespace:    args.Namespace,
+		Limit:        limit,
+		MinScore:     args.MinScore,
+		ExcludeTypes: args.ExcludeTypes,
+	}
 	results, err := s.pipeline.Search(q)
 	if err != nil {
 		s.writeError(id, -32603, fmt.Sprintf("search failed: %v", err))

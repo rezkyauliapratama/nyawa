@@ -176,13 +176,23 @@ func (s *Server) handleMemoryByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// recallRequest binds POST /v1/recall. The keys are the canonical snake_case
+// spellings also declared by the MCP nyawa_recall tool and the README.
+type recallRequest struct {
+	Query        string   `json:"query"`
+	Namespace    string   `json:"namespace"`
+	Limit        int      `json:"limit"`
+	MinScore     float64  `json:"min_score"`
+	ExcludeTypes []string `json:"exclude_types"`
+}
+
 func (s *Server) handleRecall(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"}); return }
-	var req struct{ Query, Namespace string; Limit int }
+	var req recallRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"}); return }
 	if req.Query == "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "query required"}); return }
 	if req.Limit <= 0 { req.Limit = 10 }
-	results, err := s.pipeline.Search(types.StoreQuery{QueryText: req.Query, Namespace: req.Namespace, Limit: req.Limit})
+	results, err := s.pipeline.Search(types.StoreQuery{QueryText: req.Query, Namespace: req.Namespace, Limit: req.Limit, MinScore: req.MinScore, ExcludeTypes: req.ExcludeTypes})
 	if err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "search failed"}); return }
 	defer s.pipeline.ReleaseResults(results)
 	type item struct{ ID, Content, Type string; Score, RRFScore, TemporalBoost, ImportanceBoost float64; Rank int; Pinned bool; CreatedAt string }
