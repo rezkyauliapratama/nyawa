@@ -244,6 +244,53 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 // ─── RAG Handlers ──────────────────────────────────────────
 
+// createCollectionRequest binds POST /v1/rag/collections. ChunkSize is the
+// canonical key (chunk_size, as sent by the dashboard); ChunkSizeLegacy keeps
+// the pre-v1.2.0 camelCase spelling working for existing clients.
+type createCollectionRequest struct {
+	Name            string `json:"name"`
+	Description     string `json:"description"`
+	ChunkSize       int    `json:"chunk_size"`
+	ChunkSizeLegacy int    `json:"chunkSize"`
+}
+
+func (r *createCollectionRequest) resolve() {
+	if r.ChunkSize <= 0 {
+		r.ChunkSize = r.ChunkSizeLegacy
+	}
+}
+
+// ragIngestRequest binds POST /v1/rag/ingest. FilePath is the canonical key
+// (file_path); FilePathLegacy keeps the pre-v1.2.0 single-word spelling
+// ("filepath") working for existing clients.
+type ragIngestRequest struct {
+	FilePath       string `json:"file_path"`
+	Collection     string `json:"collection"`
+	FilePathLegacy string `json:"filepath"`
+}
+
+func (r *ragIngestRequest) resolve() {
+	if r.FilePath == "" {
+		r.FilePath = r.FilePathLegacy
+	}
+}
+
+// ragQueryRequest binds POST /v1/rag/query. TopK is the canonical key
+// (top_k); TopKLegacy keeps the pre-v1.2.0 camelCase spelling ("topK")
+// working for existing clients.
+type ragQueryRequest struct {
+	Query      string `json:"query"`
+	Collection string `json:"collection"`
+	TopK       int    `json:"top_k"`
+	TopKLegacy int    `json:"topK"`
+}
+
+func (r *ragQueryRequest) resolve() {
+	if r.TopK <= 0 {
+		r.TopK = r.TopKLegacy
+	}
+}
+
 func (s *Server) handleRAGCollections(w http.ResponseWriter, r *http.Request) {
 	if s.ragStore == nil { writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "RAG not available"}); return }
 	switch r.Method {
@@ -253,9 +300,10 @@ func (s *Server) handleRAGCollections(w http.ResponseWriter, r *http.Request) {
 		if cols == nil { cols = []rag.Collection{} }
 		writeJSON(w, http.StatusOK, map[string]any{"collections": cols})
 	case http.MethodPost:
-		var req struct{ Name, Description string; ChunkSize int }
+		var req createCollectionRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"}); return }
 		if req.Name == "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name required"}); return }
+		req.resolve()
 		col, err := s.ragStore.CreateCollection(req.Name, req.Description, req.ChunkSize)
 		if err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()}); return }
 		writeJSON(w, http.StatusCreated, col)
@@ -275,8 +323,9 @@ func (s *Server) handleRAGCollectionsByName(w http.ResponseWriter, r *http.Reque
 func (s *Server) handleRAGIngest(w http.ResponseWriter, r *http.Request) {
 	if s.ragStore == nil { writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "RAG not available"}); return }
 	if r.Method != http.MethodPost { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "use POST"}); return }
-	var req struct{ FilePath, Collection string }
+	var req ragIngestRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"}); return }
+	req.resolve()
 	if req.FilePath == "" || req.Collection == "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "file_path and collection required"}); return }
 	doc, err := s.ragStore.IngestFile(req.FilePath, req.Collection, nil)
 	if err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()}); return }
@@ -286,9 +335,10 @@ func (s *Server) handleRAGIngest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRAGQuery(w http.ResponseWriter, r *http.Request) {
 	if s.ragStore == nil { writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "RAG not available"}); return }
 	if r.Method != http.MethodPost { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "use POST"}); return }
-	var req struct{ Query, Collection string; TopK int }
+	var req ragQueryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"}); return }
 	if req.Query == "" { writeJSON(w, http.StatusBadRequest, map[string]string{"error": "query required"}); return }
+	req.resolve()
 	if req.TopK <= 0 { req.TopK = 5 }
 	results, err := s.ragStore.Query(req.Query, req.TopK, req.Collection)
 	if err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()}); return }

@@ -275,7 +275,8 @@ curl -X POST http://localhost:3300/v1/rag/collections \
 
 # 2. Ingest documents (txt, md, json, csv)
 curl -X POST http://localhost:3300/v1/rag/ingest \
-  -F "collection=my-docs" -F "file=@./document.md"
+  -H "Content-Type: application/json" \
+  -d '{"file_path":"./document.md","collection":"my-docs"}'
 
 # 3. Query your documents
 curl -X POST http://localhost:3300/v1/rag/query \
@@ -526,8 +527,8 @@ GET    /v1/graph/path?source=...&target=...       Find path between two entities
 GET    /v1/rag/collections      List collections
 POST   /v1/rag/collections      Create collection
 DELETE /v1/rag/collections/:name  Delete collection
-POST   /v1/rag/ingest           Ingest file into collection
-POST   /v1/rag/query            Query RAG collection
+POST   /v1/rag/ingest           Ingest file into collection (JSON: {"file_path": "...", "collection": "..."})
+POST   /v1/rag/query            Query RAG collection (JSON: {"query": "...", "collection": "...", "top_k": 5})
 GET    /v1/rag/stats            RAG statistics
 ```
 
