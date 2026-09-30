@@ -276,6 +276,36 @@ func (p *PythonEmbedder) Name() string    { return "bge-small" }
 func (p *PythonEmbedder) Dims() int       { return p.dim }
 func (p *PythonEmbedder) Available() bool { return p.ready }
 
+// Default model locations, in priority order. embedModelDirDefault lives on the
+// persistent volume so it survives container recreation; the legacy entry is the
+// original in-repo path and remains as a fallback for other deployments.
+const (
+	embedModelDirDefault = "/opt/data/bge-models/minilm-multilingual"
+	embedModelDirLegacy  = "/opt/data/nyawa/internal/embedder/model"
+)
+
+// embedModelDirs is a var so tests can substitute their own candidates.
+var embedModelDirs = []string{embedModelDirDefault, embedModelDirLegacy}
+
+// DefaultModelDir resolves which BGE model directory to use: the
+// NYAWA_EMBED_MODEL_DIR override wins, then the first candidate that exists on
+// disk. It returns the chosen path plus a short label for logging.
+func DefaultModelDir() (string, string) {
+	return resolveModelDir(os.Getenv, os.Stat)
+}
+
+func resolveModelDir(getenv func(string) string, stat func(string) (os.FileInfo, error)) (path, source string) {
+	if d := strings.TrimSpace(getenv("NYAWA_EMBED_MODEL_DIR")); d != "" {
+		return d, "env:NYAWA_EMBED_MODEL_DIR"
+	}
+	for _, c := range embedModelDirs {
+		if _, err := stat(c); err == nil {
+			return c, "default"
+		}
+	}
+	return embedModelDirs[0], "default(missing)"
+}
+
 func findScriptPath() string {
 	candidates := []string{"internal/embedder/bge_server.py", "/opt/data/nyawa/internal/embedder/bge_server.py"}
 	for _, c := range candidates {
@@ -286,8 +316,22 @@ func findScriptPath() string {
 	return ""
 }
 
+// embedPythonCandidates are probed in order for an interpreter that can import
+// onnxruntime+numpy. The venv under /opt/data lives on a persistent volume, so
+// it survives container recreation (unlike the image's own venv); the rest are
+// the original fallbacks. NYAWA_EMBED_PYTHON overrides the whole list.
+var embedPythonCandidates = []string{
+	"/opt/data/bge-venv/bin/python3",
+	"/opt/hermes/.venv/bin/python3",
+	"/usr/bin/python3",
+	"python3",
+}
+
 func findPythonPath() string {
-	candidates := []string{"/opt/hermes/.venv/bin/python3", "/usr/bin/python3", "python3"}
+	candidates := embedPythonCandidates
+	if p := strings.TrimSpace(os.Getenv("NYAWA_EMBED_PYTHON")); p != "" {
+		candidates = append([]string{p}, candidates...)
+	}
 	for _, c := range candidates {
 		cmd := exec.Command(c, "-c", "import onnxruntime, numpy; print('ok')")
 		if out, err := cmd.Output(); err == nil && strings.TrimSpace(string(out)) == "ok" {
