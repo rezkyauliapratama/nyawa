@@ -17,6 +17,7 @@ import (
 	"github.com/rezkyauliapratama/nyawa/internal/server"
 	"github.com/rezkyauliapratama/nyawa/internal/store"
 	"github.com/rezkyauliapratama/nyawa/internal/types"
+	"github.com/rezkyauliapratama/nyawa/internal/version"
 )
 
 func main() {
@@ -37,13 +38,13 @@ func main() {
 	case "graph": cmdGraph()
 	case "reindex": cmdReindex()
 	case "version":
-		fmt.Println("nyawa v1.2.0")
+		fmt.Println(version.String())
 	default: printUsage(); os.Exit(1)
 	}
 }
 
 func printUsage() {
-	fmt.Printf(`Nyawa — Offline-First AI Memory Engine v1.2.0
+	fmt.Printf(`Nyawa — Offline-First AI Memory Engine v%s
 
 Usage:
   nyawa init <db-path>
@@ -58,7 +59,7 @@ Usage:
   nyawa graph <db> <query> [--depth 2] [--limit 10]  Traverse entity graph
   nyawa reindex <db>                      Re-embed memories missing from HNSW
   nyawa version                           Show version
-`)
+`, version.Version)
 }
 
 func parseFlags() (ns string, atTime time.Time) {

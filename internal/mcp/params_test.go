@@ -36,10 +36,14 @@ func toolArgStructs() map[string]func() any {
 // sampleFor returns a distinctive value for a declared property so that the
 // round-tripped JSON can be searched for it without knowing the Go field name.
 // The value dtype follows the declared schema type; sending a string for a
-// numeric property would make encoding/json reject the payload outright.
+// numeric property (or a scalar for an array property) would make
+// encoding/json reject the payload outright.
 func sampleFor(prop, schemaType string) any {
-	if schemaType == "number" || schemaType == "integer" || schemaType == "boolean" {
+	switch schemaType {
+	case "number", "integer", "boolean":
 		return 4242
+	case "array":
+		return []any{"sample_" + prop}
 	}
 	return "sample_" + prop
 }

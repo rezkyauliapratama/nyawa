@@ -52,7 +52,13 @@ func NewPipeline(store StoreReader, emb *embedder.PriorityChain, cfg types.Searc
 }
 
 func (p *Pipeline) Search(q types.StoreQuery) ([]*types.MemoryResult, error) {
-	if cached, ok := p.cache.Get(q.QueryText); ok { return cached, nil }
+	cacheKey := q.CacheKey()
+	if cached, ok := p.cache.Get(cacheKey); ok {
+		// Hand out copies: the caller owns the returned slice and releases it
+		// back into the result pool, which resets every entry. Returning the
+		// cached pointers directly would let the next release wipe the cache.
+		return cloneResults(cached), nil
+	}
 	queryVec, err := p.embedder.Embed(q.QueryText)
 	var haveVector bool
 	if err == nil { haveVector = true } else {
@@ -96,19 +102,56 @@ func (p *Pipeline) Search(q types.StoreQuery) ([]*types.MemoryResult, error) {
 	// Phase 5.4: graph-injected recall
 	results = p.mergeGraphResults(q, results)
 
-	if q.TimeTravel != nil { results = p.filterByTime(results, *q.TimeTravel) }
-	if q.MinScore > 0 {
-		filtered := results[:0]
-		for _, r := range results {
-			if r.Score >= q.MinScore { filtered = append(filtered, r) }
-		}
-		results = filtered
+	// Filters run before the limit cut, so Limit means "at most N results
+	// after filtering" (README: filter -> top-K).
+	if q.TimeTravel != nil {
+		results = p.filterByTime(results, *q.TimeTravel)
 	}
-	p.cache.Set(q.QueryText, results)
+	results = p.applyFilters(q, results)
+	if len(results) > limit {
+		results = results[:limit]
+	}
+
+	p.cache.Set(cacheKey, cloneResults(results))
 	go func() {
 		for _, r := range results { _ = p.store.IncrementAccessCount(r.ID) }
 	}()
 	return results, nil
+}
+
+// applyFilters drops results the query declared it does not want: anything
+// scoring below MinScore and anything whose type is listed in ExcludeTypes.
+// It filters in place, reusing the backing array.
+func (p *Pipeline) applyFilters(q types.StoreQuery, results []*types.MemoryResult) []*types.MemoryResult {
+	if q.MinScore <= 0 && len(q.ExcludeTypes) == 0 {
+		return results
+	}
+	excluded := make(map[types.MemoryType]struct{}, len(q.ExcludeTypes))
+	for _, t := range q.ExcludeTypes {
+		excluded[types.MemoryType(t)] = struct{}{}
+	}
+	filtered := results[:0]
+	for _, r := range results {
+		if q.MinScore > 0 && r.Score < q.MinScore {
+			continue
+		}
+		if _, drop := excluded[r.Type]; drop {
+			continue
+		}
+		filtered = append(filtered, r)
+	}
+	return filtered
+}
+
+// cloneResults returns shallow copies of the results so the cache owns objects
+// that the result pool cannot reset underneath it.
+func cloneResults(src []*types.MemoryResult) []*types.MemoryResult {
+	out := make([]*types.MemoryResult, len(src))
+	for i, r := range src {
+		c := *r
+		out[i] = &c
+	}
+	return out
 }
 
 func (p *Pipeline) filterByTime(results []*types.MemoryResult, targetTime time.Time) []*types.MemoryResult {
