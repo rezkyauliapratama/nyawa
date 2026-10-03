@@ -1,0 +1,146 @@
+[
+  {
+    "query": "pembersihan docker massal menghapus volume crypto-data",
+    "expr": "pembersihan docker massal menghapus volume crypto-data",
+    "ok": true,
+    "n_results": 0,
+    "per_target_rank": {
+      "mem_1790421515511059827": null,
+      "mem_1790421531821504368": null
+    },
+    "top_ids": null
+  },
+  {
+    "query": "skill routing kelas trigger onepager penunjuk K4 K5",
+    "expr": "skill routing kelas trigger onepager penunjuk K4 K5",
+    "ok": true,
+    "n_results": 3,
+    "per_target_rank": {
+      "mem_1791007087526886924": 3
+    },
+    "top_ids": [
+      "mem_1791006275948731756",
+      "mem_1790996344528695693",
+      "mem_1791007087526886924"
+    ]
+  },
+  {
+    "query": "host sync exec bit mode berkas klon kotor boot VM",
+    "expr": "host sync exec bit mode berkas klon kotor boot VM",
+    "ok": true,
+    "n_results": 1,
+    "per_target_rank": {
+      "mem_1790958381870251839": 1
+    },
+    "top_ids": [
+      "mem_1790958381870251839"
+    ]
+  },
+  {
+    "query": "embedder minilm multilingual dim 384",
+    "expr": "embedder minilm multilingual dim 384",
+    "ok": true,
+    "n_results": 8,
+    "per_target_rank": {
+      "mem_1791032808097040119": 2
+    },
+    "top_ids": [
+      "mem_1790699549662851980",
+      "mem_1791032808097040119",
+      "mem_1790614992730543165",
+      "mem_1790612279237020291",
+      "mem_1791032808216592877"
+    ]
+  },
+  {
+    "query": "keputusan bersih-bersih memori conversation",
+    "expr": "keputusan bersih-bersih memori conversation",
+    "ok": true,
+    "n_results": 0,
+    "per_target_rank": {
+      "mem_1791020081219393765": null
+    },
+    "top_ids": null
+  },
+  {
+    "query": "penempatan task mingguan Notion SB Tasks OKR",
+    "expr": "penempatan task mingguan Notion SB Tasks OKR",
+    "ok": true,
+    "n_results": 2,
+    "per_target_rank": {
+      "mem_1788161566429165075": 1
+    },
+    "top_ids": [
+      "mem_1788161566429165075",
+      "mem_1788161587499108611"
+    ]
+  },
+  {
+    "query": "gaya komunikasi dengan Rezky bahasa santai sopan",
+    "expr": "gaya komunikasi dengan Rezky bahasa santai sopan",
+    "ok": true,
+    "n_results": 0,
+    "per_target_rank": {
+      "mem_1788699015937139201": null
+    },
+    "top_ids": null
+  },
+  {
+    "query": "personality karakter Rezky challenge traits",
+    "expr": "personality karakter Rezky challenge traits",
+    "ok": true,
+    "n_results": 4,
+    "per_target_rank": {
+      "mem_1790428054858104499": 1
+    },
+    "top_ids": [
+      "mem_1790428054858104499",
+      "mem_1790427741688050004",
+      "mem_1790428053832179034",
+      "mem_1790427857890424623"
+    ]
+  },
+  {
+    "query": "batas ukuran berkas SKILL.md sebelum narasi harus dipindah ke references",
+    "expr": "batas ukuran berkas SKILL.md sebelum narasi harus dipindah ke references",
+    "ok": true,
+    "n_results": 0,
+    "per_target_rank": {
+      "mem_1790956506303873146": null
+    },
+    "top_ids": null
+  },
+  {
+    "query": "aturan filter blok Rules tiap turn supaya tak kebanjiran memori basi",
+    "expr": "aturan filter blok Rules tiap turn supaya tak kebanjiran memori basi",
+    "ok": true,
+    "n_results": 0,
+    "per_target_rank": {
+      "mem_1790956506816641948": null
+    },
+    "top_ids": null
+  },
+  {
+    "query": "nama skill tidak boleh bentrok dengan bawaan hub Hermes",
+    "expr": "nama skill tidak boleh bentrok dengan bawaan hub Hermes",
+    "ok": true,
+    "n_results": 2,
+    "per_target_rank": {
+      "mem_1790956506851507017": 1
+    },
+    "top_ids": [
+      "mem_1790956506851507017",
+      "mem_1790990510325120760"
+    ]
+  },
+  {
+    "query": "worker kerja di worktree terpisah tanpa mengusik berkas sesi trading",
+    "expr": "worker kerja di worktree terpisah tanpa mengusik berkas sesi trading",
+    "ok": true,
+    "n_results": 0,
+    "per_target_rank": {
+      "mem_1791006458375599633": null
+    },
+    "top_ids": null
+  }
+]
