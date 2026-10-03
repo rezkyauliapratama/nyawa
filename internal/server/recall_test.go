@@ -97,9 +97,9 @@ func TestHandleRecallAppliesFilters(t *testing.T) {
 		t.Fatalf("unfiltered count = %d (types %v), want 3", count, types)
 	}
 
-	count, _ = postRecall(t, srv, `{"query":"alpha project planning","namespace":"hermes","limit":20,"min_score":0.9}`)
+	count, _ = postRecall(t, srv, `{"query":"alpha project planning","namespace":"hermes","limit":20,"min_score":2.0}`)
 	if count != 0 {
-		t.Fatalf("min_score=0.9 count = %d, want 0", count)
+		t.Fatalf("min_score=2.0 count = %d, want 0", count)
 	}
 
 	count, types = postRecall(t, srv, `{"query":"alpha project planning","namespace":"hermes","limit":20,"exclude_types":["note","conversation"]}`)

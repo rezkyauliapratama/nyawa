@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
+	"unicode"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/rezkyauliapratama/nyawa/internal/extract"
@@ -13,6 +15,82 @@ import (
 	"github.com/rezkyauliapratama/nyawa/internal/index"
 	"github.com/rezkyauliapratama/nyawa/internal/types"
 )
+
+// ftsMinTokenLen drops 1-character tokens, which add noise to BM25.
+const ftsMinTokenLen = 2
+
+// ftsMaxTokens bounds the OR expression so a pathologically long query cannot
+// blow up the MATCH statement.
+const ftsMaxTokens = 32
+
+// ftsRewriteEnabled mirrors search.RecallV2Enabled for the store layer (which
+// cannot import search without an import cycle). NYAWA_RECALL_V2=0 disables the
+// query rewrite so operators can reproduce the pre-v2 keyword behaviour.
+func ftsRewriteEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("NYAWA_RECALL_V2"))) {
+	case "0", "false", "off", "no":
+		return false
+	default:
+		return true
+	}
+}
+
+// buildFTSMatchExpr rewrites a free-text user query into a safe FTS5 MATCH
+// expression. Feeding the raw query to MATCH is fragile:
+//   - whitespace is an implicit AND, so a normal multi-word query matches
+//     almost nothing (the docker query matched 0 documents and the whole recall
+//     silently degenerated to vector-only, which is why the two docker rules
+//     never surfaced);
+//   - punctuation is query syntax: "crypto-data" is parsed as a column filter
+//     and errors with `no such column: data`.
+//
+// Tokenising to alphanumerics and OR-ing the quoted tokens lets BM25 rank
+// documents by how many (and how rare) query terms they contain, so short
+// exact-keyword memories can beat long tangential ones again.
+func buildFTSMatchExpr(query string) string {
+	tokens := ftsTokens(query)
+	if len(tokens) == 0 {
+		return ""
+	}
+	parts := make([]string, len(tokens))
+	for i, t := range tokens {
+		parts[i] = `"` + t + `"`
+	}
+	return strings.Join(parts, " OR ")
+}
+
+func ftsTokens(q string) []string {
+	var tokens []string
+	seen := make(map[string]struct{})
+	var b strings.Builder
+	flush := func() {
+		if b.Len() == 0 {
+			return
+		}
+		tok := strings.ToLower(b.String())
+		b.Reset()
+		if len([]rune(tok)) < ftsMinTokenLen {
+			return
+		}
+		if _, dup := seen[tok]; dup {
+			return
+		}
+		seen[tok] = struct{}{}
+		tokens = append(tokens, tok)
+	}
+	for _, r := range q {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		} else {
+			flush()
+		}
+	}
+	flush()
+	if len(tokens) > ftsMaxTokens {
+		tokens = tokens[:ftsMaxTokens]
+	}
+	return tokens
+}
 
 type Embedder interface {
 	Embed(string) ([]float32, error)
@@ -305,6 +383,12 @@ type TimeQuery struct {
 func (s *Store) FTS5SearchAt(query string, tq TimeQuery) ([]string, error) {
 	if tq.Limit <= 0 {
 		tq.Limit = 10
+	}
+	if ftsRewriteEnabled() {
+		query = buildFTSMatchExpr(query)
+		if query == "" {
+			return nil, nil
+		}
 	}
 	var q string
 	var args []any

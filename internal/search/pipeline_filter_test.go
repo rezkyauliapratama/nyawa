@@ -109,7 +109,7 @@ func TestRecallMinScoreFilterDropsLowScores(t *testing.T) {
 		scores[r.ID] = r.Score
 	}
 
-	kept, err := p.Search(types.StoreQuery{QueryText: "q", Namespace: "hermes", Limit: 10, MinScore: 0.75})
+	kept, err := p.Search(types.StoreQuery{QueryText: "q", Namespace: "hermes", Limit: 10, MinScore: 1.0})
 	if err != nil {
 		t.Fatalf("filtered search: %v", err)
 	}
@@ -117,7 +117,9 @@ func TestRecallMinScoreFilterDropsLowScores(t *testing.T) {
 		t.Fatalf("min_score=0.75 results = %v (scores %v), want [memA]", idsOf(kept), scores)
 	}
 
-	none, err := p.Search(types.StoreQuery{QueryText: "q", Namespace: "hermes", Limit: 10, MinScore: 1.2})
+	// Threshold is above the practical maximum score (relevance 1.0 plus the
+	// v2 recency/type/length boost envelope), so it must drop everything.
+	none, err := p.Search(types.StoreQuery{QueryText: "q", Namespace: "hermes", Limit: 10, MinScore: 2.0})
 	if err != nil {
 		t.Fatalf("over-threshold search: %v", err)
 	}
@@ -197,7 +199,7 @@ func TestRecallCacheIsKeyedOnFilters(t *testing.T) {
 	}
 	p.ReleaseResults(first)
 
-	filtered, err := p.Search(types.StoreQuery{QueryText: "q", Namespace: "hermes", Limit: 10, MinScore: 0.75})
+	filtered, err := p.Search(types.StoreQuery{QueryText: "q", Namespace: "hermes", Limit: 10, MinScore: 1.0})
 	if err != nil {
 		t.Fatalf("filtered search: %v", err)
 	}

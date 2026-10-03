@@ -10,16 +10,48 @@ import (
 type MemoryType string
 
 const (
-	TypeDecision   MemoryType = "decision"
-	TypeInsight    MemoryType = "insight"
-	TypeProcedure  MemoryType = "procedure"
-	TypeFact       MemoryType = "fact"
-	TypePreference MemoryType = "preference"
-	TypeContext    MemoryType = "context"
-	TypeNote       MemoryType = "note"
-	TypeEvent      MemoryType = "event"
-	TypeReference  MemoryType = "reference"
+	TypeDecision     MemoryType = "decision"
+	TypeInsight      MemoryType = "insight"
+	TypeProcedure    MemoryType = "procedure"
+	TypeFact         MemoryType = "fact"
+	TypePreference   MemoryType = "preference"
+	TypeContext      MemoryType = "context"
+	TypeNote         MemoryType = "note"
+	TypeEvent        MemoryType = "event"
+	TypeReference    MemoryType = "reference"
+	TypeRule         MemoryType = "rule"
+	TypeConversation MemoryType = "conversation"
 )
+
+// RetrievalFactor is the per-type multiplier recall ranking uses to lift durable,
+// high-signal memories (rules, decisions, preferences) above ephemeral chatter.
+// It is separate from Weight (which the legacy ranking still consumes) so the
+// retrieval behaviour can change without rewriting on-disk type semantics.
+//
+// conversation is deliberately 0.0: raw transcripts are noise for retrieval and
+// must never be boosted just for existing (the task's explicit requirement).
+func (t MemoryType) RetrievalFactor() float64 {
+	switch t {
+	case TypeRule, TypeDecision:
+		return 1.0
+	case TypePreference:
+		return 0.9
+	case TypeProcedure:
+		return 0.8
+	case TypeFact, TypeInsight:
+		return 0.7
+	case TypeContext, TypeEvent:
+		return 0.5
+	case TypeConversation:
+		return 0.0
+	case TypeNote, TypeReference:
+		return 0.3
+	default:
+		// memory, snapshot, handoff, incident, unknown: neutral-low, so bulk
+		// imported noise does not outrank curated memories.
+		return 0.3
+	}
+}
 
 func (t MemoryType) Weight() float64 {
 	switch t {
@@ -47,6 +79,7 @@ func (t MemoryType) DecayHours() float64 {
 	case TypeNote: return 168
 	case TypeEvent: return 2160
 	case TypeReference: return 8760
+	case TypeRule: return 2160
 	default: return 168
 	}
 }
@@ -68,11 +101,14 @@ type Memory struct {
 
 type MemoryResult struct {
 	Memory
-	Score          float64 `json:"score"`
-	RRFScore       float64 `json:"rrf_score"`
-	TemporalBoost  float64 `json:"temporal_boost"`
+	Score           float64 `json:"score"`
+	RRFScore        float64 `json:"rrf_score"`
+	TemporalBoost   float64 `json:"temporal_boost"`
 	ImportanceBoost float64 `json:"importance_boost"`
-	Rank           int     `json:"rank"`
+	TypeBoost       float64 `json:"type_boost"`
+	AccessBoost     float64 `json:"access_boost"`
+	LengthBoost     float64 `json:"length_boost"`
+	Rank            int     `json:"rank"`
 }
 
 func (r *MemoryResult) Reset() {
@@ -92,6 +128,9 @@ func (r *MemoryResult) Reset() {
 	r.RRFScore = 0
 	r.TemporalBoost = 0
 	r.ImportanceBoost = 0
+	r.TypeBoost = 0
+	r.AccessBoost = 0
+	r.LengthBoost = 0
 	r.Rank = 0
 }
 

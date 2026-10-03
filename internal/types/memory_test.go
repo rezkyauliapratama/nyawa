@@ -1,8 +1,10 @@
-package types
+package types_test
 
 import (
 	"testing"
+
 	"github.com/rezkyauliapratama/nyawa/internal/pool"
+	"github.com/rezkyauliapratama/nyawa/internal/types"
 )
 
 func TestMemoryTypeWeights(t *testing.T) {
@@ -16,9 +18,9 @@ func TestMemoryTypeWeights(t *testing.T) {
 }
 
 func TestSearchConfig(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := types.DefaultConfig()
 	if cfg.Search.VectorTopK != 50 { t.Errorf("expected 50, got %d", cfg.Search.VectorTopK) }
-	if cfg.Search.RRFK != 60 { t.Errorf("expected 60, got %d", cfg.Search.RRFK) }
+	if cfg.Search.RRFK != 5 { t.Errorf("expected 5, got %d", cfg.Search.RRFK) }
 }
 
 func TestMemoryResultReset(t *testing.T) {

@@ -42,10 +42,11 @@ type StoreReader interface {
 
 func NewPipeline(store StoreReader, emb *embedder.PriorityChain, cfg types.SearchConfig) *Pipeline {
 	rp := pool.NewResultPool(64)
+	w := WeightsFromConfig(cfg)
 	return &Pipeline{
 		store: store, embedder: emb,
-		rrf: NewRRF(cfg.RRFK),
-		post: NewPostProcessor(cfg.RecencyWeight, cfg.ImportanceWeight, rp),
+		rrf:  NewRRF(w.RRFK),
+		post: NewPostProcessorWithWeights(w, rp),
 		cache: NewCache(256, 5*time.Minute),
 		resultPool: rp, slicePool: pool.NewResultSlicePool(),
 	}
@@ -87,9 +88,16 @@ func (p *Pipeline) Search(q types.StoreQuery) ([]*types.MemoryResult, error) {
 		}()
 	}
 	wg.Wait()
-	if errVec != nil { return nil, fmt.Errorf("vector search: %w", errVec) }
-	if errFTS5 != nil { return nil, fmt.Errorf("fts5 search: %w", errFTS5) }
-	fused := p.rrf.Fuse(vectorIDs, fts5IDs)
+	if errVec != nil {
+		return nil, fmt.Errorf("vector search: %w", errVec)
+	}
+	// A malformed FTS expression (e.g. punctuation the tokenizer rejects) must
+	// not take the whole recall down: degrade to the vector leg and log it.
+	if errFTS5 != nil {
+		log.Printf("fts5 search failed, falling back to vector-only: %v", errFTS5)
+		fts5IDs = nil
+	}
+	fused := p.rrf.FuseWeighted(vectorIDs, fts5IDs, p.post.W.VectorWeight, p.post.W.FTSWeight)
 	allIDs := make([]string, 0, len(fused))
 	for _, fr := range fused { allIDs = append(allIDs, fr.MemoryID) }
 	memories, err := p.store.GetMemoriesByIDs(allIDs)
@@ -230,7 +238,7 @@ func (p *Pipeline) mergeGraphResults(q types.StoreQuery, results []*types.Memory
 	var newIDs []string
 	for memID := range graphScoreMap {
 		if existing, ok := existingMap[memID]; ok {
-			existing.Score = existing.Score * 1.5
+			existing.Score = existing.Score * (1 + p.post.W.OverlapWeight)
 		} else {
 			newIDs = append(newIDs, memID)
 		}
@@ -243,34 +251,49 @@ func (p *Pipeline) mergeGraphResults(q types.StoreQuery, results []*types.Memory
 				if mem == nil {
 					continue
 				}
+				if mem.SupersededAt != nil {
+					continue
+				}
 				// Graph traversal scores are unbounded sums over paths, so the
 				// documented 0.1 injection weight assumed a [0,1] score. Normalise
 				// to the best graph hit first, otherwise a graph-only memory can
 				// get a score (e.g. 0.5+) that dwarfs every RRF-ranked result.
 				graphScore := 0.0
 				if maxGraphScore > 0 {
-					graphScore = graphScoreMap[mem.ID] / maxGraphScore * 0.1
+					graphScore = graphScoreMap[mem.ID] / maxGraphScore * p.post.W.GraphInjectWeight
 				}
 				r := p.resultPool.Get()
 				r.Memory = *mem
 				r.RRFScore = 0
 				r.Score = graphScore
-				// Compute simple boosts for consistency
+				// Compute boosts with the same weights as the main ranking so a
+				// graph-injected memory is comparable to an RRF-ranked one.
 				now := float64(time.Now().Unix()) / 3600.0
 				ageHours := now - float64(mem.CreatedAt.Unix())/3600.0
 				if ageHours < 0 {
 					ageHours = 0
 				}
 				tau := mem.Type.DecayHours()
-				r.TemporalBoost = p.post.RecencyWeight * math.Exp(-ageHours/tau)
-				accessFactor := math.Min(float64(mem.AccessCount)/10.0, 1.0)
-				r.ImportanceBoost = p.post.ImportanceWeight * mem.Type.Weight() * accessFactor
+				if tau <= 0 {
+					tau = 168
+				}
+				w := p.post.W
+				r.TemporalBoost = w.Recency * math.Exp(-ageHours/tau)
+				if w.Legacy {
+					r.ImportanceBoost = w.Importance * mem.Type.Weight() * accessFactor(mem.AccessCount)
+				} else {
+					r.ImportanceBoost = w.Importance * clamp01(mem.Importance)
+					r.TypeBoost = w.Type * mem.Type.RetrievalFactor()
+					r.AccessBoost = w.Access * accessFactor(mem.AccessCount)
+					r.LengthBoost = w.Length * lengthFactor(len(mem.Content))
+				}
 				pinBoost := 0.0
 				if mem.Pinned {
-					pinBoost = 0.1
+					pinBoost = w.Pinned
 				}
-				graphBoost := math.Log1p(float64(mem.EdgeCount)) * 0.03
-				r.Score += r.TemporalBoost + r.ImportanceBoost + pinBoost + graphBoost
+				graphBoost := math.Log1p(float64(mem.EdgeCount)) * w.Graph
+				r.Score += r.TemporalBoost + r.ImportanceBoost + r.TypeBoost +
+					r.AccessBoost + r.LengthBoost + pinBoost + graphBoost
 				results = append(results, r)
 			}
 		}
