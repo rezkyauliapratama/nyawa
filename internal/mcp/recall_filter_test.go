@@ -172,7 +172,7 @@ func TestHandleRecallFiltersReduceResultCount(t *testing.T) {
 		},
 		{
 			name:  "min_score high",
-			args:  `{"query":"q","namespace":"hermes","limit":20,"min_score":0.75}`,
+			args:  `{"query":"q","namespace":"hermes","limit":20,"min_score":1.0}`,
 			count: 1,
 			types: []string{"decision"},
 		},
@@ -184,7 +184,7 @@ func TestHandleRecallFiltersReduceResultCount(t *testing.T) {
 		},
 		{
 			name:  "plugin combination",
-			args:  `{"query":"q","namespace":"hermes","limit":20,"min_score":0.75,"exclude_types":["note","conversation"]}`,
+			args:  `{"query":"q","namespace":"hermes","limit":20,"min_score":1.0,"exclude_types":["note","conversation"]}`,
 			count: 1,
 			types: []string{"decision"},
 		},

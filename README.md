@@ -222,7 +222,7 @@ Memory store
              ├─ Co-occurrence edges (entities seen together in ≥2 memories)
              └─ Typed edges (works_at, uses, located_in, part_of — bilingual ID/EN)
                     └─ Multi-hop BFS traversal (decay 0.5/hop)
-                           └─ Merged into RRF recall (boost 1.5x overlap, inject 0.1x graph-only)
+                           └─ Merged into RRF recall (overlap ×1.1, inject 0.1x graph-only)
 ```
 
 ### Typed relations (auto-inferred, zero LLM)
@@ -306,36 +306,70 @@ Each has complementary blind spots: vector search excels at synonyms and paraphr
 
 ### The formula
 
-```
-score(item) = Σ 1 / (k + rank(item))
-
-k    = constant (60 in Nyawa)
-rank = position of the item in each engine's result list
-```
-
-Only *positions* matter — raw similarity scores are never compared across engines (they live on different scales). An item that ranks #1 in vector search and #3 in FTS5 gets:
+Weighted Reciprocal Rank Fusion, with the score normalized to `[0,1]` so it is
+comparable with the relevance boosts added afterwards:
 
 ```
-1/(60+1) + 1/(60+3) = 0.0164 + 0.0159 = 0.0323
+score(item) = [ w_v · 1/(k + rank_v(item)) + w_f · 1/(k + rank_f(item)) ] / ((w_v + w_f)/(k+1))
+
+w_v, w_f = modality weights (vector / FTS5)
+k        = damping constant (5 in Nyawa; see below)
+rank_*   = position of the item in each engine's result list, ∞ if absent
 ```
 
-### Why it works
+Only *positions* matter — raw similarity scores are never compared across engines (they live on different scales).
 
-- Items appearing in **both** result lists accumulate score from both engines → strongly favored
-- Items found by only one engine rank lower — they're likely one-sided matches
-- No score normalization needed — rank is scale-free and robust to engine drift
+### Why k=5, not 60
+
+At the textbook `k=60` the gap between adjacent ranks is tiny, so a memory that
+is only *mediocre in both* lists outranks a memory that is the **best hit in
+one** list — exactly the dilution that made precise keyword matches (e.g. the
+two docker cleanup rules) fall out of the top results. A small `k` sharpens the
+fused ranking toward the true top matches. The modality weights default to
+`w_v=1`, `w_f=3`: the keyword leg is trusted more because vector similarity is
+computed over the whole memory text (long documents dominate it, exact keywords
+are missed) and part of the corpus has no HNSW vector. Both legs always
+contribute, so a purely semantic match is still retrievable.
+
+### Post-fusion weighting
+
+After fusion, each candidate gets a small, bounded boost so that long or
+ephemeral memories no longer win on size alone:
+
+| Signal | Behaviour |
+|--------|-----------|
+| **Content length** | concise memories keep the full bonus; long ones decay logarithmically |
+| **`importance`** | higher column value ranks higher |
+| **`access_count`** | saturates at 10 recalls |
+| **`mem_type`** | rules/decisions/preferences boosted, `conversation` gets **zero** |
+| **recency** | exponential decay with a per-type half-life |
+| **pinned / edge_count** | small fixed bonuses |
+| **superseded** | always dropped |
+
+Every coefficient is a named constant in
+[`internal/search/weights.go`](internal/search/weights.go) and can be overridden
+at runtime (no rebuild) with env vars:
+
+| Env var | Default | Meaning |
+|---------|---------|---------|
+| `NYAWA_RECALL_V2` | `1` | `0`/`false` restores the pre-v2 ranking (symmetric RRF at k=60, no v2 boosts) for A/B comparison |
+| `NYAWA_RECALL_RRF_K` | `5` | RRF damping constant |
+| `NYAWA_RECALL_W_VECTOR` / `NYAWA_RECALL_W_FTS` | `1` / `3` | modality weights |
+| `NYAWA_RECALL_W_TYPE` / `_W_IMPORTANCE` / `_W_ACCESS` / `_W_LENGTH` / `_W_RECENCY` | `0.12` / `0.10` / `0.05` / `0.05` / `0.05` | boost weights |
+| `NYAWA_RECALL_W_PINNED` / `_W_GRAPH` / `_W_OVERLAP` / `_W_GRAPH_INJECT` | `0.10` / `0.03` / `0.10` / `0.10` | graph + pinned weights |
 
 ### The full recall pipeline (with GraphRAG)
 
 ```
 Query
  ├─ HNSW vector search ──────────────┐
- ├─ FTS5 keyword search ─────────────┤
- ├─ Entity graph traversal (multi-hop)┤
- └─ RRF fusion (k=60) ───────────────┘
-      └─ Graph merge (overlap ×1.5, graph-only ×0.1)
-           └─ Filter (namespace, min_score, exclude_types)
-                └─ Top-K results
+ ├─ FTS5 keyword search ─────────────┤   (query tokenised + OR'd, so multi-word
+ ├─ Entity graph traversal (multi-hop)┤    and hyphenated queries match)
+ └─ Weighted RRF fusion (k=5) ───────┘
+      └─ Post-fusion weighting (length, importance, access, type, recency)
+           └─ Graph merge (overlap ×1.1, graph-only ×0.1)
+                └─ Drop superseded → Filter (namespace, min_score, exclude_types)
+                     └─ Top-K results
 ```
 
 Implementation: [`internal/search/rrf.go`](internal/search/rrf.go), [`internal/search/pipeline.go`](internal/search/pipeline.go)
