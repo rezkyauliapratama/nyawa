@@ -1,0 +1,3161 @@
+{
+  "meta": {
+    "date": "20261003",
+    "generated_at": "2026-10-03T13:36:39.651040+00:00",
+    "label": "runtime",
+    "binary": "/opt/data/.nyawa/nyawa",
+    "binary_sha256": "2308250b54deb33b0c4892b2612ae3f29560827a5f27ccfb781e74ae7243fdf8",
+    "binary_version": "nyawa v1.2.0",
+    "db": "/opt/data/.nyawa/memory.db",
+    "db_mtime": "2026-10-03T13:19:18.851488+00:00",
+    "db_total_memories": 9867,
+    "queries_file": "/opt/data/nyawa-wt-recall-bench/scripts/recall-bench/queries.tsv",
+    "engine": "vector(HNSW/minilm-multilingual-384) + FTS5(porter unicode61) fused via RRF(60)"
+  },
+  "aggregate": {
+    "recall": {
+      "n_queries": 12,
+      "found": 6,
+      "recall@1": 0.3333333333333333,
+      "recall@3": 0.4166666666666667,
+      "recall@5": 0.5,
+      "mrr": 0.39166666666666666
+    },
+    "fts_or": {
+      "n_queries": 12,
+      "found": 12,
+      "recall@1": 0.8333333333333334,
+      "recall@3": 1.0,
+      "recall@5": 1.0,
+      "mrr": 0.9027777777777777
+    },
+    "fts_and": {
+      "n_queries": 12,
+      "found": 8,
+      "recall@1": 0.5,
+      "recall@3": 0.6666666666666666,
+      "recall@5": 0.6666666666666666,
+      "mrr": 0.5694444444444444
+    },
+    "fts_raw_ok": 9,
+    "found": 6,
+    "fts_engine_raw": {
+      "n_queries": 12,
+      "found": 6,
+      "recall@1": 0.3333333333333333,
+      "recall@3": 0.5,
+      "recall@5": 0.5,
+      "mrr": 0.40277777777777773
+    },
+    "fts_engine_raw_nonzero": 6
+  },
+  "per_query": [
+    {
+      "query": "pembersihan docker massal menghapus volume crypto-data",
+      "ns": null,
+      "targets": [
+        "mem_1790421515511059827",
+        "mem_1790421531821504368"
+      ],
+      "target_meta": {
+        "mem_1790421515511059827": {
+          "id": "mem_1790421515511059827",
+          "mem_type": "preference",
+          "namespace": "hermes",
+          "length": 1254,
+          "superseded": false
+        },
+        "mem_1790421531821504368": {
+          "id": "mem_1790421531821504368",
+          "mem_type": "preference",
+          "namespace": "hermes",
+          "length": 537,
+          "superseded": true
+        }
+      },
+      "recall": {
+        "ok": true,
+        "returncode": 0,
+        "error": null,
+        "stderr": "nyawa: BGE embedder: reused shared socket /tmp/nyawa-bge-425096bd.sock (dim=384)\nnyawa: BGE embedder ready (model=/opt/data/bge-models/minilm-multilingual, source=default, dim=384)",
+        "n_results": 10,
+        "per_target_rank": {
+          "mem_1790421515511059827": null,
+          "mem_1790421531821504368": null
+        },
+        "best_rank": null,
+        "top_order": [
+          {
+            "rank": 1,
+            "score": 0.5582,
+            "ids": [
+              "mem_1790785939148133232"
+            ],
+            "preview": "KOREKSI MEMORY.md 30/09/2026 - dua entri sudah kedaluwarsa dan belum diedit karena run konsolidasi dilarang menyentuh ME"
+          },
+          {
+            "rank": 2,
+            "score": 0.5518,
+            "ids": [
+              "mem_1788185668914222930"
+            ],
+            "preview": "Itu notifikasi proses lama (sisa dari subagent yang timeout tadi) — build-nya jalan **sebelum** fix saya, jadi error `o."
+          },
+          {
+            "rank": 3,
+            "score": 0.5324,
+            "ids": [
+              "mem_1790865866130209669"
+            ],
+            "preview": "Cakupan vector Nyawa terukur 1 Okt 2026: total_memories 5771, vector_indexed 3492 (60,5 persen), superseded 3816, entity"
+          },
+          {
+            "rank": 4,
+            "score": 0.5,
+            "ids": [
+              "mem0_1502"
+            ],
+            "preview": "OJK took over crypto regulation from Bappebti starting 2025, treating crypto as digital financial assets rather than com"
+          },
+          {
+            "rank": 5,
+            "score": 0.4732,
+            "ids": [
+              "mem_1790572837600090705"
+            ],
+            "preview": "Oke, tidak saya kerjakan.  Yang perlu kamu tahu saja: pesan \"compression is currently blocked\" itu berisiko muncul lagi,"
+          },
+          {
+            "rank": 6,
+            "score": 0.4662,
+            "ids": [
+              "mem_1790864218684961785"
+            ],
+            "preview": "Tiga memori sudah masuk ke Nyawa: keputusan metode maintenance (id `mem_...31572`), fakta ops soal layanan `gateway-defa"
+          },
+          {
+            "rank": 7,
+            "score": 0.466,
+            "ids": [
+              "mem_1790573341024150947"
+            ],
+            "preview": "PR #258 sudah terbuka: [docs(memory): MEMORY.md baru dengan protokol ingatan + peta sumber + arsitektur 4 lapis](https:/"
+          },
+          {
+            "rank": 8,
+            "score": 0.4611,
+            "ids": [
+              "mem_1788441212595269090"
+            ],
+            "preview": "UPDATE RETIRE TRADING BOT: docker-compose.yml retire crypto SUDAH dibuatkan PR - PR #237 personal-ai-stack OPEN https://"
+          },
+          {
+            "rank": 9,
+            "score": 0.458,
+            "ids": [
+              "mem_1787160018412952944"
+            ],
+            "preview": "Beres — pembersihan sudah selesai. Ini statusnya:  **Yang sudah dibersihkan:** - Image `crypto-engine:latest` yang aku b"
+          },
+          {
+            "rank": 10,
+            "score": 0.4358,
+            "ids": [
+              "snap_1787210438641743081"
+            ],
+            "preview": "📦 Snapshot of 5 old memories: • The assistant offered to git pull main from the container using 'docker run --rm -v /opt"
+          }
+        ]
+      },
+      "fts": {
+        "raw": {
+          "ok": false,
+          "mode": "raw",
+          "expr": "pembersihan docker massal menghapus volume crypto-data",
+          "error": "OperationalError: no such column: data",
+          "ids": [],
+          "best_rank": null,
+          "per_target": {
+            "mem_1790421515511059827": null,
+            "mem_1790421531821504368": null
+          }
+        },
+        "or": {
+          "ok": true,
+          "mode": "or",
+          "expr": "\"pembersihan\" OR \"docker\" OR \"massal\" OR \"menghapus\" OR \"volume\" OR \"crypto\" OR \"data\"",
+          "ids": [
+            "mem_1790421515511059827",
+            "mem_1790409964502557371",
+            "mem_1791032808216592877",
+            "mem_1788440709110846187",
+            "mem_1790601589920492555",
+            "mem_1789391344912350762",
+            "mem_1787069154653882231",
+            "mem_1791032825025462505",
+            "mem_1788440692606096420",
+            "mem_1788697572649727976",
+            "mem_1790523205794684264",
+            "mem_1790421543189760172",
+            "mem_1790421519714396116",
+            "mem_1787160018412952944",
+            "mem_1790601598008565119",
+            "mem_1787501395160257749",
+            "mem_1791020081219393765",
+            "mem_1789391082127513093",
+            "mem_1790957078901712063",
+            "mem_1790785939148133232",
+            "mem_1791019299995019156",
+            "mem_1787723096345984679",
+            "mem_1787494533603547321",
+            "mem_1790955040065512792",
+            "mem_1789563807908330581",
+            "mem_1787495478846881794",
+            "mem_1787161043080176545",
+            "mem_1787153350780369396",
+            "mem0_447",
+            "mem_1789004081835767233",
+            "snap_1787188738885611019",
+            "mem_1790912729025175025",
+            "mem_1791032504925566893",
+            "mem_1787495722570044271",
+            "mem_1787492816914032427",
+            "mem_1786895629957508290",
+            "mem_1786696952181114811",
+            "mem_1787723294739239104",
+            "mem_1787150536020741108",
+            "mem_1790609617604486367",
+            "mem_1790956099804038923",
+            "mem_1786697051533084208",
+            "mem_1787654792726091102",
+            "mem_1790511814138543041",
+            "mem_1790859800089254736",
+            "mem_1790913299794075731",
+            "mem_1787492432598440573",
+            "mem_1790844885103297158",
+            "mem_1788441224011012513",
+            "mem0_710",
+            "mem_1787494628536011820",
+            "mem_1790904928552897829",
+            "mem_1787153069836818548",
+            "mem_1790935858927271583",
+            "mem_1790573580749492460",
+            "snap_1787925814106496930",
+            "mem_1790859810980302446",
+            "mem_1788441212595269090",
+            "mem0_445",
+            "mem_1790609786874671568",
+            "mem_1786799656763382561",
+            "mem_1790840679803599070",
+            "mem_1790645635570307800",
+            "mem_1790086056006692625",
+            "mem0_349",
+            "mem_1789391800134571252",
+            "mem_1789029630477427316",
+            "snap_1787210438641743081",
+            "mem_1789951950181016862",
+            "mem_1786780242645012022",
+            "mem0_721",
+            "mem_1790511803328434166",
+            "mem_1788831271282678276",
+            "mem0_895",
+            "mem_1788857720237595043",
+            "mem0_407",
+            "mem_1786864588673380734",
+            "snap_1787859568061966765",
+            "mem_1786852041614311969",
+            "mem_1787068157725907238",
+            "mem_1786804326592242371",
+            "mem_1787594159669972089",
+            "mem_1790515131762933951",
+            "mem_1790946226738457302",
+            "mem_1787723064521297378",
+            "mem_1787152101679376278",
+            "mem_1787068646550984493",
+            "mem0_240",
+            "mem_1790127247048112365",
+            "mem_1790687502333488335",
+            "mem_1786798812725211460",
+            "mem_1786953408085095919",
+            "snap_1788318745062648092",
+            "snap_1788424893990368691",
+            "mem_1786805584157666623",
+            "mem_1790904938349679889",
+            "mem_1790913147396346539",
+            "mem_1790645672604492258",
+            "mem_1790864218684961785",
+            "mem0_418"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1790421515511059827": 1,
+            "mem_1790421531821504368": null
+          }
+        },
+        "and": {
+          "ok": true,
+          "mode": "and",
+          "expr": "\"pembersihan\" AND \"docker\" AND \"massal\" AND \"menghapus\" AND \"volume\" AND \"crypto\" AND \"data\"",
+          "ids": [
+            "mem_1790421515511059827"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1790421515511059827": 1,
+            "mem_1790421531821504368": null
+          }
+        }
+      },
+      "fts_engine_raw": {
+        "ok": true,
+        "error": "",
+        "n_results": 0,
+        "per_target": {
+          "mem_1790421515511059827": null,
+          "mem_1790421531821504368": null
+        },
+        "best_rank": null
+      }
+    },
+    {
+      "query": "skill routing kelas trigger onepager penunjuk K4 K5",
+      "ns": null,
+      "targets": [
+        "mem_1791007087526886924"
+      ],
+      "target_meta": {
+        "mem_1791007087526886924": {
+          "id": "mem_1791007087526886924",
+          "mem_type": "preference",
+          "namespace": "hermes",
+          "length": 3132,
+          "superseded": false
+        }
+      },
+      "recall": {
+        "ok": true,
+        "returncode": 0,
+        "error": null,
+        "stderr": "nyawa: BGE embedder: reused shared socket /tmp/nyawa-bge-425096bd.sock (dim=384)\nnyawa: BGE embedder ready (model=/opt/data/bge-models/minilm-multilingual, source=default, dim=384)",
+        "n_results": 10,
+        "per_target_rank": {
+          "mem_1791007087526886924": 1
+        },
+        "best_rank": 1,
+        "top_order": [
+          {
+            "rank": 1,
+            "score": 0.5874,
+            "ids": [
+              "mem_1791007087526886924"
+            ],
+            "preview": "RULES INSTRUCTIONS GUIDELINES skills routing trigger activation (Skill Activation Framework, diperbarui 3 Okt 2026). ROU"
+          },
+          {
+            "rank": 2,
+            "score": 0.5827,
+            "ids": [
+              "mem_1791006275948731756"
+            ],
+            "preview": "Konteks lengkap sudah saya ambil dari `/opt/data/memories/session_resume_skill_research_builder_20261003.md`. Ini ringka"
+          },
+          {
+            "rank": 3,
+            "score": 0.5745,
+            "ids": [
+              "mem_1790654368783144056"
+            ],
+            "preview": "Dua-duanya sudah jadi dan sudah saya verifikasi isinya lewat API.  **PR upstream Hermes**  https://github.com/NousResear"
+          },
+          {
+            "rank": 4,
+            "score": 0.5624,
+            "ids": [
+              "mem_1790996344528695693"
+            ],
+            "preview": "Ada satu fakta penting dulu: **onepager itu bukan yang disuntik ke sesi.** Yang benar-benar masuk konteks tiap turn adal"
+          },
+          {
+            "rank": 5,
+            "score": 0.5385,
+            "ids": [
+              "mem_1786983352478462297"
+            ],
+            "preview": "Skill bundle /artikel DIBUAT 17/08 di /opt/data/skill-bundles/artikel.yaml (verified via hermes bundles list/show): load"
+          },
+          {
+            "rank": 6,
+            "score": 0.5244,
+            "ids": [
+              "mem_1789090897419997065"
+            ],
+            "preview": "**Skill v2.1 AKTIF** ✅ — file runtime sekarang:  ``` /opt/data/skills/saham-co-pilot/ ├── SKILL.md                      "
+          },
+          {
+            "rank": 7,
+            "score": 0.5125,
+            "ids": [
+              "mem_1790346114308944737"
+            ],
+            "preview": "Bagian 3 sudah berjalan. Rekap posisi WS2 sejauh ini, semuanya sudah saya verifikasi sendiri di mesin ini:  ## Bagian 1,"
+          },
+          {
+            "rank": 8,
+            "score": 0.5068,
+            "ids": [
+              "mem_1787501534663766442"
+            ],
+            "preview": "Oke, **tidak eksekusi** — ini analisis saja. Konteks yang relevan dari stack kita dulu (biar analisisnya akurat):  - V2 "
+          },
+          {
+            "rank": 9,
+            "score": 0.4919,
+            "ids": [
+              "mem_1784621013354250287_847",
+              "mem0_847"
+            ],
+            "preview": "User Rezky corrected the assistant's misunderstanding about skill loading — all 73 skills in .bundled_manifest are avail"
+          },
+          {
+            "rank": 10,
+            "score": 0.49,
+            "ids": [
+              "mem_1789824014789683572"
+            ],
+            "preview": "Selesai. Ada dua hal penting: satu koreksi terhadap saya sendiri, dan satu penurunan status strategi.  **1. Koreksi: dug"
+          }
+        ]
+      },
+      "fts": {
+        "raw": {
+          "ok": true,
+          "mode": "raw",
+          "expr": "skill routing kelas trigger onepager penunjuk K4 K5",
+          "ids": [
+            "mem_1791006275948731756",
+            "mem_1790996344528695693",
+            "mem_1791007087526886924"
+          ],
+          "best_rank": 3,
+          "per_target": {
+            "mem_1791007087526886924": 3
+          }
+        },
+        "or": {
+          "ok": true,
+          "mode": "or",
+          "expr": "\"skill\" OR \"routing\" OR \"kelas\" OR \"trigger\" OR \"onepager\" OR \"penunjuk\" OR \"k4\" OR \"k5\"",
+          "ids": [
+            "mem_1791006275948731756",
+            "mem_1790996344528695693",
+            "mem_1791007087526886924",
+            "mem_1791007114767307499",
+            "mem_1790990510325120760",
+            "mem_1791000147553645898",
+            "mem_1791000212040096134",
+            "mem_1790956506851507017",
+            "mem_1790994087695704228",
+            "mem_1790526138453337897",
+            "mem_1791006458375599633",
+            "mem_1790996096953602773",
+            "mem_1791009646365300415",
+            "mem_1790816710889133765",
+            "mem_1790956237939994136",
+            "mem_1791003351629939259",
+            "mem0_1371",
+            "mem_1790865868299968826",
+            "mem0_775",
+            "mem_1787451546253633205",
+            "mem_1787496856166251453",
+            "mem_1790935858927271583",
+            "mem_1790526593106512593",
+            "mem_1789237594904538036",
+            "mem0_1389",
+            "mem0_1415",
+            "mem0_1368",
+            "mem_1787447953088228999",
+            "mem0_1396",
+            "mem_1787451733624243601",
+            "mem0_1382",
+            "mem_1790957221961805663",
+            "mem_1787447555708302696",
+            "mem_1791002103133346299",
+            "mem_1790992838697629303",
+            "mem0_1387",
+            "mem_1788684707897026647",
+            "mem_1789091259761933869",
+            "mem_1790934856990417586",
+            "mem_1788931951487913281",
+            "mem_1790999910426213999",
+            "mem_1790345917029852114",
+            "mem_1787502238125014812",
+            "mem0_847",
+            "mem_1787446556879011488",
+            "mem_1786983359004972715",
+            "mem_1789468114166887685",
+            "snap_1788045111599502993",
+            "mem0_1394",
+            "mem_1790573170146903752",
+            "mem_1787492203699309350",
+            "snap_1788410170933245793",
+            "mem_1790865874207276865",
+            "mem0_533",
+            "mem0_1370",
+            "mem0_1019",
+            "mem_1787723020834669348",
+            "mem_1787493633508887468",
+            "mem_1789237839000119576",
+            "mem_1786934231125242904",
+            "mem_1790956099804038923",
+            "mem_1789105446493846132",
+            "mem0_1314",
+            "mem_1789096807196941869",
+            "mem_1790955853889644294",
+            "mem_1789090005250151070",
+            "mem_1787131213813152640",
+            "mem_1788931843051960705",
+            "mem_1788932667790398289",
+            "mem_1789090897419997065",
+            "mem0_1379",
+            "mem_1789001471693267774",
+            "mem_1786923531717969945",
+            "mem0_1383",
+            "mem_1787108861430612784",
+            "mem0_1378",
+            "mem0_1316",
+            "mem_1786982856839457755",
+            "mem0_488",
+            "mem_1787480141243650603",
+            "mem0_784",
+            "mem_1787501814154433999",
+            "mem_1789748143919003412",
+            "mem_1786983270973301550",
+            "mem_1787718217815035145",
+            "mem0_780",
+            "mem0_781",
+            "mem0_1375",
+            "mem_1790996337184180488",
+            "mem0_581",
+            "mem0_785",
+            "mem0_644",
+            "mem0_1416",
+            "mem_1788932275238922379",
+            "mem0_766",
+            "mem0_1384",
+            "mem0_1434",
+            "mem_1787723895273714129",
+            "mem0_1372",
+            "mem_1787456283918842898"
+          ],
+          "best_rank": 3,
+          "per_target": {
+            "mem_1791007087526886924": 3
+          }
+        },
+        "and": {
+          "ok": true,
+          "mode": "and",
+          "expr": "\"skill\" AND \"routing\" AND \"kelas\" AND \"trigger\" AND \"onepager\" AND \"penunjuk\" AND \"k4\" AND \"k5\"",
+          "ids": [
+            "mem_1791006275948731756",
+            "mem_1790996344528695693",
+            "mem_1791007087526886924"
+          ],
+          "best_rank": 3,
+          "per_target": {
+            "mem_1791007087526886924": 3
+          }
+        }
+      },
+      "fts_engine_raw": {
+        "ok": true,
+        "error": "",
+        "n_results": 3,
+        "per_target": {
+          "mem_1791007087526886924": 3
+        },
+        "best_rank": 3
+      }
+    },
+    {
+      "query": "host sync exec bit mode berkas klon kotor boot VM",
+      "ns": null,
+      "targets": [
+        "mem_1790958381870251839"
+      ],
+      "target_meta": {
+        "mem_1790958381870251839": {
+          "id": "mem_1790958381870251839",
+          "mem_type": "decision",
+          "namespace": "hermes",
+          "length": 1285,
+          "superseded": false
+        }
+      },
+      "recall": {
+        "ok": true,
+        "returncode": 0,
+        "error": null,
+        "stderr": "nyawa: BGE embedder: reused shared socket /tmp/nyawa-bge-425096bd.sock (dim=384)\nnyawa: BGE embedder ready (model=/opt/data/bge-models/minilm-multilingual, source=default, dim=384)",
+        "n_results": 10,
+        "per_target_rank": {
+          "mem_1790958381870251839": 1
+        },
+        "best_rank": 1,
+        "top_order": [
+          {
+            "rank": 1,
+            "score": 0.5901,
+            "ids": [
+              "mem_1790958381870251839"
+            ],
+            "preview": "INSIDEN DAN PERBAIKAN SYNC HOST (2 Okt 2026, PR #286 dan #287). Gejala: host-sync.sh menolak jalan dengan ERROR Working "
+          },
+          {
+            "rank": 2,
+            "score": 0.5655,
+            "ids": [
+              "mem_1787495722570044271"
+            ],
+            "preview": "**Belum.** PR #213 masih **OPEN**. Container di VM belum ter-update.  Setelah kamu **merge PR #213**, jalankan ini di ho"
+          },
+          {
+            "rank": 3,
+            "score": 0.5582,
+            "ids": [
+              "mem_1787495478846881794"
+            ],
+            "preview": "**Belum.** PR #213 masih **OPEN**, belum di-merge. Container gateway di VM masih pakai `qwen3.7-flash` dari named volume"
+          },
+          {
+            "rank": 4,
+            "score": 0.5354,
+            "ids": [
+              "mem_1787733910356245614"
+            ],
+            "preview": "✅ **Docker Compose sudah diperbarui ke v1.1.11**  Perubahan pada `/opt/data/personal-ai-stack/docker-compose.yml`: - **B"
+          },
+          {
+            "rank": 5,
+            "score": 0.5351,
+            "ids": [
+              "mem_1787387834322690849"
+            ],
+            "preview": "Config host udah benar — `qwen3.7-flash` via `qwencloud` ✅. Tinggal **restart gateway** biar container baca config baru:"
+          },
+          {
+            "rank": 6,
+            "score": 0.4815,
+            "ids": [
+              "mem_1784621013354250287_234",
+              "mem0_234",
+              "mem_1784941440525877205"
+            ],
+            "preview": "User's runtime config file is at /opt/data/config.yaml and backup config is at .hermes/config.yaml."
+          },
+          {
+            "rank": 7,
+            "score": 0.4807,
+            "ids": [
+              "mem_1787824567110216222"
+            ],
+            "preview": "Siap, PR-nya lagi dibuat (delegate ke principal-engineer, jalan di background):  ## 📦 PR yang sedang dibuat 1. **nyawa r"
+          },
+          {
+            "rank": 8,
+            "score": 0.4796,
+            "ids": [
+              "mem_1790518015773729973"
+            ],
+            "preview": "Ya, sudah normal. Ini verifikasinya, bukan kesan saya saja.  | Cek | Hasil | |---|---| | Image container | `nousresearch"
+          },
+          {
+            "rank": 9,
+            "score": 0.4692,
+            "ids": [
+              "mem_1784621013354250287_629",
+              "mem0_629"
+            ],
+            "preview": "User Rezky confirmed that the /profile command is not registered as a Discord slash command — only /skill is available, "
+          },
+          {
+            "rank": 10,
+            "score": 0.4525,
+            "ids": [
+              "mem_1787406720299629349"
+            ],
+            "preview": "PR #209 sudah di-push: https://github.com/rezkyauliapratama/personal-ai-stack/pull/209  **Isi:** 1 file, config.yaml — t"
+          }
+        ]
+      },
+      "fts": {
+        "raw": {
+          "ok": true,
+          "mode": "raw",
+          "expr": "host sync exec bit mode berkas klon kotor boot VM",
+          "ids": [
+            "mem_1790958381870251839"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1790958381870251839": 1
+          }
+        },
+        "or": {
+          "ok": true,
+          "mode": "or",
+          "expr": "\"host\" OR \"sync\" OR \"exec\" OR \"bit\" OR \"mode\" OR \"berkas\" OR \"klon\" OR \"kotor\" OR \"boot\" OR \"vm\"",
+          "ids": [
+            "mem_1790958381870251839",
+            "mem_1790957918723886375",
+            "mem_1790958005088553680",
+            "mem_1790958387558317766",
+            "mem_1790957792407075823",
+            "mem_1790958080239458262",
+            "mem_1790958200195576474",
+            "mem_1791009646365300415",
+            "mem_1790957668296781526",
+            "mem_1790515177648781959",
+            "mem_1790913548683590790",
+            "mem_1790934466847674475",
+            "mem_1790913299794075731",
+            "mem_1790956622343544658",
+            "mem_1790955853889644294",
+            "mem_1790844885103297158",
+            "mem_1790515220119876334",
+            "mem_1790865682009561320",
+            "mem_1786852041614311969",
+            "mem_1790847457011250026",
+            "mem_1790866406673575384",
+            "mem_1790840712951395038",
+            "mem_1790515131762933951",
+            "mem_1790515345400218241",
+            "mem_1790516417817670936",
+            "mem_1790925890754602907",
+            "mem_1790955513938253027",
+            "mem_1790864390457356642",
+            "mem_1786850070493315717",
+            "snap_1787224903250182421",
+            "mem_1790912729025175025",
+            "mem_1790516214788986474",
+            "mem_1790925881907112214",
+            "mem_1787722991559095026",
+            "mem_1786849429412796659",
+            "mem_1790956417399741778",
+            "mem_1790935858927271583",
+            "mem_1790866543667844052",
+            "mem_1790518015773729973",
+            "mem_1790933283455732363",
+            "mem_1790864533635337781",
+            "snap_1788577788806211346",
+            "mem_1786864398484841491",
+            "mem_1786852583219748948",
+            "mem_1790932711336756347",
+            "mem_1790925497759087068",
+            "mem_1791006458375599633",
+            "mem_1790840679803599070",
+            "mem_1787367534390384025",
+            "snap_1787630835323471567",
+            "mem_1786851258865468704",
+            "mem_1786853919872969728",
+            "mem_1786696952181114811",
+            "mem_1790933279195989778",
+            "mem_1790866445368558729",
+            "mem_1791007114767307499",
+            "mem0_1159",
+            "mem0_893",
+            "mem_1790932426838145479",
+            "mem_1786852708057935779",
+            "mem_1788332474676316692",
+            "mem_1786848639677740858",
+            "mem_1787587981902867280",
+            "mem_1787501100934937382",
+            "mem0_703",
+            "mem_1786952446142148980",
+            "mem0_1683",
+            "mem_1790352372885368822",
+            "mem_1790899329941749588",
+            "mem0_1190",
+            "mem_1786864199797251893",
+            "mem_1790077616740397862",
+            "mem_1787367207472232456",
+            "mem_1787494533603547321",
+            "mem_1787495722570044271",
+            "mem_1787498598202128370",
+            "mem_1790912497061198917",
+            "mem_1790912675905490756",
+            "mem_1787153350780369396",
+            "mem_1790932961540379484",
+            "mem_1790345466012291965",
+            "mem_1790928296132449926",
+            "mem_1787818927086194462",
+            "mem_1790865874207276865",
+            "mem_1787495478846881794",
+            "mem_1786980671172146610",
+            "mem_1786852205442323166",
+            "mem_1790840287983094947",
+            "mem_1790868056328747329",
+            "mem_1790516002437781859",
+            "mem_1787039776153625729",
+            "mem_1788226316639191129",
+            "mem_1790994087695704228",
+            "mem_1786983625710952644",
+            "mem_1790913147396346539",
+            "mem_1790925087532220968",
+            "mem_1790516184433220098",
+            "mem_1790934083219857402",
+            "mem0_554",
+            "mem_1789061026782849697"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1790958381870251839": 1
+          }
+        },
+        "and": {
+          "ok": true,
+          "mode": "and",
+          "expr": "\"host\" AND \"sync\" AND \"exec\" AND \"bit\" AND \"mode\" AND \"berkas\" AND \"klon\" AND \"kotor\" AND \"boot\" AND \"vm\"",
+          "ids": [
+            "mem_1790958381870251839"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1790958381870251839": 1
+          }
+        }
+      },
+      "fts_engine_raw": {
+        "ok": true,
+        "error": "",
+        "n_results": 1,
+        "per_target": {
+          "mem_1790958381870251839": 1
+        },
+        "best_rank": 1
+      }
+    },
+    {
+      "query": "embedder minilm multilingual dim 384",
+      "ns": null,
+      "targets": [
+        "mem_1791032808097040119"
+      ],
+      "target_meta": {
+        "mem_1791032808097040119": {
+          "id": "mem_1791032808097040119",
+          "mem_type": "preference",
+          "namespace": "hermes",
+          "length": 437,
+          "superseded": false
+        }
+      },
+      "recall": {
+        "ok": true,
+        "returncode": 0,
+        "error": null,
+        "stderr": "nyawa: BGE embedder: reused shared socket /tmp/nyawa-bge-425096bd.sock (dim=384)\nnyawa: BGE embedder ready (model=/opt/data/bge-models/minilm-multilingual, source=default, dim=384)",
+        "n_results": 10,
+        "per_target_rank": {
+          "mem_1791032808097040119": 5
+        },
+        "best_rank": 5,
+        "top_order": [
+          {
+            "rank": 1,
+            "score": 0.7887,
+            "ids": [
+              "mem_1790699549662851980"
+            ],
+            "preview": "KEPUTUSAN 29/09/2026 (perintah Rezky 11:13 WIB \"restore runtime + pasang MiniLM + reindex + verifikasi\"): embedder Nyawa"
+          },
+          {
+            "rank": 2,
+            "score": 0.6598,
+            "ids": [
+              "mem_1787652176079522250"
+            ],
+            "preview": "Ketemu. Ini handoff **Nyawa BGE Local Embedder + Rule P0 (24/08/2026)** — `/opt/data/memories/session_resume_nyawa_bge_2"
+          },
+          {
+            "rank": 3,
+            "score": 0.5886,
+            "ids": [
+              "mem_1790614992730543165"
+            ],
+            "preview": "Yang ter-wire di kode sekarang: **bge-small-en-v1.5**, ONNX, **dim 384**, 133MB.  Terverifikasi barusan dari file modeln"
+          },
+          {
+            "rank": 4,
+            "score": 0.5651,
+            "ids": [
+              "mem_1790785939148133232"
+            ],
+            "preview": "KOREKSI MEMORY.md 30/09/2026 - dua entri sudah kedaluwarsa dan belum diedit karena run konsolidasi dilarang menyentuh ME"
+          },
+          {
+            "rank": 5,
+            "score": 0.5627,
+            "ids": [
+              "mem_1791032808097040119"
+            ],
+            "preview": "RULES INSTRUCTIONS GUIDELINES embedder dan recall Nyawa (dikoreksi 3 Okt 2026): embedder aktif minilm-multilingual dim 3"
+          },
+          {
+            "rank": 6,
+            "score": 0.5558,
+            "ids": [
+              "mem_1789234643453538024"
+            ],
+            "preview": "Jawabannya: **embedder bisa, reranker bisa dengan catatan, OCR tidak ada di Nyawa**. Saya sudah baca kodenya langsung, i"
+          },
+          {
+            "rank": 7,
+            "score": 0.5556,
+            "ids": [
+              "mem_1790612279237020291"
+            ],
+            "preview": "Probe selesai — dan hasilnya mengubah rekomendasi model sepenuhnya.  **Hasil 4 model** (10 query ID+EN, 600 memory nyata"
+          },
+          {
+            "rank": 8,
+            "score": 0.5522,
+            "ids": [
+              "mem_1791032808216592877"
+            ],
+            "preview": "RULES INSTRUCTIONS GUIDELINES backlog nyawa improvement (03/09, direvisi 3 Okt 2026): (1) PERBAIKI MEKANISME QUERY RECAL"
+          },
+          {
+            "rank": 9,
+            "score": 0.5382,
+            "ids": [
+              "mem_1791032825025462505"
+            ],
+            "preview": "Sudah saya ukur, dan hasilnya mengubah rencana. Dua temuan.  **Temuan 1: embedder-nya ternyata SUDAH multilingual, dan a"
+          },
+          {
+            "rank": 10,
+            "score": 0.5348,
+            "ids": [
+              "mem_1790429108310850865"
+            ],
+            "preview": "Status sementara sambil subagent jalan.  **Yang sudah siap**  - Branch kerja: `docs/personality-notion-sync`, dibuat dar"
+          }
+        ]
+      },
+      "fts": {
+        "raw": {
+          "ok": true,
+          "mode": "raw",
+          "expr": "embedder minilm multilingual dim 384",
+          "ids": [
+            "mem_1790699549662851980",
+            "mem_1791032808097040119",
+            "mem_1790614992730543165",
+            "mem_1790612279237020291",
+            "mem_1791032808216592877",
+            "mem_1790785939148133232",
+            "mem_1791032825025462505",
+            "mem_1789234643453538024"
+          ],
+          "best_rank": 2,
+          "per_target": {
+            "mem_1791032808097040119": 2
+          }
+        },
+        "or": {
+          "ok": true,
+          "mode": "or",
+          "expr": "\"embedder\" OR \"minilm\" OR \"multilingual\" OR \"dim\" OR \"384\"",
+          "ids": [
+            "mem_1790699549662851980",
+            "mem_1791032808097040119",
+            "mem_1790614992730543165",
+            "mem_1790612279237020291",
+            "mem_1791032808216592877",
+            "mem_1790785939148133232",
+            "mem_1790644805200282802",
+            "mem_1788397247009853178",
+            "mem_1790611950446003531",
+            "mem_1790609171116250404",
+            "mem_1787507903548077723",
+            "mem_1789235403377415686",
+            "mem_1790867522393126043",
+            "mem0_1248",
+            "mem_1788398934615875402",
+            "mem_1791032825025462505",
+            "mem_1787503223332931945",
+            "mem_1788397612954625105",
+            "mem_1790872312471180885",
+            "mem0_1247",
+            "mem_1789235413025992918",
+            "mem_1787823057757155830",
+            "mem_1787822738601760886",
+            "mem_1787507389560482277",
+            "mem0_1237",
+            "mem_1787507908719819749",
+            "mem_1787652176079522250",
+            "mem_1789234643453538024",
+            "mem0_733",
+            "mem_1787503454104488605",
+            "mem0_1271",
+            "mem_1789238144251408592",
+            "mem_1787507791580020700",
+            "mem_1787507381352804881",
+            "mem_1791019299995019156",
+            "mem_1791019827449985387",
+            "mem_1788397082531893657",
+            "mem_1790573136289871294",
+            "mem_1788397994230752616",
+            "mem_1790429901453217865",
+            "mem0_1250",
+            "mem_1790606257607324320",
+            "mem_1788398487025951900",
+            "mem_1788397310545324842",
+            "mem0_694",
+            "mem_1790573170146903752",
+            "mem_1789391082127513093",
+            "mem_1790864737805940135",
+            "mem0_1216",
+            "mem0_1249",
+            "mem0_1251",
+            "mem_1789391344912350762",
+            "mem0_1864",
+            "mem_1790840287983094947",
+            "mem0_1874",
+            "mem0_1272",
+            "mem0_1242",
+            "mem0_1871",
+            "mem0_1857",
+            "mem_1789237301835713332",
+            "snap_1788282509707712675",
+            "mem_1787879862286055195",
+            "mem0_1838",
+            "mem_1789359019167058698",
+            "mem_1787502875602735847",
+            "mem_1787824638100176071",
+            "mem0_1565",
+            "mem0_1841",
+            "mem_1787824567110216222",
+            "mem_1788859100051334151",
+            "mem_1788038356834037415",
+            "mem_1787549606318211859",
+            "mem0_1562",
+            "mem0_1862",
+            "mem0_1274",
+            "mem0_1881",
+            "mem_1786768398595276139",
+            "mem_1787822380781917986",
+            "mem0_1560",
+            "mem0_1568",
+            "mem0_1268",
+            "mem_1787880079155554548",
+            "mem_1787502597572793107",
+            "mem0_1244",
+            "mem_1788031032359881041",
+            "mem0_1845",
+            "mem0_1839",
+            "mem_1788027461928691862",
+            "mem0_1225",
+            "mem_1788045493311160741",
+            "mem_1787822031807114203",
+            "mem_1787980733725365626",
+            "mem_1790867612926858686",
+            "mem0_1335",
+            "mem_1787503022595911992",
+            "mem_1789232394884042700",
+            "snap_1789326538121500809",
+            "mem0_1821",
+            "mem0_349",
+            "mem0_1286"
+          ],
+          "best_rank": 2,
+          "per_target": {
+            "mem_1791032808097040119": 2
+          }
+        },
+        "and": {
+          "ok": true,
+          "mode": "and",
+          "expr": "\"embedder\" AND \"minilm\" AND \"multilingual\" AND \"dim\" AND \"384\"",
+          "ids": [
+            "mem_1790699549662851980",
+            "mem_1791032808097040119",
+            "mem_1790614992730543165",
+            "mem_1790612279237020291",
+            "mem_1791032808216592877",
+            "mem_1790785939148133232",
+            "mem_1791032825025462505",
+            "mem_1789234643453538024"
+          ],
+          "best_rank": 2,
+          "per_target": {
+            "mem_1791032808097040119": 2
+          }
+        }
+      },
+      "fts_engine_raw": {
+        "ok": true,
+        "error": "",
+        "n_results": 8,
+        "per_target": {
+          "mem_1791032808097040119": 2
+        },
+        "best_rank": 2
+      }
+    },
+    {
+      "query": "keputusan bersih-bersih memori conversation",
+      "ns": null,
+      "targets": [
+        "mem_1791020081219393765"
+      ],
+      "target_meta": {
+        "mem_1791020081219393765": {
+          "id": "mem_1791020081219393765",
+          "mem_type": "decision",
+          "namespace": "hermes",
+          "length": 1716,
+          "superseded": false
+        }
+      },
+      "recall": {
+        "ok": true,
+        "returncode": 0,
+        "error": null,
+        "stderr": "nyawa: BGE embedder: reused shared socket /tmp/nyawa-bge-425096bd.sock (dim=384)\nnyawa: BGE embedder ready (model=/opt/data/bge-models/minilm-multilingual, source=default, dim=384)",
+        "n_results": 10,
+        "per_target_rank": {
+          "mem_1791020081219393765": null
+        },
+        "best_rank": null,
+        "top_order": [
+          {
+            "rank": 1,
+            "score": 0.5409,
+            "ids": [
+              "mem_1786948478060870172"
+            ],
+            "preview": "Artikel sudah direvisi. File: `/opt/data/artikel/pengalaman-hermes-nyawa-terraform.md`  **MEDIA:/opt/data/artikel/pengal"
+          },
+          {
+            "rank": 2,
+            "score": 0.525,
+            "ids": [
+              "mem_1786948931094519194"
+            ],
+            "preview": "Strategi diganti: post sekarang jadi teaser yang mengarah ke artikel, bukan ringkasan penuh. File: `/opt/data/artikel/li"
+          },
+          {
+            "rank": 3,
+            "score": 0.5105,
+            "ids": [
+              "mem_1790864218684961785"
+            ],
+            "preview": "Tiga memori sudah masuk ke Nyawa: keputusan metode maintenance (id `mem_...31572`), fakta ops soal layanan `gateway-defa"
+          },
+          {
+            "rank": 4,
+            "score": 0.5043,
+            "ids": [
+              "mem_1790933807731118776"
+            ],
+            "preview": "Worker pembuktian sudah jalan; hasil mentahnya saya kabari begitu selesai.  Dua hal kecil tadi masih menunggu: boleh say"
+          },
+          {
+            "rank": 5,
+            "score": 0.4533,
+            "ids": [
+              "mem_1788582931775033853"
+            ],
+            "preview": "Sudah jadi, file tersimpan dan terverifikasi:  - Path: /opt/data/notes/political-capital-architect-elevator.md - Ukuran:"
+          },
+          {
+            "rank": 6,
+            "score": 0.4422,
+            "ids": [
+              "snap_1787474482853927871"
+            ],
+            "preview": "📦 Snapshot of 5 old memories: • Rezky instructed the assistant to save current communication preferences to Mem0 with ta"
+          },
+          {
+            "rank": 7,
+            "score": 0.4256,
+            "ids": [
+              "mem_1788861420129182494"
+            ],
+            "preview": "Oke, versi polos. Tanpa hook retoris, tanpa metafora, tanpa kalimat jualan. Fakta berurutan, biarkan kesimpulannya sampa"
+          },
+          {
+            "rank": 8,
+            "score": 0.424,
+            "ids": [
+              "snap_1788030616429945877"
+            ],
+            "preview": "📦 Snapshot of 5 old memories: • User Rezky was informed that using Strava API for single athlete data (pulling activity "
+          },
+          {
+            "rank": 9,
+            "score": 0.418,
+            "ids": [
+              "snap_1787544674623785059"
+            ],
+            "preview": "📦 Snapshot of 5 old memories: • The assistant suggested adding cross-platform formatting guidance (Discord and Telegram "
+          },
+          {
+            "rank": 10,
+            "score": 0.4129,
+            "ids": [
+              "snap_1790374052539829322"
+            ],
+            "preview": "📦 Snapshot of 5 old memories: • [rezky] coba summary kan percakapan yang ada di thread ini • **Ringkasan Thread — AI Pat"
+          }
+        ]
+      },
+      "fts": {
+        "raw": {
+          "ok": false,
+          "mode": "raw",
+          "expr": "keputusan bersih-bersih memori conversation",
+          "error": "OperationalError: no such column: bersih",
+          "ids": [],
+          "best_rank": null,
+          "per_target": {
+            "mem_1791020081219393765": null
+          }
+        },
+        "or": {
+          "ok": true,
+          "mode": "or",
+          "expr": "\"keputusan\" OR \"bersih\" OR \"bersih\" OR \"memori\" OR \"conversation\"",
+          "ids": [
+            "mem_1791020081219393765",
+            "mem_1791020111651120715",
+            "mem_1790864802770447620",
+            "mem_1790934083219857402",
+            "mem_1790864218684961785",
+            "mem_1791020111598908936",
+            "mem_1790897096403059620",
+            "mem_1790865626202751815",
+            "mem_1790864533635337781",
+            "mem_1787069001541730522",
+            "mem_1787070464835915251",
+            "mem_1791019299995019156",
+            "mem_1790864737805940135",
+            "mem_1790956237939994136",
+            "snap_1790614968305636167",
+            "mem_1790897104565289115",
+            "mem_1790912497061198917",
+            "mem_1791019914814566386",
+            "mem_1791007114767307499",
+            "mem_1790957447384461160",
+            "mem_1791019827449985387",
+            "mem_1789787121936315511",
+            "mem_1787718393849782183",
+            "mem_1790087018667973819",
+            "mem_1787718264047604718",
+            "mem_1787065570973830449",
+            "mem_1790430217287079435",
+            "mem_1787495295318770898",
+            "mem_1786955272348911093",
+            "mem_1787332645985671250",
+            "mem_1788190001129306947",
+            "mem_1790934466847674475",
+            "mem_1787771199740725145",
+            "mem_1784621013354250287_86",
+            "snap_1787430897814798061",
+            "snap_1787445360681749296",
+            "mem_1787938782283377359",
+            "mem_1790864390457356642",
+            "mem_1786895342013195892",
+            "mem_1790086396270432486",
+            "mem_1790864215491549326",
+            "mem_1790900609186758069",
+            "mem_1787069212997800904",
+            "mem_1787458651578089525",
+            "mem_1790323351766399953",
+            "mem_1789624546517902029",
+            "mem_1790867625875853478",
+            "mem_1787161043080176545",
+            "snap_1787401974648719966",
+            "mem_1790518146179903906",
+            "mem_1790933175077076372",
+            "mem_1790992838697629303",
+            "mem_1788161285839803581",
+            "mem_1790084029185080835",
+            "mem_1787811493657718107",
+            "mem_1791009646365300415",
+            "mem_1790912729025175025",
+            "snap_1787409206617380640",
+            "mem_1787066423868526402",
+            "mem_1790928961266166826",
+            "mem_1786804439229560737",
+            "mem_1789396783115036707",
+            "mem_1787070270621981462",
+            "mem_1788756781450025545",
+            "mem_1786954507462463141",
+            "mem_1790606257607324320",
+            "mem_1790867652146499410",
+            "mem_1787199452830445473",
+            "mem_1790958080239458262",
+            "mem_1786852708057935779",
+            "mem_1787151986752874644",
+            "mem_1790867662205607985",
+            "mem_1787388136870300954",
+            "snap_1787246603051295503",
+            "mem_1788226338538751255",
+            "mem_1790077616740397862",
+            "mem_1790840712951395038",
+            "mem_1790076835714172241",
+            "snap_1787467246596963900",
+            "mem_1788223219089292932",
+            "mem_1790516184433220098",
+            "snap_1787481719834082876",
+            "mem_1787106184438057818",
+            "mem_1788314737730133376",
+            "mem_1786780242645012022",
+            "mem_1787670249653575543",
+            "mem_1790913147396346539",
+            "mem_1790082562912742505",
+            "mem_1788440709110846187",
+            "mem_1790925881907112214",
+            "mem_1790867847098082733",
+            "mem_1787096756212792540",
+            "mem_1787141813879692213",
+            "mem_1790996351891233158",
+            "mem_1790925087532220968",
+            "mem_1787879862286055195",
+            "mem_1790866445368558729",
+            "mem_1786949233460806119",
+            "mem_1787067467684934108",
+            "mem_1790865682009561320"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1791020081219393765": 1
+          }
+        },
+        "and": {
+          "ok": true,
+          "mode": "and",
+          "expr": "\"keputusan\" AND \"bersih\" AND \"bersih\" AND \"memori\" AND \"conversation\"",
+          "ids": [
+            "mem_1791020081219393765",
+            "mem_1791020111651120715",
+            "mem_1791019914814566386"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1791020081219393765": 1
+          }
+        }
+      },
+      "fts_engine_raw": {
+        "ok": true,
+        "error": "",
+        "n_results": 0,
+        "per_target": {
+          "mem_1791020081219393765": null
+        },
+        "best_rank": null
+      }
+    },
+    {
+      "query": "penempatan task mingguan Notion SB Tasks OKR",
+      "ns": null,
+      "targets": [
+        "mem_1788161566429165075"
+      ],
+      "target_meta": {
+        "mem_1788161566429165075": {
+          "id": "mem_1788161566429165075",
+          "mem_type": "procedure",
+          "namespace": "hermes",
+          "length": 1104,
+          "superseded": false
+        }
+      },
+      "recall": {
+        "ok": true,
+        "returncode": 0,
+        "error": null,
+        "stderr": "nyawa: BGE embedder: reused shared socket /tmp/nyawa-bge-425096bd.sock (dim=384)\nnyawa: BGE embedder ready (model=/opt/data/bge-models/minilm-multilingual, source=default, dim=384)",
+        "n_results": 10,
+        "per_target_rank": {
+          "mem_1788161566429165075": 2
+        },
+        "best_rank": 2,
+        "top_order": [
+          {
+            "rank": 1,
+            "score": 0.8072,
+            "ids": [
+              "mem_1788161587499108611"
+            ],
+            "preview": "Beres, migrasi tuntas. Ringkasannya:  ## Yang salah (sudah dikoreksi) - 43 row OKR mingguan yang kukirim ke Master Activ"
+          },
+          {
+            "rank": 2,
+            "score": 0.5995,
+            "ids": [
+              "mem_1788161566429165075"
+            ],
+            "preview": "RULES INSTRUCTIONS GUIDELINES penempatan task Notion Rezky (31/08): 1) Task mingguan OKR personal WAJIB masuk database ["
+          },
+          {
+            "rank": 3,
+            "score": 0.5127,
+            "ids": [
+              "mem_1784621013354250287_993",
+              "mem0_993"
+            ],
+            "preview": "User Rezky requested that the 'Areas' column in the [SB] Tasks Notion database be filled with 'Personal' for all Week 1 "
+          },
+          {
+            "rank": 4,
+            "score": 0.5,
+            "ids": [
+              "mem0_1541"
+            ],
+            "preview": "User Rezky requested the creation of tasks for Week 2 (July 6-12, 2026) in the [SB] Tasks Notion database, continuing th"
+          },
+          {
+            "rank": 5,
+            "score": 0.4766,
+            "ids": [
+              "mem_1784621013354250287_983",
+              "mem0_983"
+            ],
+            "preview": "User Rezky had 15 tasks divided across 5 days in the [SB] Tasks Notion database for Week 1 of July 2026: July 1 (4 tasks"
+          },
+          {
+            "rank": 6,
+            "score": 0.4692,
+            "ids": [
+              "mem_1784621013354250287_985",
+              "mem0_985"
+            ],
+            "preview": "User Rezky found the initial 15-task Week 1 schedule too optimistic and requested a more minimalized version with tasks "
+          },
+          {
+            "rank": 7,
+            "score": 0.4621,
+            "ids": [
+              "mem0_1545"
+            ],
+            "preview": "User Rezky's Week 2 includes task [G5-Q3-02] Lari — 2 Sesi Minggu Ini (Strava) W2, to renew the weekly running target wi"
+          },
+          {
+            "rank": 8,
+            "score": 0.4486,
+            "ids": [
+              "snap_1787253835406535979"
+            ],
+            "preview": "📦 Snapshot of 5 old memories: • The assistant updated PR #38 to v1.1 adding: is_task_scope() auto-detects task vs non-ta"
+          },
+          {
+            "rank": 9,
+            "score": 0.4421,
+            "ids": [
+              "mem_1788139310647459523"
+            ],
+            "preview": "Database `[SB] Tasks` ada di page parent: **1cc0f42d-7035-8131-afeb-c2543254544f**  URL-nya: `https://app.notion.com/p/1"
+          },
+          {
+            "rank": 10,
+            "score": 0.4331,
+            "ids": [
+              "mem_1790589673316457805"
+            ],
+            "preview": "**EOD WRAP - Sen 28 Sep 2026 (W40 hari-1) | T-2 tutup Q3 (30 Sep)**  **1. Progress hari ini** - Task kantor (Master Acti"
+          }
+        ]
+      },
+      "fts": {
+        "raw": {
+          "ok": true,
+          "mode": "raw",
+          "expr": "penempatan task mingguan Notion SB Tasks OKR",
+          "ids": [
+            "mem_1788161566429165075",
+            "mem_1788161587499108611"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1788161566429165075": 1
+          }
+        },
+        "or": {
+          "ok": true,
+          "mode": "or",
+          "expr": "\"penempatan\" OR \"task\" OR \"mingguan\" OR \"notion\" OR \"sb\" OR \"tasks\" OR \"okr\"",
+          "ids": [
+            "mem_1788161566429165075",
+            "mem_1788161587499108611",
+            "mem_1788314377204505421",
+            "mem0_986",
+            "snap_1788714285609036196",
+            "mem_1788235693972184767",
+            "mem_1788314308033294379",
+            "mem_1788398720553859005",
+            "mem_1790555475364375322",
+            "mem_1790935297053215748",
+            "snap_1788707035157849925",
+            "mem_1788139310647459523",
+            "snap_1788721538872278201",
+            "mem_1787889379165480230",
+            "mem_1789465036212511912",
+            "mem_1786893795395285752",
+            "mem_1788579246773193374",
+            "mem0_1541",
+            "mem_1786865646332837366",
+            "mem0_993",
+            "mem0_983",
+            "mem_1787039940420202206",
+            "mem_1790958713473271163",
+            "mem0_992",
+            "mem_1786865571332868918",
+            "mem_1787670249653575543",
+            "mem_1786865764749160604",
+            "mem_1787795036040474990",
+            "mem_1786696783309153633",
+            "mem_1790852658120148932",
+            "mem_1788314195731794430",
+            "mem_1788314232757643586",
+            "mem_1787795198016613159",
+            "mem_1790917286063064506",
+            "mem_1788007946766040723",
+            "mem_1790557341751116396",
+            "mem_1789009464645247651",
+            "mem_1790931702561624432",
+            "mem_1786874292844561396",
+            "mem_1790571676154157617",
+            "mem_1787533558459840767",
+            "mem_1788141520867853772",
+            "mem_1787492323636535538",
+            "mem_1787070702040901104",
+            "mem_1788138429895463052",
+            "mem_1786874103400810026",
+            "mem_1786696891589088930",
+            "mem_1790643690202121036",
+            "mem_1788685504033475463",
+            "mem_1786894208299821406",
+            "mem_1787716058270116917",
+            "mem0_989",
+            "mem_1787794909481093686",
+            "mem_1790902899801563576",
+            "snap_1788699788479242279",
+            "mem_1790589673316457805",
+            "mem_1789701609378828617",
+            "mem_1790901062408468317",
+            "mem_1786893811287243059",
+            "mem_1787723895273714129",
+            "mem_1786983419677251234",
+            "mem_1788139260580906785",
+            "mem_1788580677616958137",
+            "mem_1790641903110613423",
+            "mem_1786865799661181986",
+            "mem0_1568",
+            "mem_1787107646942487140",
+            "mem_1786865514279070963",
+            "mem0_965",
+            "mem0_1544",
+            "mem_1790999910426213999",
+            "mem_1787069984237774167",
+            "mem_1787734029425785538",
+            "mem_1787039776153625729",
+            "mem_1788141694277466264",
+            "mem_1788145481414608681",
+            "snap_1788679231203027725",
+            "mem_1787070278622295973",
+            "mem_1787795079600977450",
+            "mem_1787280603290075281",
+            "mem_1789466965343275271",
+            "mem_1786894218837238603",
+            "mem_1788138531399181666",
+            "mem0_966",
+            "mem_1786979168416340748",
+            "mem_1787795309089098662",
+            "mem_1786980681671967409",
+            "mem_1790573170146903752",
+            "mem_1787723194546836566",
+            "snap_1787253835406535979",
+            "mem_1787723257513883770",
+            "mem_1787280736071983192",
+            "snap_1787246603051295503",
+            "mem_1790956099804038923",
+            "mem_1786980610427024138",
+            "snap_1787268299689965131",
+            "mem_1790955040065512792",
+            "snap_1787239370368150585",
+            "snap_1787261067632796942",
+            "mem_1787070763750842094"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1788161566429165075": 1
+          }
+        },
+        "and": {
+          "ok": true,
+          "mode": "and",
+          "expr": "\"penempatan\" AND \"task\" AND \"mingguan\" AND \"notion\" AND \"sb\" AND \"tasks\" AND \"okr\"",
+          "ids": [
+            "mem_1788161566429165075",
+            "mem_1788161587499108611"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1788161566429165075": 1
+          }
+        }
+      },
+      "fts_engine_raw": {
+        "ok": true,
+        "error": "",
+        "n_results": 2,
+        "per_target": {
+          "mem_1788161566429165075": 1
+        },
+        "best_rank": 1
+      }
+    },
+    {
+      "query": "gaya komunikasi dengan Rezky bahasa santai sopan",
+      "ns": null,
+      "targets": [
+        "mem_1788699015937139201"
+      ],
+      "target_meta": {
+        "mem_1788699015937139201": {
+          "id": "mem_1788699015937139201",
+          "mem_type": "preference",
+          "namespace": "hermes",
+          "length": 510,
+          "superseded": false
+        }
+      },
+      "recall": {
+        "ok": true,
+        "returncode": 0,
+        "error": null,
+        "stderr": "nyawa: BGE embedder: reused shared socket /tmp/nyawa-bge-425096bd.sock (dim=384)\nnyawa: BGE embedder ready (model=/opt/data/bge-models/minilm-multilingual, source=default, dim=384)",
+        "n_results": 10,
+        "per_target_rank": {
+          "mem_1788699015937139201": null
+        },
+        "best_rank": null,
+        "top_order": [
+          {
+            "rank": 1,
+            "score": 0.5211,
+            "ids": [
+              "mem_1784621013354250287_227",
+              "mem0_227",
+              "mem_1784941427516000072"
+            ],
+            "preview": "ESSENTIAL: Use \"aku\" for self, \"kamu\" for Rezky. Compact untuk mobile Discord."
+          },
+          {
+            "rank": 2,
+            "score": 0.4999,
+            "ids": [
+              "mem0_1643"
+            ],
+            "preview": "User Rezky chose option 4 from the techniques to fix his people-pleasing pattern: before each interaction, ask himself w"
+          },
+          {
+            "rank": 3,
+            "score": 0.4732,
+            "ids": [
+              "mem0_1639"
+            ],
+            "preview": "User Rezky has an Interaction Log system built on his Notion page with a database containing 10 columns: Interaksi, Tang"
+          },
+          {
+            "rank": 4,
+            "score": 0.4661,
+            "ids": [
+              "mem0_1427"
+            ],
+            "preview": "Rezky has written an article about Temporal, indicating familiarity with the platform"
+          },
+          {
+            "rank": 5,
+            "score": 0.442,
+            "ids": [
+              "mem_1784621013354250287_223",
+              "mem0_223",
+              "mem_1784941420024071542"
+            ],
+            "preview": "Rezky instructed the assistant to update the communication-style skill only, not to create a separate skill — the update"
+          },
+          {
+            "rank": 6,
+            "score": 0.4187,
+            "ids": [
+              "mem_1784621013354250287_261",
+              "mem0_261",
+              "mem_1784941491467352706"
+            ],
+            "preview": "User Rezky asked how to reduce the assistant's verbosity on June 21, 2026, and was offered multiple approaches: using di"
+          },
+          {
+            "rank": 7,
+            "score": 0.4178,
+            "ids": [
+              "mem0_1425"
+            ],
+            "preview": "Rezky is a Solution Architect at Bank Sinarmas based on the assistant's comparison context"
+          },
+          {
+            "rank": 8,
+            "score": 0.4123,
+            "ids": [
+              "snap_1787544674623785059"
+            ],
+            "preview": "📦 Snapshot of 5 old memories: • The assistant suggested adding cross-platform formatting guidance (Discord and Telegram "
+          },
+          {
+            "rank": 9,
+            "score": 0.4021,
+            "ids": [
+              "snap_1788486023620751621"
+            ],
+            "preview": "📦 Snapshot of 5 old memories: • User Rezky's session currently has 11 active bundled skills: repo-first-workflow, contai"
+          },
+          {
+            "rank": 10,
+            "score": 0.3961,
+            "ids": [
+              "mem0_1790"
+            ],
+            "preview": "User Rezky also shared an AI_IT_Resilience_Learning_Guide_v2 document from Notion as reference for the IT Resilience Cha"
+          }
+        ]
+      },
+      "fts": {
+        "raw": {
+          "ok": true,
+          "mode": "raw",
+          "expr": "gaya komunikasi dengan Rezky bahasa santai sopan",
+          "ids": [],
+          "best_rank": null,
+          "per_target": {
+            "mem_1788699015937139201": null
+          }
+        },
+        "or": {
+          "ok": true,
+          "mode": "or",
+          "expr": "\"gaya\" OR \"komunikasi\" OR \"dengan\" OR \"rezky\" OR \"bahasa\" OR \"santai\" OR \"sopan\"",
+          "ids": [
+            "mem_1788699015937139201",
+            "mem_1788699040841639175",
+            "mem_1788842070250681566",
+            "mem_1788849916793264153",
+            "mem_1788839455658916639",
+            "mem_1788850780232422865",
+            "mem_1788845269326595214",
+            "mem_1789716880736144861",
+            "mem_1788859540876123191",
+            "mem_1789718243827313155",
+            "mem_1787675502137313761",
+            "mem_1788283094569436792",
+            "mem_1789717011674453487",
+            "mem_1786864096637188880",
+            "mem_1786863616428599383",
+            "mem_1787388054608855166",
+            "mem_1786895751995972508",
+            "mem_1786946970003118094",
+            "mem_1789136649414335227",
+            "mem_1786948342500914880",
+            "mem_1788397612954625105",
+            "mem_1789238144251408592",
+            "mem_1788686992042798658",
+            "mem_1790427741688050004",
+            "mem_1789820406375077696",
+            "mem_1790606111966413041",
+            "mem_1787999725318898401",
+            "mem_1788856183522983457",
+            "mem_1790957447384461160",
+            "mem_1788502457810546739",
+            "mem_1788686743794395350",
+            "mem_1787493633508887468",
+            "mem_1787675646521409090",
+            "mem_1787524356023980165",
+            "mem_1787759820551659563",
+            "mem_1786948043974222443",
+            "mem_1788164113485690610",
+            "mem_1790996096953602773",
+            "mem_1790956099804038923",
+            "mem_1789436888256327737",
+            "mem_1788283306563398676",
+            "mem_1787972670673537752",
+            "mem_1786874103400810026",
+            "mem_1787906408555038764",
+            "mem_1788859400911711803",
+            "mem_1786780242645012022",
+            "mem_1787895710221190676",
+            "mem_1788397994230752616",
+            "mem_1788686919329335062",
+            "mem_1788398487025951900",
+            "mem_1790655151135128665",
+            "mem_1789232414078678973",
+            "mem_1788146383405193397",
+            "mem_1787558764008545990",
+            "mem_1786852300256731459",
+            "mem_1789059329760368147",
+            "mem_1788861590364202501",
+            "mem_1787039940420202206",
+            "mem_1790785939128245172",
+            "mem_1789718077500934168",
+            "mem_1788859883642310623",
+            "mem_1787589598883979245",
+            "mem_1788580690978633182",
+            "mem_1788397082531893657",
+            "mem_1790573580749492460",
+            "mem_1787502017729601625",
+            "mem_1787501658597667039",
+            "mem_1788147007277367446",
+            "mem_1790606257607324320",
+            "mem_1788398470753394049",
+            "mem_1788398671757124641",
+            "mem_1787717157796701843",
+            "mem_1787501904509758812",
+            "mem_1790057527826863011",
+            "mem_1788859187808065161",
+            "mem_1789360236192841994",
+            "mem_1789376085518487695",
+            "mem_1788697722685389129",
+            "mem_1787557291456687852",
+            "mem_1786983081493341951",
+            "mem_1791019299995019156",
+            "mem_1789360212201595571",
+            "mem_1788946888135757025",
+            "mem_1787108242677149644",
+            "mem_1789360542429581905",
+            "mem_1788146721030460171",
+            "mem_1786586429421266309",
+            "mem_1788397247009853178",
+            "mem_1789234643453538024",
+            "mem_1788686846511325491",
+            "mem_1790041505098052753",
+            "mem_1788933880653863932",
+            "mem_1788857867709225309",
+            "mem_1790429567029202775",
+            "mem_1789220281873294873",
+            "mem_1788581089516699947",
+            "mem_1788966995406013540",
+            "mem_1788859982942316448",
+            "mem_1787584798033057098",
+            "mem_1788358934161071422"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1788699015937139201": 1
+          }
+        },
+        "and": {
+          "ok": true,
+          "mode": "and",
+          "expr": "\"gaya\" AND \"komunikasi\" AND \"dengan\" AND \"rezky\" AND \"bahasa\" AND \"santai\" AND \"sopan\"",
+          "ids": [],
+          "best_rank": null,
+          "per_target": {
+            "mem_1788699015937139201": null
+          }
+        }
+      },
+      "fts_engine_raw": {
+        "ok": true,
+        "error": "",
+        "n_results": 0,
+        "per_target": {
+          "mem_1788699015937139201": null
+        },
+        "best_rank": null
+      }
+    },
+    {
+      "query": "personality karakter Rezky challenge traits",
+      "ns": null,
+      "targets": [
+        "mem_1790428054858104499"
+      ],
+      "target_meta": {
+        "mem_1790428054858104499": {
+          "id": "mem_1790428054858104499",
+          "mem_type": "preference",
+          "namespace": "hermes",
+          "length": 816,
+          "superseded": false
+        }
+      },
+      "recall": {
+        "ok": true,
+        "returncode": 0,
+        "error": null,
+        "stderr": "nyawa: BGE embedder: reused shared socket /tmp/nyawa-bge-425096bd.sock (dim=384)\nnyawa: BGE embedder ready (model=/opt/data/bge-models/minilm-multilingual, source=default, dim=384)",
+        "n_results": 10,
+        "per_target_rank": {
+          "mem_1790428054858104499": 1
+        },
+        "best_rank": 1,
+        "top_order": [
+          {
+            "rank": 1,
+            "score": 1.0019,
+            "ids": [
+              "mem_1790428054858104499"
+            ],
+            "preview": "RULES INSTRUCTIONS GUIDELINES personality karakter Rezky: sumber kanonik profil karakter = Notion 'Traits & Personality'"
+          },
+          {
+            "rank": 2,
+            "score": 0.8845,
+            "ids": [
+              "mem_1790428053832179034"
+            ],
+            "preview": "PROFIL KARAKTER REZKY - SUMBER KANONIK (disinkronkan 26 Sep 2026). Notion: page 'Traits & Personality' id 2ec0f42d-7035-"
+          },
+          {
+            "rank": 3,
+            "score": 0.8161,
+            "ids": [
+              "mem_1790427857890424623"
+            ],
+            "preview": "Ketemu. Sumber kanonik profil karakter kamu ada di Notion, dan isinya **lebih lengkap** dari yang tersimpan di Obsidian "
+          },
+          {
+            "rank": 4,
+            "score": 0.7954,
+            "ids": [
+              "mem_1790427741688050004"
+            ],
+            "preview": "Sudah saya cek dua-duanya. Ini hasilnya, plus gap yang ketemu.  **1. Obsidian (vault)**  - `vault/02-Facts/personality.m"
+          },
+          {
+            "rank": 5,
+            "score": 0.4919,
+            "ids": [
+              "mem_1784621013354250287_536",
+              "mem0_536"
+            ],
+            "preview": "User Rezky was informed that the system has 'personalities' (architect, codereviewer) that can be applied within the sam"
+          },
+          {
+            "rank": 6,
+            "score": 0.4841,
+            "ids": [
+              "mem_1784621013354250287_533",
+              "mem0_533"
+            ],
+            "preview": "User Rezky was offered two immediate options: Option 1 — define custom personalities in config.yaml and use `/personalit"
+          },
+          {
+            "rank": 7,
+            "score": 0.4692,
+            "ids": [
+              "mem_1784621013354250287_298",
+              "mem0_298",
+              "mem_1784941567001372894"
+            ],
+            "preview": "User Rezky has 88 skills in /opt/data/skills/ — 73 are bundled Hermes skills (from /opt/hermes/skills/) and 15 are custo"
+          },
+          {
+            "rank": 8,
+            "score": 0.4668,
+            "ids": [
+              "mem_1786863616428599383"
+            ],
+            "preview": "Beres, personality udah masuk ke Obsidian. Ini yang aku tulis:  **Files baru di `02-Facts/`:** - `personality.md` - prof"
+          },
+          {
+            "rank": 9,
+            "score": 0.4632,
+            "ids": [
+              "mem0_1114"
+            ],
+            "preview": "Rezky's GAP Skills Matrix shows Strong skills (Banking Domain, Security & Compliance, TOGAF, RAG/Vector DBs, LLM APIs, P"
+          },
+          {
+            "rank": 10,
+            "score": 0.4621,
+            "ids": [
+              "mem0_1373"
+            ],
+            "preview": "User Rezky was recommended a hybrid approach as best practice: Option 3 (personality line escalation triggers from PR #7"
+          }
+        ]
+      },
+      "fts": {
+        "raw": {
+          "ok": true,
+          "mode": "raw",
+          "expr": "personality karakter Rezky challenge traits",
+          "ids": [
+            "mem_1790428054858104499",
+            "mem_1790427741688050004",
+            "mem_1790428053832179034",
+            "mem_1790427857890424623"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1790428054858104499": 1
+          }
+        },
+        "or": {
+          "ok": true,
+          "mode": "or",
+          "expr": "\"personality\" OR \"karakter\" OR \"rezky\" OR \"challenge\" OR \"traits\"",
+          "ids": [
+            "mem_1790428054858104499",
+            "mem_1790427741688050004",
+            "mem_1790428053832179034",
+            "mem_1790427857890424623",
+            "mem_1786863616428599383",
+            "mem_1790428083118056417",
+            "mem_1787675646521409090",
+            "mem_1788283306563398676",
+            "mem_1790427587651755490",
+            "summary_1790428590122358247",
+            "mem0_1801",
+            "mem0_1478",
+            "mem_1786864096637188880",
+            "mem_1790429108310850865",
+            "snap_1790271033554054476",
+            "mem_1790956506303873146",
+            "snap_1790278290080773947",
+            "mem_1787895414792801138",
+            "mem_1790429191192344643",
+            "mem_1790996344528695693",
+            "mem_1790573170146903752",
+            "mem_1787675220945357503",
+            "mem_1790573580749492460",
+            "mem_1789357544352141427",
+            "mem_1790428578079839793",
+            "mem_1790526593106512593",
+            "mem_1787675419969357100",
+            "mem_1787675737153736882",
+            "mem_1791007114767307499",
+            "mem_1790430668324454571",
+            "mem_1790573839768384521",
+            "mem_1789787125831380032",
+            "mem_1790956237939994136",
+            "mem_1789302220813339726",
+            "mem0_533",
+            "mem_1790955040065512792",
+            "mem_1787734833153893745",
+            "mem_1791000212040096134",
+            "mem0_536",
+            "snap_1787203205147379177",
+            "mem0_1374",
+            "mem0_1321",
+            "mem_1790935029091159215",
+            "mem_1790994087695704228",
+            "mem0_1320",
+            "mem_1787495722570044271",
+            "mem0_1318",
+            "mem_1790957221961805663",
+            "mem0_1373",
+            "mem0_522",
+            "mem0_1315",
+            "mem_1789303930481809913",
+            "mem_1787495478846881794",
+            "snap_1787188738885611019",
+            "mem_1787542185754499283",
+            "mem0_271",
+            "mem_1790955853889644294",
+            "mem_1790345917029852114",
+            "mem0_273",
+            "mem_1788226316639191129",
+            "mem_1790913299794075731",
+            "snap_1788794068345622231",
+            "mem_1790932967807411977",
+            "mem0_232",
+            "mem_1788441212595269090",
+            "mem0_1038",
+            "mem0_1356",
+            "mem_1787497065686060001",
+            "mem_1788185931723259450",
+            "mem_1787895710221190676",
+            "mem_1789717909383635517",
+            "snap_1790574263738233956",
+            "mem0_993",
+            "mem0_1378",
+            "mem0_1397",
+            "snap_1787544674623785059",
+            "mem0_1533",
+            "mem0_1039",
+            "mem_1790935858927271583",
+            "mem0_802",
+            "snap_1787467246596963900",
+            "snap_1787530103034991653",
+            "snap_1787515635603375995",
+            "mem_1787492323636535538",
+            "mem0_1319",
+            "mem0_1322",
+            "mem0_1538",
+            "mem0_1628",
+            "mem_1787733977425320402",
+            "snap_1788045111599502993",
+            "snap_1787522868022731172",
+            "snap_1788449755278732825",
+            "mem0_1149",
+            "mem0_1596",
+            "snap_1787232136642783220",
+            "mem0_966",
+            "mem0_1399",
+            "mem0_1599",
+            "snap_1787239370368150585",
+            "mem0_632"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1790428054858104499": 1
+          }
+        },
+        "and": {
+          "ok": true,
+          "mode": "and",
+          "expr": "\"personality\" AND \"karakter\" AND \"rezky\" AND \"challenge\" AND \"traits\"",
+          "ids": [
+            "mem_1790428054858104499",
+            "mem_1790427741688050004",
+            "mem_1790428053832179034",
+            "mem_1790427857890424623"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1790428054858104499": 1
+          }
+        }
+      },
+      "fts_engine_raw": {
+        "ok": true,
+        "error": "",
+        "n_results": 4,
+        "per_target": {
+          "mem_1790428054858104499": 1
+        },
+        "best_rank": 1
+      }
+    },
+    {
+      "query": "batas ukuran berkas SKILL.md sebelum narasi harus dipindah ke references",
+      "ns": null,
+      "targets": [
+        "mem_1790956506303873146"
+      ],
+      "target_meta": {
+        "mem_1790956506303873146": {
+          "id": "mem_1790956506303873146",
+          "mem_type": "decision",
+          "namespace": "hermes",
+          "length": 948,
+          "superseded": false
+        }
+      },
+      "recall": {
+        "ok": true,
+        "returncode": 0,
+        "error": null,
+        "stderr": "nyawa: BGE embedder: reused shared socket /tmp/nyawa-bge-425096bd.sock (dim=384)\nnyawa: BGE embedder ready (model=/opt/data/bge-models/minilm-multilingual, source=default, dim=384)",
+        "n_results": 10,
+        "per_target_rank": {
+          "mem_1790956506303873146": null
+        },
+        "best_rank": null,
+        "top_order": [
+          {
+            "rank": 1,
+            "score": 0.5793,
+            "ids": [
+              "mem_1790573170146903752"
+            ],
+            "preview": "MEMORY.md baru sudah terpasang dan mekanismenya hidup.  **MEMORY.md: 13.141 jadi 8.775 karakter, 13 jadi 11 kartu**  - R"
+          },
+          {
+            "rank": 2,
+            "score": 0.568,
+            "ids": [
+              "mem_1787723895273714129"
+            ],
+            "preview": "Berdasarkan status terkini di repo, Notion, dan skill runtime, ini next items yang layak dikerjakan:  ## P0 — Critical /"
+          },
+          {
+            "rank": 3,
+            "score": 0.5644,
+            "ids": [
+              "mem_1790058047063400952"
+            ],
+            "preview": "Prompt handoff-nya sudah jadi. Saya verifikasi dulu: 323 baris, 14 bagian, tanpa em dash dan tanpa karakter gambar kotak"
+          },
+          {
+            "rank": 4,
+            "score": 0.5491,
+            "ids": [
+              "mem_1789820643074477240"
+            ],
+            "preview": "Notifikasi itu sisa dari task laporan tadi: pip install quantstats ke `/opt/data/report-venv` selesai normal (exit 0). W"
+          },
+          {
+            "rank": 5,
+            "score": 0.5401,
+            "ids": [
+              "mem_1789389759208942575"
+            ],
+            "preview": "Proposalnya sudah jadi.  **File** - `/opt/data/proposals/BSIM-PROP-NYAWA-FORGE-001-PoC-AIRES-v1.0.md` - Document ID: BSI"
+          },
+          {
+            "rank": 6,
+            "score": 0.5251,
+            "ids": [
+              "mem_1790934083219857402"
+            ],
+            "preview": "Selesai dan sudah ter-push.  - Dua commit masuk ke `main`: `467acbe` (sinkronisasi MEMORY.md dengan runtime) dan `cef137"
+          },
+          {
+            "rank": 7,
+            "score": 0.5129,
+            "ids": [
+              "mem_1786949013078967249"
+            ],
+            "preview": "Semua beres kecuali 1 item yang ke-blok guard. Status final:  **✅ Done:** - PR #1 notion-agent-kit MERGED (79e7373) - se"
+          },
+          {
+            "rank": 8,
+            "score": 0.5072,
+            "ids": [
+              "mem_1790421543189760172"
+            ],
+            "preview": "Tercatat di Nyawa, tiga memory, dan saya uji keterambilannya.  ## Yang disimpan  - **Aturan pencegahan, versi lengkap** "
+          },
+          {
+            "rank": 9,
+            "score": 0.5051,
+            "ids": [
+              "mem_1790428431251701666"
+            ],
+            "preview": "Step 1 selesai, step 3 hasilnya sudah saya baca utuh, step 2 sedang jalan. Ini rangkumannya.  **Step 1 - PR #249** https"
+          },
+          {
+            "rank": 10,
+            "score": 0.4873,
+            "ids": [
+              "snap_1789363138826778758"
+            ],
+            "preview": "📦 Snapshot of 5 old memories: • CYCLE 08-02 17:30 WIB: BTC 0.00139373, harga 1.131.211.000 (ticker MCP last), avg weight"
+          }
+        ]
+      },
+      "fts": {
+        "raw": {
+          "ok": false,
+          "mode": "raw",
+          "expr": "batas ukuran berkas SKILL.md sebelum narasi harus dipindah ke references",
+          "error": "OperationalError: fts5: syntax error near \".\"",
+          "ids": [],
+          "best_rank": null,
+          "per_target": {
+            "mem_1790956506303873146": null
+          }
+        },
+        "or": {
+          "ok": true,
+          "mode": "or",
+          "expr": "\"batas\" OR \"ukuran\" OR \"berkas\" OR \"skill\" OR \"md\" OR \"sebelum\" OR \"narasi\" OR \"harus\" OR \"dipindah\" OR \"ke\" OR \"references\"",
+          "ids": [
+            "mem_1790956506303873146",
+            "mem_1790994087695704228",
+            "mem_1790955513938253027",
+            "mem_1790955853889644294",
+            "mem_1790990510325120760",
+            "mem_1790934856990417586",
+            "mem_1787723408305315375",
+            "mem_1790526593106512593",
+            "mem_1791000212040096134",
+            "mem_1790429108310850865",
+            "mem_1791007087526886924",
+            "mem_1787723863074747299",
+            "mem_1791000147553645898",
+            "mem_1790428578079839793",
+            "mem_1790996351891233158",
+            "mem_1788160414060760925",
+            "mem_1790080747820227108",
+            "mem_1789059099511254840",
+            "mem_1789060012352935213",
+            "mem_1790573170146903752",
+            "mem_1790933283455732363",
+            "mem_1790993988591456402",
+            "mem_1790935858927271583",
+            "mem_1790957221961805663",
+            "mem_1791002103133346299",
+            "mem_1787723064521297378",
+            "mem_1790957447384461160",
+            "mem_1789824790047894060",
+            "mem_1790429191192344643",
+            "mem_1790957078901712063",
+            "mem_1787718568799810672",
+            "mem_1790935029091159215",
+            "mem_1790956237939994136",
+            "mem_1790996337184180488",
+            "mem_1790083435169980612",
+            "mem_1790083993958891952",
+            "mem_1787502109131184574",
+            "mem_1790956622343544658",
+            "mem_1787723895273714129",
+            "mem_1790082312875663379",
+            "mem_1791009646365300415",
+            "mem_1790866445368558729",
+            "mem_1791007114767307499",
+            "mem_1787065937029176789",
+            "mem_1790925087532220968",
+            "mem0_863",
+            "mem_1790866406673575384",
+            "mem_1787723528137752321",
+            "mem_1789060035665334284",
+            "mem_1790429567029202775",
+            "mem_1791006275948731756",
+            "mem_1790083021043393531",
+            "mem_1789090897419997065",
+            "mem_1790082496212675997",
+            "mem_1787906653413647748",
+            "mem_1790865868299968826",
+            "mem_1790076835714172241",
+            "mem_1790081696590757737",
+            "mem_1790526138453337897",
+            "mem_1787668920349851740",
+            "mem_1789105446493846132",
+            "mem_1787722663025795071",
+            "mem_1788858642037049888",
+            "mem_1789001471693267774",
+            "mem_1788859400911711803",
+            "mem_1790913273500617054",
+            "mem_1787556874256624954",
+            "mem_1787906269962869436",
+            "mem_1790996096953602773",
+            "mem_1790080908967591917",
+            "mem_1788164113485690610",
+            "mem_1787064740718264038",
+            "mem_1790864390457356642",
+            "mem_1788859743443429798",
+            "mem_1786982844062474511",
+            "mem_1790042221063959797",
+            "mem_1789090876513455192",
+            "mem_1787067590757250678",
+            "mem_1789106642747647305",
+            "mem_1786797442294640642",
+            "mem_1789059329760368147",
+            "mem_1790958713452384254",
+            "mem_1790430668324454571",
+            "mem_1790077519051477506",
+            "mem_1787671703657292332",
+            "mem_1790957668296781526",
+            "mem_1790345466012291965",
+            "mem_1790083750684548012",
+            "mem_1787723194546836566",
+            "mem_1790430042281382201",
+            "mem_1786754447301193748",
+            "mem_1787094959275333218",
+            "mem_1790080574266837607",
+            "mem_1787822707623482881",
+            "mem_1790082019593877009",
+            "mem_1788164706904164750",
+            "mem_1789216258291956842",
+            "mem_1786948623253117701",
+            "mem_1787068734298000434",
+            "mem_1789061647119414702"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1790956506303873146": 1
+          }
+        },
+        "and": {
+          "ok": true,
+          "mode": "and",
+          "expr": "\"batas\" AND \"ukuran\" AND \"berkas\" AND \"skill\" AND \"md\" AND \"sebelum\" AND \"narasi\" AND \"harus\" AND \"dipindah\" AND \"ke\" AND \"references\"",
+          "ids": [],
+          "best_rank": null,
+          "per_target": {
+            "mem_1790956506303873146": null
+          }
+        }
+      },
+      "fts_engine_raw": {
+        "ok": true,
+        "error": "",
+        "n_results": 0,
+        "per_target": {
+          "mem_1790956506303873146": null
+        },
+        "best_rank": null
+      }
+    },
+    {
+      "query": "aturan filter blok Rules tiap turn supaya tak kebanjiran memori basi",
+      "ns": null,
+      "targets": [
+        "mem_1790956506816641948"
+      ],
+      "target_meta": {
+        "mem_1790956506816641948": {
+          "id": "mem_1790956506816641948",
+          "mem_type": "decision",
+          "namespace": "hermes",
+          "length": 1097,
+          "superseded": false
+        }
+      },
+      "recall": {
+        "ok": true,
+        "returncode": 0,
+        "error": null,
+        "stderr": "nyawa: BGE embedder: reused shared socket /tmp/nyawa-bge-425096bd.sock (dim=384)\nnyawa: BGE embedder ready (model=/opt/data/bge-models/minilm-multilingual, source=default, dim=384)",
+        "n_results": 10,
+        "per_target_rank": {
+          "mem_1790956506816641948": null
+        },
+        "best_rank": null,
+        "top_order": [
+          {
+            "rank": 1,
+            "score": 0.5844,
+            "ids": [
+              "mem_1789820625263083703"
+            ],
+            "preview": "GELOMBANG 1 SELESAI DIKERJAKAN (19/09, TSD Bagian 15.16, commit 7873d50 pushed main). 2 dari 3 item jalan, 1 terblokir ("
+          },
+          {
+            "rank": 2,
+            "score": 0.5572,
+            "ids": [
+              "mem_1790421543189760172"
+            ],
+            "preview": "Tercatat di Nyawa, tiga memory, dan saya uji keterambilannya.  ## Yang disimpan  - **Aturan pencegahan, versi lengkap** "
+          },
+          {
+            "rank": 3,
+            "score": 0.5564,
+            "ids": [
+              "mem_1790606111966413041"
+            ],
+            "preview": "Selesai. Dua hal yang kamu pilih sudah dikerjakan dan terverifikasi.  **Status branch** - HEAD: `bc13b0e2393a195189c7f30"
+          },
+          {
+            "rank": 4,
+            "score": 0.5562,
+            "ids": [
+              "mem_1787507903548077723"
+            ],
+            "preview": "HANDOFF NYAWA 24/08: BGE local embedder OPSI A SELESAI. Model Xenova/bge-small-en-v1.5 (dim 384) di /opt/data/nyawa/inte"
+          },
+          {
+            "rank": 5,
+            "score": 0.5479,
+            "ids": [
+              "mem_1790573580749492460"
+            ],
+            "preview": "Sudah saya ukur, dan hasil ukurannya mengubah rencananya. Ini caranya.  **Langkah 1: ukur dulu, jangan tebak ambangnya**"
+          },
+          {
+            "rank": 6,
+            "score": 0.5361,
+            "ids": [
+              "mem_1790573839768384521"
+            ],
+            "preview": "Tiga worker jalan paralel, dan jalur rollback sudah siap.  **Yang sedang dikerjakan** (semuanya tanpa restart, sesuai pe"
+          },
+          {
+            "rank": 7,
+            "score": 0.5325,
+            "ids": [
+              "mem_1790867847098082733"
+            ],
+            "preview": "Perbaikan watchdog-nya sedang dikerjakan di branch yang sama, jadi **tahan dulu merge #269** sampai commit keduanya masu"
+          },
+          {
+            "rank": 8,
+            "score": 0.5321,
+            "ids": [
+              "mem_1786923531717969945"
+            ],
+            "preview": "Udah kubaca full draft artikelnya (150 blocks, 3 pattern + 3 use case + 3 hands-on + decision framework). Secara konsep,"
+          },
+          {
+            "rank": 9,
+            "score": 0.5247,
+            "ids": [
+              "mem_1790609617604486367"
+            ],
+            "preview": "Saya stop di sini karena gate approval menolak (timeout 1 menit, tanpa respons) — persis kejadian yang tercatat di `hook"
+          },
+          {
+            "rank": 10,
+            "score": 0.5132,
+            "ids": [
+              "mem_1790352372885368822"
+            ],
+            "preview": "Saya berhenti di sini dan minta keputusanmu, karena dua hal penting.  ## Container itu hampir pasti membahayakan host in"
+          }
+        ]
+      },
+      "fts": {
+        "raw": {
+          "ok": true,
+          "mode": "raw",
+          "expr": "aturan filter blok Rules tiap turn supaya tak kebanjiran memori basi",
+          "ids": [],
+          "best_rank": null,
+          "per_target": {
+            "mem_1790956506816641948": null
+          }
+        },
+        "or": {
+          "ok": true,
+          "mode": "or",
+          "expr": "\"aturan\" OR \"filter\" OR \"blok\" OR \"rules\" OR \"tiap\" OR \"turn\" OR \"supaya\" OR \"tak\" OR \"kebanjiran\" OR \"memori\" OR \"basi\"",
+          "ids": [
+            "mem_1790956506816641948",
+            "mem_1790935029091159215",
+            "mem_1790957221961805663",
+            "mem_1791003351629939259",
+            "mem_1787507903548077723",
+            "mem_1790573580749492460",
+            "mem_1790999910426213999",
+            "mem_1790955513938253027",
+            "mem_1790992838697629303",
+            "mem_1790957078901712063",
+            "mem_1790526593106512593",
+            "mem_1790421543189760172",
+            "mem_1790573839768384521",
+            "mem_1790957447384461160",
+            "mem_1790955040065512792",
+            "mem_1790573170146903752",
+            "mem_1789787152291917529",
+            "mem_1787652176079522250",
+            "mem_1791032887044825209",
+            "mem_1789359019167058698",
+            "mem_1789232414078678973",
+            "mem_1787502499479328487",
+            "mem_1790526138453337897",
+            "mem_1787824540467371646",
+            "mem_1787507381352804881",
+            "mem_1789090139061826776",
+            "mem_1788397082531893657",
+            "mem_1791000212040096134",
+            "mem_1790913552005028340",
+            "mem_1790956099804038923",
+            "mem_1787822294701056144",
+            "mem_1790934856990417586",
+            "mem_1790082471087184796",
+            "mem_1790928296132449926",
+            "mem_1787714193705837662",
+            "mem_1787503454104488605",
+            "mem_1790864802770447620",
+            "mem_1787556530672558746",
+            "mem_1790429901453217865",
+            "mem_1790082562912742505",
+            "mem_1791000147553645898",
+            "mem_1787645812546479735",
+            "mem_1787972399949803693",
+            "mem_1790785939148133232",
+            "mem_1790996344528695693",
+            "mem_1787502597572793107",
+            "mem_1790994087695704228",
+            "mem_1790427741688050004",
+            "mem_1787828086469714595",
+            "mem_1789788613906571590",
+            "mem_1790955853889644294",
+            "mem_1790990510325120760",
+            "mem_1790428083118056417",
+            "mem_1789357544352141427",
+            "mem_1788146262226688178",
+            "mem_1791020111651120715",
+            "mem_1786805575255709606",
+            "mem_1787654769251382588",
+            "mem_1790864533635337781",
+            "mem_1787627855425961315",
+            "mem_1788011042035475360",
+            "mem_1790084207775478721",
+            "mem_1790932967807411977",
+            "mem_1790956512024722128",
+            "mem_1789820625263083703",
+            "mem_1790864737805940135",
+            "mem_1787829414867944890",
+            "mem_1789748163464296481",
+            "mem_1788699040841639175",
+            "mem_1790932961540379484",
+            "mem_1789058976379501969",
+            "mem_1787770821057130513",
+            "mem_1791032825025462505",
+            "mem_1790956417399741778",
+            "mem_1789091259761933869",
+            "mem_1788755235700523184",
+            "mem_1791020081219393765",
+            "mem_1786697240328485667",
+            "mem_1787155975665986204",
+            "mem_1787708915463041408",
+            "mem_1787130503687832497",
+            "mem0_1629",
+            "mem_1789389759208942575",
+            "mem_1787492203699309350",
+            "mem_1789787888661712731",
+            "mem_1791020111598908936",
+            "mem_1789750057773589271",
+            "mem_1787499084891618882",
+            "mem_1787557291456687852",
+            "snap_1790227487697531459",
+            "mem_1787642218368914510",
+            "mem_1790898861865866870",
+            "mem_1790082496212675997",
+            "mem_1787453183960320943",
+            "mem_1786836951666788060",
+            "mem_1787465856716469580",
+            "mem_1787876895047848230",
+            "mem_1787822031807114203",
+            "mem_1791007114767307499",
+            "mem_1789740092634113399"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1790956506816641948": 1
+          }
+        },
+        "and": {
+          "ok": true,
+          "mode": "and",
+          "expr": "\"aturan\" AND \"filter\" AND \"blok\" AND \"rules\" AND \"tiap\" AND \"turn\" AND \"supaya\" AND \"tak\" AND \"kebanjiran\" AND \"memori\" AND \"basi\"",
+          "ids": [],
+          "best_rank": null,
+          "per_target": {
+            "mem_1790956506816641948": null
+          }
+        }
+      },
+      "fts_engine_raw": {
+        "ok": true,
+        "error": "",
+        "n_results": 0,
+        "per_target": {
+          "mem_1790956506816641948": null
+        },
+        "best_rank": null
+      }
+    },
+    {
+      "query": "nama skill tidak boleh bentrok dengan bawaan hub Hermes",
+      "ns": null,
+      "targets": [
+        "mem_1790956506851507017"
+      ],
+      "target_meta": {
+        "mem_1790956506851507017": {
+          "id": "mem_1790956506851507017",
+          "mem_type": "decision",
+          "namespace": "hermes",
+          "length": 976,
+          "superseded": false
+        }
+      },
+      "recall": {
+        "ok": true,
+        "returncode": 0,
+        "error": null,
+        "stderr": "nyawa: BGE embedder: reused shared socket /tmp/nyawa-bge-425096bd.sock (dim=384)\nnyawa: BGE embedder ready (model=/opt/data/bge-models/minilm-multilingual, source=default, dim=384)",
+        "n_results": 10,
+        "per_target_rank": {
+          "mem_1790956506851507017": 1
+        },
+        "best_rank": 1,
+        "top_order": [
+          {
+            "rank": 1,
+            "score": 0.5693,
+            "ids": [
+              "mem_1790956506851507017"
+            ],
+            "preview": "ATURAN NAMA SKILL TIDAK BOLEH BENTROK HUB (2 Okt 2026, disetujui Rezky). Aturan: nama folder skill maupun field name: ti"
+          },
+          {
+            "rank": 2,
+            "score": 0.5415,
+            "ids": [
+              "mem_1790990510325120760"
+            ],
+            "preview": "Pagi. Saya sudah cek kondisi hidupnya, dan hasilnya bagus. Ini mekanismenya sekarang.  **1. Inventaris dan kelas**  104 "
+          },
+          {
+            "rank": 3,
+            "score": 0.5,
+            "ids": [
+              "mem0_1349"
+            ],
+            "preview": "The assistant informed Rezky that 10 Superpowers skills have not been ported to Hermes: brainstorming, dispatching-paral"
+          },
+          {
+            "rank": 4,
+            "score": 0.4919,
+            "ids": [
+              "mem0_1348"
+            ],
+            "preview": "User Rezky asked whether Superpowers skills can be installed into Hermes — the assistant confirmed that 4 Superpowers sk"
+          },
+          {
+            "rank": 5,
+            "score": 0.4841,
+            "ids": [
+              "mem0_1352"
+            ],
+            "preview": "Rezky asked for a list of Superpowers skills not yet available in Hermes — the assistant identified 8 unported skills: b"
+          },
+          {
+            "rank": 6,
+            "score": 0.4766,
+            "ids": [
+              "mem_1784621013354250287_298",
+              "mem0_298",
+              "mem_1784941567001372894"
+            ],
+            "preview": "User Rezky has 88 skills in /opt/data/skills/ — 73 are bundled Hermes skills (from /opt/hermes/skills/) and 15 are custo"
+          },
+          {
+            "rank": 7,
+            "score": 0.4692,
+            "ids": [
+              "mem0_1418"
+            ],
+            "preview": "Rezky was informed that Kanban prerequisites for Hermes include setting orchestrator_profile (currently empty), initiali"
+          },
+          {
+            "rank": 8,
+            "score": 0.4621,
+            "ids": [
+              "mem_1784621013354250287_774",
+              "mem0_774"
+            ],
+            "preview": "User Rezky was informed that the Caveman skill can be adopted into Hermes in two ways: via 9Router (if it supports injec"
+          },
+          {
+            "rank": 9,
+            "score": 0.4552,
+            "ids": [
+              "mem0_1351"
+            ],
+            "preview": "Rezky was offered the option to create a PR to port either some or all of the 10 unported Superpowers skills into Hermes"
+          },
+          {
+            "rank": 10,
+            "score": 0.4357,
+            "ids": [
+              "mem0_1419"
+            ],
+            "preview": "Rezky was informed that Kanban Hermes does not require multi-gateway — multiplex_profiles with 1 gateway is sufficient, "
+          }
+        ]
+      },
+      "fts": {
+        "raw": {
+          "ok": true,
+          "mode": "raw",
+          "expr": "nama skill tidak boleh bentrok dengan bawaan hub Hermes",
+          "ids": [
+            "mem_1790956506851507017",
+            "mem_1790990510325120760"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1790956506851507017": 1
+          }
+        },
+        "or": {
+          "ok": true,
+          "mode": "or",
+          "expr": "\"nama\" OR \"skill\" OR \"tidak\" OR \"boleh\" OR \"bentrok\" OR \"dengan\" OR \"bawaan\" OR \"hub\" OR \"hermes\"",
+          "ids": [
+            "mem_1790956506851507017",
+            "mem_1790990510325120760",
+            "mem_1790956512024722128",
+            "mem_1790865868299968826",
+            "mem_1790956417399741778",
+            "mem_1790957221961805663",
+            "mem_1791007087526886924",
+            "mem_1790934856990417586",
+            "mem_1787723408305315375",
+            "mem_1790516214788986474",
+            "mem_1791003351629939259",
+            "mem_1790935858927271583",
+            "mem_1786983359004972715",
+            "mem_1790427587651755490",
+            "mem_1787502109131184574",
+            "mem_1790429567029202775",
+            "mem_1790955513938253027",
+            "mem_1790429404984924014",
+            "mem_1790865874207276865",
+            "mem_1787769083745162585",
+            "mem_1790935029091159215",
+            "mem_1786946970003118094",
+            "mem_1787496017878878516",
+            "mem_1786983270973301550",
+            "mem_1787770715232996710",
+            "mem_1790864218684961785",
+            "mem_1790992838697629303",
+            "mem_1786948043974222443",
+            "mem_1789216258291956842",
+            "mem_1790872314747857319",
+            "mem_1790955853889644294",
+            "mem_1787723863074747299",
+            "mem_1786982856839457755",
+            "mem_1790956237939994136",
+            "mem_1787447953088228999",
+            "mem_1786949013078967249",
+            "mem_1787770548248653890",
+            "mem_1790421515511059827",
+            "mem_1790430042281382201",
+            "mem_1788697722685389129",
+            "mem_1786948478060870172",
+            "mem_1790999910426213999",
+            "mem_1788282656573980057",
+            "mem_1787671091332943833",
+            "mem_1791002103133346299",
+            "mem_1790816710889133765",
+            "mem_1790996096953602773",
+            "mem_1787497703228067031",
+            "mem_1790511119308933907",
+            "mem0_1735",
+            "mem_1790429191192344643",
+            "mem_1790084029185080835",
+            "mem_1787497887529406074",
+            "mem_1787723528137752321",
+            "mem_1790429108310850865",
+            "mem_1790994087695704228",
+            "mem_1790421543189760172",
+            "mem_1787723020834669348",
+            "mem_1789224809166698765",
+            "mem_1790083948111600633",
+            "mem_1787771065397086755",
+            "mem_1789716880736144861",
+            "mem_1789224801440782532",
+            "mem_1790430217287079435",
+            "mem_1790914445622649407",
+            "mem_1790526138453337897",
+            "mem_1790913845160574466",
+            "mem_1787456283918842898",
+            "mem_1789217445389260545",
+            "mem_1789216472750747460",
+            "mem_1790996344528695693",
+            "mem_1790409964502557371",
+            "mem_1790956506303873146",
+            "mem_1790075917128005284",
+            "mem_1789060639436580999",
+            "mem_1787131213813152640",
+            "mem_1791006275948731756",
+            "mem_1789237301835713332",
+            "mem_1787160588904031636",
+            "mem_1790868056328747329",
+            "mem_1787447555708302696",
+            "mem_1789088730748635777",
+            "mem_1787131888177416395",
+            "mem_1790912675905490756",
+            "mem_1789237839000119576",
+            "mem_1787451412049428878",
+            "mem_1787451089839065727",
+            "mem_1790840679803599070",
+            "mem_1787722663025795071",
+            "mem_1790867522393126043",
+            "mem_1789748402573546401",
+            "mem_1789359256215687356",
+            "mem_1789306203503895605",
+            "mem_1790866445368558729",
+            "mem_1790511336958922279",
+            "snap_1790614968305636167",
+            "mem_1787156980918181429",
+            "mem_1787496260011874681",
+            "mem_1788141012540003461",
+            "mem_1789820406375077696"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1790956506851507017": 1
+          }
+        },
+        "and": {
+          "ok": true,
+          "mode": "and",
+          "expr": "\"nama\" AND \"skill\" AND \"tidak\" AND \"boleh\" AND \"bentrok\" AND \"dengan\" AND \"bawaan\" AND \"hub\" AND \"hermes\"",
+          "ids": [
+            "mem_1790956506851507017",
+            "mem_1790990510325120760"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1790956506851507017": 1
+          }
+        }
+      },
+      "fts_engine_raw": {
+        "ok": true,
+        "error": "",
+        "n_results": 2,
+        "per_target": {
+          "mem_1790956506851507017": 1
+        },
+        "best_rank": 1
+      }
+    },
+    {
+      "query": "worker kerja di worktree terpisah tanpa mengusik berkas sesi trading",
+      "ns": null,
+      "targets": [
+        "mem_1791006458375599633"
+      ],
+      "target_meta": {
+        "mem_1791006458375599633": {
+          "id": "mem_1791006458375599633",
+          "mem_type": "insight",
+          "namespace": "hermes",
+          "length": 541,
+          "superseded": false
+        }
+      },
+      "recall": {
+        "ok": true,
+        "returncode": 0,
+        "error": null,
+        "stderr": "nyawa: BGE embedder: reused shared socket /tmp/nyawa-bge-425096bd.sock (dim=384)\nnyawa: BGE embedder ready (model=/opt/data/bge-models/minilm-multilingual, source=default, dim=384)",
+        "n_results": 10,
+        "per_target_rank": {
+          "mem_1791006458375599633": null
+        },
+        "best_rank": null,
+        "top_order": [
+          {
+            "rank": 1,
+            "score": 0.5264,
+            "ids": [
+              "mem_1788314308033294379"
+            ],
+            "preview": "```json {\"task\":\"Update 3 office cron jobs — morning-brief, eod-wrap, weekly-review — to cover ALL office activities + O"
+          },
+          {
+            "rank": 2,
+            "score": 0.5049,
+            "ids": [
+              "mem_1790866445368558729"
+            ],
+            "preview": "Verifikasi saya sendiri, bukan sekadar laporan worker:  - **PR #267**: open, base `main`, 1 commit, `mergeable=clean`. K"
+          },
+          {
+            "rank": 3,
+            "score": 0.4919,
+            "ids": [
+              "mem0_1440"
+            ],
+            "preview": "User Rezky was informed that workflow chains (Kanban/Kestra/Temporal) are not needed when a single delegate_task call su"
+          },
+          {
+            "rank": 4,
+            "score": 0.4901,
+            "ids": [
+              "mem_1790573839768384521"
+            ],
+            "preview": "Tiga worker jalan paralel, dan jalur rollback sudah siap.  **Yang sedang dikerjakan** (semuanya tanpa restart, sesuai pe"
+          },
+          {
+            "rank": 5,
+            "score": 0.4892,
+            "ids": [
+              "mem_1790326198799081379"
+            ],
+            "preview": "Bagian 1 masuk. Ringkasnya: ketiganya bukan tiga versi barang yang sama. **Foundry dan AgentCore itu runtime + control p"
+          },
+          {
+            "rank": 6,
+            "score": 0.4841,
+            "ids": [
+              "mem0_1439"
+            ],
+            "preview": "User Rezky learned that Kanban Hermes can chain tasks with auto-decompose and dispatching to worker profiles, but has li"
+          },
+          {
+            "rank": 7,
+            "score": 0.4766,
+            "ids": [
+              "mem_1788697537812269306"
+            ],
+            "preview": "Token dari config.yaml di-redact (`«redacted:...»`), jadi script gak bisa baca nilai aslinya → 401 Unauthorized. Ini mas"
+          },
+          {
+            "rank": 8,
+            "score": 0.4666,
+            "ids": [
+              "mem_1790346273773593955"
+            ],
+            "preview": "WS2 selesai dan sudah tertutup. Ini laporannya, termasuk dua hal yang saya temukan saat verifikasi.  ## Hasil  - **Pull "
+          },
+          {
+            "rank": 9,
+            "score": 0.4621,
+            "ids": [
+              "mem0_1611"
+            ],
+            "preview": "User Rezky was informed about mechanisms for multi-profile collaboration: delegate_task can spawn a subagent using deeps"
+          },
+          {
+            "rank": 10,
+            "score": 0.4551,
+            "ids": [
+              "mem_1790867847098082733"
+            ],
+            "preview": "Perbaikan watchdog-nya sedang dikerjakan di branch yang sama, jadi **tahan dulu merge #269** sampai commit keduanya masu"
+          }
+        ]
+      },
+      "fts": {
+        "raw": {
+          "ok": true,
+          "mode": "raw",
+          "expr": "worker kerja di worktree terpisah tanpa mengusik berkas sesi trading",
+          "ids": [],
+          "best_rank": null,
+          "per_target": {
+            "mem_1791006458375599633": null
+          }
+        },
+        "or": {
+          "ok": true,
+          "mode": "or",
+          "expr": "\"worker\" OR \"kerja\" OR \"di\" OR \"worktree\" OR \"terpisah\" OR \"tanpa\" OR \"mengusik\" OR \"berkas\" OR \"sesi\" OR \"trading\"",
+          "ids": [
+            "mem_1791006458375599633",
+            "mem_1790958200195576474",
+            "mem_1790866445368558729",
+            "mem_1790935858927271583",
+            "mem_1790864802770447620",
+            "mem_1790958387558317766",
+            "mem_1791007114767307499",
+            "mem_1790077519051477506",
+            "mem_1790864533635337781",
+            "mem_1790933175077076372",
+            "mem_1790996344528695693",
+            "mem_1790864218684961785",
+            "mem_1790082496212675997",
+            "mem_1790957792407075823",
+            "mem_1790899329941749588",
+            "mem_1790933807731118776",
+            "mem_1790077616740397862",
+            "mem_1790955040065512792",
+            "mem_1787194303685859295",
+            "mem_1791000212040096134",
+            "mem_1790958080239458262",
+            "mem_1790931941926293881",
+            "mem_1790958005088553680",
+            "mem_1790081593204652393",
+            "mem_1787388001835997029",
+            "mem_1790076750191422158",
+            "mem_1790933279195989778",
+            "mem_1790864737805940135",
+            "mem_1790084473130757763",
+            "mem_1790925087532220968",
+            "mem_1790914445622649407",
+            "mem_1791006275948731756",
+            "mem_1790900609186758069",
+            "mem_1791009646365300415",
+            "mem_1790083750684548012",
+            "mem_1790076835714172241",
+            "mem_1790957918723886375",
+            "mem_1790084029185080835",
+            "mem_1788283094569436792",
+            "mem_1790928900989261909",
+            "mem_1790083021043393531",
+            "mem_1790914535628420151",
+            "mem_1791002103133346299",
+            "mem_1790082312875663379",
+            "mem_1790573839768384521",
+            "mem_1787156415959873920",
+            "mem_1787498920858175063",
+            "mem_1790867662205607985",
+            "mem_1789790075940686842",
+            "mem_1790606257607324320",
+            "mem_1790957221961805663",
+            "mem_1790078415753868423",
+            "mem_1787502044379551661",
+            "mem_1790934083219857402",
+            "mem_1787126402404043647",
+            "mem_1790934111550904574",
+            "mem_1790840679803599070",
+            "mem_1789820406375077696",
+            "mem_1790957447384461160",
+            "mem_1790864390457356642",
+            "mem_1790865874207276865",
+            "mem_1787154068158697697",
+            "mem_1789359099224835767",
+            "mem_1790080747820227108",
+            "mem_1790840712951395038",
+            "mem_1787379026930388626",
+            "mem_1787064185876732089",
+            "mem_1790865682009561320",
+            "mem_1787499012829682249",
+            "mem_1789061026782849697",
+            "mem_1790957078901712063",
+            "mem_1790955513938253027",
+            "mem_1790573170146903752",
+            "mem_1787039397268925272",
+            "mem_1788502457810546739",
+            "mem_1789749607725539792",
+            "mem_1789001487183699193",
+            "mem_1788833291536751008",
+            "mem_1787156512562561612",
+            "mem_1790083369525313526",
+            "mem_1789465036212511912",
+            "mem_1790932711336756347",
+            "mem_1791020111651120715",
+            "mem_1790956512024722128",
+            "mem_1789788613906571590",
+            "mem_1790913147396346539",
+            "mem_1787446056745200733",
+            "mem_1790082886346495809",
+            "mem_1787502232987809226",
+            "mem_1790928961266166826",
+            "mem_1790409964502557371",
+            "mem_1790996333583832461",
+            "mem_1790345466012291965",
+            "mem_1790867612926858686",
+            "mem_1788833273507423840",
+            "mem_1790957668296781526",
+            "mem_1790082019593877009",
+            "mem_1787938377746406279",
+            "mem_1789090139061826776",
+            "mem_1786798317750278412"
+          ],
+          "best_rank": 1,
+          "per_target": {
+            "mem_1791006458375599633": 1
+          }
+        },
+        "and": {
+          "ok": true,
+          "mode": "and",
+          "expr": "\"worker\" AND \"kerja\" AND \"di\" AND \"worktree\" AND \"terpisah\" AND \"tanpa\" AND \"mengusik\" AND \"berkas\" AND \"sesi\" AND \"trading\"",
+          "ids": [],
+          "best_rank": null,
+          "per_target": {
+            "mem_1791006458375599633": null
+          }
+        }
+      },
+      "fts_engine_raw": {
+        "ok": true,
+        "error": "",
+        "n_results": 0,
+        "per_target": {
+          "mem_1791006458375599633": null
+        },
+        "best_rank": null
+      }
+    }
+  ],
+  "notes_markdown": "### Ringkasan temuan\n\n**Angka utama (baseline, binary runtime v1.2.0):**\n\n| Jalur | recall@1 | recall@3 | recall@5 | MRR |\n|---|---|---|---|---|\n| recall CLI (vector + RRF) | 0.333 | 0.417 | 0.500 | 0.392 |\n| BM25 FTS token-OR | 0.833 | 1.000 | 1.000 | 0.903 |\n| BM25 FTS token-AND | 0.500 | 0.667 | 0.667 | 0.569 |\n| BM25 FTS mentah (mesin) | 0.333 | 0.500 | 0.500 | 0.403 |\n\n**Temuan 1 — recall CLI meleset tepat pada kueri yang leg FTS mentahnya kosong.**\nEnam kueri yang gagal di recall (1, 5, 7, 9, 10, 12) persis sama dengan enam\nkueri yang leg FTS mentah mesin mengembalikan **nol baris**. Enam kueri lain\n(2, 3, 4, 6, 8, 11) berhasil di recall, dan semuanya leg FTS-nya berisi hasil.\nKorelasi 12/12 ini menunjuk ke satu arah: pada kondisi sekarang sinyal recall\npraktis hanya datang dari leg FTS (mentah), dan begitu leg itu kosong, vector\ntidak menyelamatkan.\n\n**Temuan 2 — leg FTS mentah tidak di-escape, jadi diam-diam kosong.**\nMesin mengoper teks kueri mentah ke `memories_fts MATCH ?` (`internal/store/sqlite.go`\n`FTS5Search`, tanpa sanitasi). Kueri yang memuat `-` atau `.` memecah sintaks\nFTS5: `crypto-data` dan `bersih-bersih` dibaca sebagai operator, `SKILL.md`\nsebagai sintaks tak valid. Hasilnya di runtime (driver SQLite 3.53.3 via\nmattn/go-sqlite3) adalah **nol hasil tanpa error**, sehingga RRF hanya menerima\nurutan vector. Justru kueri bertanda hubung/titik inilah yang paling butuh\nbantuan leksikal.\n\n**Temuan 3 — beda build SQLite mengubah gejalanya.**\nBuild SQLite Python (3.53.4) melempar `OperationalError` untuk query yang sama,\nsedangkan build runtime (3.53.3, mattn/go-sqlite3) mengembalikannya kosong tanpa\nerror. Karena itu leg mentah tidak boleh dinilai sebagai \"error\" saja —\ndi runtime ia gagal secara senyap. Harness karena itu menyimpan dua ukuran:\n`FTS(raw, python)` dan `FTS mesin (raw)` (dari `ftsprobe`, driver runtime).\n\n**Temuan 4 — secara leksikal semua target mudah dijangkau.**\nDengan tokenisasi sederhana digabung `OR`, target muncul di **peringkat 1 untuk\nseluruh 12 kueri** (MRR 0.903). Artinya masalahnya bukan \"memori target tidak\nada / tidak terindeks teks\", melainkan cara query recall dibentuk dan\ndigabungkan. Perbaikan pada pembentukan query leksikal (escape/tokenize) punya\nruang perbaikan besar dan terukur.\n\n**Temuan 5 — satu target sudah superseded.**\n`mem_1790421531821504368` (aturan docker larangan `docker volume prune`) memiliki\n`superseded_at = 2026-10-03T09:35:01Z`, jadi mustahil muncul di recall aktif\n(filter `superseded_at IS NULL`). Kueri docker (1) menyisakan satu target aktif\n`mem_1790421515511059827`; leg FTS token-OR menaruhnya di peringkat 1, tapi\nrecall CLI tidak menemukannya sama sekali.\n\n### Keraguan dan batasan\n\n- **Pencocokan target berbasis isi.** Keluaran `nyawa recall` tidak memuat id\n  memori, jadi hasil dicocokkan ke id lewat kesamaan isi. DB memuat 1.531 isi\n  duplikat; untuk target benchmark ini isinya unik sehingga aman, tetapi\n  pencocokan by-id langsung tidak tersedia dari CLI.\n- **`recall` hanya 10 hasil**, jadi peringkat > 10 selalu \"TIDAK KETEMU\".\n- **Perbandingan FTS token-OR/AND memakai tokenisasi sederhana** (regex alnum,\n  lowercase) lalu mengandalkan tokenizer FTS5 `porter unicode61`. Ini meniru\n  semangat pencarian leksikal, bukan persis pre-processing yang akan dipakai\n  perbaikan nanti.\n- **ftsprobe memakai limit 50** (sama dengan `searchTopK` mesin untuk limit 10);\n  peringkat di luar 50 dilaporkan \"NOT\".\n- Baseline diukur pada DB yang hidup (WAL) dan terus berubah; hash binary dan\n  mtime DB dicantumkan di bagian meta JSON/MD agar perbandingan antar-run adil.\n- Satu kueri tambahan (12) targetnya justru memuat kalimat yang mengeluh hasil\n  `nyawa_recall` meleset — kebetulan yang terdokumentasi, bukan disengaja.\n\n- Target superseded (tidak mungkin terjangkau oleh recall aktif): mem_1790421531821504368\n- Leg FTS mentah (dinilai via SQLite Python) error pada kueri: [1, 5, 9]\n- Leg FTS mentah **mesin** (driver SQLite runtime) mengembalikan NOL baris untuk kueri: [1, 5, 7, 9, 10, 12]"
+}

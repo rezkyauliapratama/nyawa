@@ -1,0 +1,20 @@
+# queries.tsv — daftar kueri benchmark recall Nyawa
+# Format: query<TAB>target_ids (id dipisah koma)<TAB>namespace opsional
+# Baris diawali # diabaikan. Target yang di-supersede tetap dicatat apa adanya.
+#
+# Kueri 1-8 dari brief pengukuran awal; 9-12 disusun untuk menambah ragam
+# semantik (memori tipe decision/insight, panjang sedang) dengan kueri yang
+# berbunyi seperti pertanyaan manusia, bukan salinan isi memori.
+
+pembersihan docker massal menghapus volume crypto-data	mem_1790421515511059827,mem_1790421531821504368
+skill routing kelas trigger onepager penunjuk K4 K5	mem_1791007087526886924
+host sync exec bit mode berkas klon kotor boot VM	mem_1790958381870251839
+embedder minilm multilingual dim 384	mem_1791032808097040119
+keputusan bersih-bersih memori conversation	mem_1791020081219393765
+penempatan task mingguan Notion SB Tasks OKR	mem_1788161566429165075
+gaya komunikasi dengan Rezky bahasa santai sopan	mem_1788699015937139201
+personality karakter Rezky challenge traits	mem_1790428054858104499
+batas ukuran berkas SKILL.md sebelum narasi harus dipindah ke references	mem_1790956506303873146
+aturan filter blok Rules tiap turn supaya tak kebanjiran memori basi	mem_1790956506816641948
+nama skill tidak boleh bentrok dengan bawaan hub Hermes	mem_1790956506851507017
+worker kerja di worktree terpisah tanpa mengusik berkas sesi trading	mem_1791006458375599633
