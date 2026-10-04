@@ -59,7 +59,7 @@ Usage:
   nyawa graph <db> <query> [--depth 2] [--limit 10]  Traverse entity graph
   nyawa reindex <db>                      Re-embed memories missing from HNSW
   nyawa version                           Show version
-`, version.Version)
+`, version.Number())
 }
 
 func parseFlags() (ns string, atTime time.Time) {

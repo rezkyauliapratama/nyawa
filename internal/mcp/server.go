@@ -193,7 +193,7 @@ func (s *Server) handleInitialize(req jsonRPCRequest) {
 	s.writeResult(req.ID, map[string]any{
 		"protocolVersion": "2025-03-26",
 		"capabilities":    map[string]any{"tools": map[string]bool{"listChanged": false}},
-		"serverInfo":      map[string]string{"name": "nyawa", "version": version.Version},
+		"serverInfo":      map[string]string{"name": "nyawa", "version": version.Number()},
 	})
 }
 

@@ -3,7 +3,11 @@
 APP     := nyawa
 GO      ?= go
 TAGS    := sqlite_fts5
-LDFLAGS := -s -w
+# Optional: `make build VERSION=1.2.1` injects the release version the same way
+# the release workflow does. Left empty, the binary reports "dev".
+VERSION ?=
+VERSION_LDFLAG := $(if $(strip $(VERSION)),-X github.com/rezkyauliapratama/nyawa/internal/version.Version=$(VERSION),)
+LDFLAGS := -s -w $(VERSION_LDFLAG)
 
 all: build test
 
