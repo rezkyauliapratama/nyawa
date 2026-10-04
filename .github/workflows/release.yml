@@ -20,7 +20,30 @@ jobs:
       - name: Install deps
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc libsqlite3-dev
       - name: Build (Linux amd64)
-        run: CGO_ENABLED=1 GOARCH=amd64 go build -tags "sqlite_fts5" -ldflags="-s -w" -o nyawa-linux-amd64 ./cmd/nyawa/
+        env:
+          # The pushed tag (e.g. v1.2.1) is baked into the binary so that
+          # `nyawa version` always matches the release it was built from.
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Strip the leading "v" so the tag v1.2.1 reports as "1.2.1".
+          VERSION="${TAG#v}"
+          CGO_ENABLED=1 GOARCH=amd64 go build \
+            -tags "sqlite_fts5" \
+            -ldflags="-s -w -X github.com/rezkyauliapratama/nyawa/internal/version.Version=${VERSION}" \
+            -o nyawa-linux-amd64 ./cmd/nyawa/
+      - name: Verify binary reports the release tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          EXPECTED="v${TAG#v}"
+          GOT="$(./nyawa-linux-amd64 version)"
+          echo "nyawa version -> ${GOT}"
+          if [ "${GOT}" != "${EXPECTED}" ]; then
+            echo "::error::binary reports '${GOT}', expected '${EXPECTED}' from tag ${TAG}"
+            exit 1
+          fi
       - name: Compress
         run: gzip -k nyawa-linux-amd64
       - name: Release

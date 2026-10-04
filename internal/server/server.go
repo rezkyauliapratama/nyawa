@@ -98,7 +98,7 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" { writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"}); return }
-	writeJSON(w, http.StatusOK, map[string]string{"service": "nyawa", "version": version.Version, "status": "running"})
+	writeJSON(w, http.StatusOK, map[string]string{"service": "nyawa", "version": version.Number(), "status": "running"})
 }
 
 func (s *Server) handleMemories(w http.ResponseWriter, r *http.Request) {
@@ -207,13 +207,13 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet { writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"}); return }
 	storeStats, err := s.store.Stats()
 	if err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "stats failed"}); return }
-	writeJSON(w, http.StatusOK, map[string]any{"store": storeStats, "version": version.Version})
+	writeJSON(w, http.StatusOK, map[string]any{"store": storeStats, "version": version.Number()})
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusOK; statusText := "healthy"
 	if !s.store.Ready() { status = http.StatusServiceUnavailable; statusText = "degraded" }
-	writeJSON(w, status, map[string]any{"status": statusText, "version": version.Version})
+	writeJSON(w, status, map[string]any{"status": statusText, "version": version.Number()})
 }
 
 func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {
