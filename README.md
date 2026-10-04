@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/github/license/rezkyauliapratama/nyawa?color=blue&style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&style=flat-square" alt="Go">
   <img src="https://img.shields.io/badge/binary-8.1MB-green?style=flat-square" alt="Size">
-  <img src="https://img.shields.io/badge/version-v1.1.9-blue?style=flat-square" alt="Version">
+  <img src="https://img.shields.io/badge/version-v1.2.1-blue?style=flat-square" alt="Version">
 </p>
 
 <h1 align="center">Nyawa</h1>
@@ -48,7 +48,7 @@ Most AI memory tools require Docker, external vector databases (Pinecone, Qdrant
 | **Namespaces** | Isolate memories by context | SQLite namespace column |
 | **Time-Travel** | Query memories as they existed at any date | Superseded_at tracking |
 | **Batch Import** | Import thousands of memories from JSON | Bulk insert |
-| **MCP Protocol** | Plug into any AI agent (13 tools) | Built-in MCP server stdio |
+| **MCP Protocol** | Plug into any AI agent (15 tools) | Built-in MCP server stdio |
 
 ---
 
@@ -91,8 +91,24 @@ You should see a single binary appear:
 
 ```bash
 ls -lh nyawa        # ~8.1MB
-./nyawa version     # nyawa v1.1.9
+./nyawa version     # nyawa dev
 ```
+
+A local build reports `nyawa dev` because the release version is not injected.
+To build a binary that reports a real version, inject it the same way the
+release workflow does:
+
+```bash
+make build VERSION=1.2.1        # -> nyawa v1.2.1
+# or, without make:
+go build -tags "sqlite_fts5" \
+  -ldflags="-s -w -X github.com/rezkyauliapratama/nyawa/internal/version.Version=1.2.1" \
+  -o nyawa ./cmd/nyawa/
+```
+
+The version literal lives only in `internal/version/version.go` and is
+overwritten at link time; a leading `v` on the injected value is stripped, and
+an uninjected binary always reports `dev` (see [Version injection](#version-injection)).
 
 ### 3. Initialize a database
 
@@ -300,9 +316,29 @@ Available via REST API (`/v1/rag/`) or MCP tools (`rag_query`, `rag_ingest_file`
 Nyawa runs **two** search strategies on every recall and fuses them into a single final ranking:
 
 - **Vector search** (HNSW) — finds memories by *meaning* (semantic embedding)
-- **Keyword search** (SQLite FTS5) — finds memories by *literal terms*
+- **Keyword search** (SQLite FTS5 with BM25 ranking) — finds memories by *literal terms*
 
-Each has complementary blind spots: vector search excels at synonyms and paraphrases ("how do I buy BTC") but can miss exact identifiers; FTS5 nails exact matches ("mcp-trading-crypto") but ignores semantics. RRF combines both so the final ranking is stronger than either alone.
+Each has complementary blind spots: vector search excels at synonyms and paraphrases ("how do I buy BTC") but can miss exact identifiers; BM25 over FTS5 nails exact matches ("mcp-trading-crypto") but ignores semantics. RRF combines both so the final ranking is stronger than either alone.
+
+### The two legs
+
+**Vector leg (HNSW).** The query is embedded and the nearest neighbours are
+returned. Similarity is computed over the whole memory text, so long documents
+can dominate. Part of the corpus may have no vector at all until
+`nyawa reindex` fills it in (see [Reindexing](#reindexing-the-vector-index)).
+
+**Keyword leg (FTS5 / BM25).** `memories_fts` is a SQLite FTS5 virtual table;
+`ORDER BY rank` uses FTS5's BM25 relevance, so documents that contain more (and
+rarer) query terms rank first. The free-text query is **not** passed to `MATCH`
+raw. `buildFTSMatchExpr` (`internal/store/sqlite.go`) tokenises it to lowercase
+alphanumeric tokens (min length 2, duplicates removed, capped at 32 tokens) and
+joins them with `OR`, each token quoted. This makes multi-word queries behave
+like OR instead of FTS5's implicit AND, and stops punctuation from being read
+as query syntax: a raw `crypto-data` is parsed as a column filter and fails with
+`no such column: data`, while `SKILL.md` is invalid syntax. Both symptoms used
+to make the keyword leg return **zero rows silently**, leaving recall to the
+vector leg alone. If the rewritten `MATCH` still errors, the pipeline logs it
+and degrades to vector-only rather than failing the whole query.
 
 ### The formula
 
@@ -362,17 +398,70 @@ at runtime (no rebuild) with env vars:
 
 ```
 Query
- ├─ HNSW vector search ──────────────┐
- ├─ FTS5 keyword search ─────────────┤   (query tokenised + OR'd, so multi-word
- ├─ Entity graph traversal (multi-hop)┤    and hyphenated queries match)
- └─ Weighted RRF fusion (k=5) ───────┘
-      └─ Post-fusion weighting (length, importance, access, type, recency)
-           └─ Graph merge (overlap ×1.1, graph-only ×0.1)
-                └─ Drop superseded → Filter (namespace, min_score, exclude_types)
-                     └─ Top-K results
+ |-- embed query
+ |-- HNSW vector search
+ |-- FTS5 / BM25 keyword search   (query tokenised + OR'd, so multi-word
+ |                                 and hyphenated queries match)
+ +-- Weighted RRF fusion (k=5)
+      +-- Fetch memories, drop superseded_at
+           +-- Post-fusion weighting (length, importance, access, type, recency, pinned, edge_count)
+                +-- Graph merge (query-matched entity seeds; overlap x1.1, graph-only x0.1)
+                     +-- Time-travel filter (if --at)
+                          +-- Filter (min_score, exclude_types)
+                               +-- Top-K cut (limit means "at most K after filtering")
+                                    +-- access_count incremented asynchronously
 ```
 
-Implementation: [`internal/search/rrf.go`](internal/search/rrf.go), [`internal/search/pipeline.go`](internal/search/pipeline.go)
+The entity graph is merged **after** fusion, not as a third RRF leg: entity
+names that appear in the query seed a multi-hop traversal, memories reachable
+both ways get the overlap boost, and graph-only memories are injected at the
+0.1 weight.
+
+Implementation: [`internal/search/rrf.go`](internal/search/rrf.go), [`internal/search/pipeline.go`](internal/search/pipeline.go). For the full detail, weights, and benchmark numbers see [`docs/recall-pipeline.md`](docs/recall-pipeline.md).
+
+### Result filters: `min_score` and `exclude_types`
+
+`nyawa_recall`, `POST /v1/recall`, and the HTTP API accept two optional
+post-ranking filters (the CLI takes a query, namespace and time only):
+
+| Field | JSON key | Behaviour |
+|-------|----------|-----------|
+| Minimum score | `min_score` | Drops every result whose final `score` is strictly below the threshold. `0` (the default) disables the filter; it is not clamped, so a negative value also disables it. |
+| Excluded types | `exclude_types` | Drops results whose `type` is in the list, e.g. `["note","conversation"]`. |
+
+Both run **after** fusion, post-fusion weighting, and the graph merge, and
+**before** the top-K cut, so `limit` means "at most this many results after
+filtering". `min_score` compares against the final score, which is the
+normalised RRF score in `[0,1]` plus the small bounded boosts (see the table
+above), so a sensible threshold is well under `1` (roughly `0.1` to `0.3`).
+`0` disables it rather than selecting everything.
+
+### Reindexing the vector index
+
+The HNSW vector index lives beside the database as `<db>.hnsw`. Memories stored
+while no embedder was available, or imported/bulk-loaded, can be missing their
+vector. `nyawa reindex <db>` walks every active memory, embeds the ones that are
+not yet in the index (HNSW membership is checked first, so existing vectors are
+never duplicated), and persists the updated index through `HNSW.MergeAndSave`,
+which reloads the on-disk index under a cross-process lock and writes the union
+atomically so a running gateway's concurrent writes are not lost.
+
+```bash
+./nyawa reindex /tmp/nyawa.db
+```
+
+The command needs a live embedder: without one it logs `BGE unavailable`, the
+embedding calls fail, and the memories that still need a vector are counted as
+failed rather than reindexed. Example output:
+
+```
+nyawa: hnsw: nothing to reindex, 8386 vectors in memory (coverage 187.5% of 4473 active memories)
+Reindexed 0 memories (0 already indexed, 0 failed)
+```
+
+Coverage is `persisted / total active memories * 100`; values above 100% are
+expected because the index can retain vectors for memories that are no longer
+active. Reindex is safe to run against a live database.
 
 ---
 
@@ -439,6 +528,38 @@ docker pull ghcr.io/rezkyauliapratama/nyawa:latest
 docker run -d --name nyawa --restart unless-stopped \
   -v ./memory.db:/data/memory.db -p 3300:3300 \
   ghcr.io/rezkyauliapratama/nyawa:latest
+```
+
+---
+
+## Version injection
+
+The version string is not hardcoded in the source. `internal/version/version.go`
+declares `var Version = DefaultVersion` (where `DefaultVersion = "dev"`), and the
+release workflow overwrites it at link time from the pushed git tag:
+
+```
+-ldflags "-X github.com/rezkyauliapratama/nyawa/internal/version.Version=$(TAG without leading v)"
+```
+
+`.github/workflows/release.yml` runs on any `v*` tag push, strips the leading
+`v` (`v1.2.1` becomes `VERSION=1.2.1`), injects it, and then **verifies** the
+built binary: it runs `nyawa version` and fails the workflow unless the output
+equals `v<tag>`. That check exists because a build that reported a stale version
+once shipped. `version.Number()` strips a leading `v` from whatever was injected
+and falls back to `dev` for a blank value, so an uninjected binary never
+masquerades as a release. Everything that reports a version (`nyawa version`,
+the CLI banner, the MCP `serverInfo.version`, and the HTTP `/`, `/v1/stats`,
+`/v1/health` endpoints) reads from this single source.
+
+Local builds default to `dev`. To inject a version the same way:
+
+```bash
+make build VERSION=1.2.1
+# or:
+go build -tags "sqlite_fts5" \
+  -ldflags="-X github.com/rezkyauliapratama/nyawa/internal/version.Version=1.2.1" \
+  -o nyawa ./cmd/nyawa/
 ```
 
 ---
@@ -530,6 +651,7 @@ If you only run one-shot CLI commands (`store`, `recall`, `graph`) without a per
 | `nyawa serve <db>` | Start HTTP server + dashboard + Dream Cycle |
 | `nyawa mcp <db>` | Start MCP server |
 | `nyawa dream <db>` | Run Dream Cycle manually (all 7 phases) |
+| `nyawa reindex <db>` | Re-embed active memories missing from the HNSW index |
 | `nyawa archive <db> <out>` | Archive old memories |
 | `nyawa version` | Check version |
 
@@ -571,11 +693,12 @@ GET    /v1/rag/stats            RAG statistics
 GET    /dashboard              Web dashboard (Memory + RAG + Graph stats)
 ```
 
-### MCP Tools (13 tools)
+### MCP Tools (15 tools)
 
 **Memory Tools:**
 - `nyawa_store` — Store a new memory
-- `nyawa_recall` — Semantic search across memories
+- `nyawa_recall` — Semantic search across memories (`query`, `namespace`, `limit`, `min_score`, `exclude_types`)
+- `nyawa_list` — Deterministically list memories filtered by namespace/type, ordered by `created_at` (no semantic search)
 - `nyawa_stats` — Memory statistics
 - `nyawa_forget` — Soft-delete a memory by ID
 
@@ -592,13 +715,16 @@ GET    /dashboard              Web dashboard (Memory + RAG + Graph stats)
 - `rag_query` — Query RAG collections for relevant chunks
 - `rag_stats` — RAG statistics
 
+**Context Tools:**
+- `compact_context` — Compress a conversation transcript into a compact summary block (stores it under `namespace=context`; LLM summarization when `NYAWA_LLM_API_KEY` is set, deterministic fallback otherwise)
+
 ---
 
 ## Architecture
 
 ```
 +----------------------------------------------------------+
-||              CLI / HTTP / MCP (13 tools)                 |
+||              CLI / HTTP / MCP (15 tools)                 |
 +----------------------------------------------------------+
 ||                    Search Pipeline                       |
 ||   +-------------+  +-----------+  +------------------+  |
