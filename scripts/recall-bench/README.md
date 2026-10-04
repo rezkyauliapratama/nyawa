@@ -54,9 +54,16 @@ Argumen penting:
 
 ### Leg FTS mentah mesin (ftsprobe)
 
-Mesin mengoper teks kueri mentah ke `memories_fts MATCH ?` (tanpa escape).
-Karena parsing FTS5 bergantung pada build SQLite, harness menyediakan helper Go
-`ftsprobe` yang memakai driver dan SQL yang **sama** dengan runtime:
+Catatan: mesin saat ini **menulis ulang** kueri sebelum `MATCH` (token
+alfanumerik digabung `OR`, lihat `docs/recall-pipeline.md`). Bagian di bawah
+menggambarkan **perilaku pra-perbaikan** yang diukur baseline 2026-10-03; mode
+"raw" dipertahankan justru sebagai pembanding sebelum/sesudah, bukan sebagai
+cerminan mesin sekarang.
+
+Mesin (pra-perbaikan) mengoper teks kueri mentah ke `memories_fts MATCH ?`
+(tanpa escape). Karena parsing FTS5 bergantung pada build SQLite, harness
+menyediakan helper Go `ftsprobe` yang memakai driver dan SQL yang sama dengan
+runtime saat baseline diukur:
 
 ```bash
 # dari root repo (butuh toolchain Go + tag sqlite_fts5)
@@ -106,9 +113,10 @@ Baris diawali `#` adalah komentar.
 - **recall@k** — proporsi kueri yang punya minimal satu target di peringkat ≤ k.
 - **MRR** — rata-rata `1/peringkat` target teratas (0 bila tak ditemukan).
 - Pembanding BM25 dijalankan tiga mode:
-  - **raw** — persis seperti mesin: query mentah dioper ke `memories_fts MATCH ?`
-    `ORDER BY rank`. Bisa **gagal** bila query memuat sintaks FTS5 (mis. tanda
-    hubung, yang dibaca sebagai operator).
+  - **raw** — persis seperti mesin **pra-perbaikan**: query mentah dioper ke
+    `memories_fts MATCH ?` `ORDER BY rank`, tanpa penulisan ulang. Bisa **gagal**
+    bila query memuat sintaks FTS5 (mis. tanda hubung, yang dibaca sebagai
+    operator). Dipertahankan sebagai pembanding sebelum/sesudah.
   - **or** — token query digabung dengan `OR` (paling longgar).
   - **and** — token query digabung dengan `AND` (paling ketat).
 
