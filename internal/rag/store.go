@@ -33,11 +33,11 @@ type Document struct {
 }
 
 type Chunk struct {
-	ID          string          `json:"id"`
-	DocumentID  string          `json:"document_id"`
-	Content     string          `json:"content"`
-	ChunkIndex  int             `json:"chunk_index"`
-	Metadata    json.RawMessage `json:"metadata,omitempty"`
+	ID         string          `json:"id"`
+	DocumentID string          `json:"document_id"`
+	Content    string          `json:"content"`
+	ChunkIndex int             `json:"chunk_index"`
+	Metadata   json.RawMessage `json:"metadata,omitempty"`
 }
 
 type Embedder interface {
@@ -89,11 +89,15 @@ func (r *RAGStore) migrate() {
 }
 
 func (r *RAGStore) CreateCollection(name, description string, chunkSize int) (*Collection, error) {
-	if chunkSize <= 0 { chunkSize = 500 }
+	if chunkSize <= 0 {
+		chunkSize = 500
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := r.db.Exec(`INSERT INTO rag_collections(name,description,chunk_size,created_at,updated_at) VALUES(?,?,?,?,?)`,
 		name, description, chunkSize, now, now)
-	if err != nil { return nil, fmt.Errorf("create collection: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("create collection: %w", err)
+	}
 	id, _ := res.LastInsertId()
 	return &Collection{ID: int(id), Name: name, Description: description, ChunkSize: chunkSize}, nil
 }
@@ -102,13 +106,17 @@ func (r *RAGStore) ListCollections() ([]Collection, error) {
 	rows, err := r.db.Query(`SELECT c.id,c.name,c.description,c.chunk_size,c.created_at,c.updated_at,
 		COALESCE((SELECT COUNT(*) FROM rag_documents d WHERE d.collection_id=c.id),0) AS doc_count
 		FROM rag_collections c ORDER BY c.name`)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	var cols []Collection
 	for rows.Next() {
 		var c Collection
 		var cs, us string
-		if err := rows.Scan(&c.ID, &c.Name, &c.Description, &c.ChunkSize, &cs, &us, &c.DocCount); err != nil { return nil, err }
+		if err := rows.Scan(&c.ID, &c.Name, &c.Description, &c.ChunkSize, &cs, &us, &c.DocCount); err != nil {
+			return nil, err
+		}
 		c.CreatedAt, _ = time.Parse(time.RFC3339, cs)
 		c.UpdatedAt, _ = time.Parse(time.RFC3339, us)
 		cols = append(cols, c)
@@ -118,19 +126,27 @@ func (r *RAGStore) ListCollections() ([]Collection, error) {
 
 func (r *RAGStore) DeleteCollection(name string) error {
 	_, err := r.db.Exec(`DELETE FROM rag_chunks WHERE document_id IN (SELECT id FROM rag_documents WHERE collection_id=(SELECT id FROM rag_collections WHERE name=?))`, name)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	_, err = r.db.Exec(`DELETE FROM rag_documents WHERE collection_id=(SELECT id FROM rag_collections WHERE name=?)`, name)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	_, err = r.db.Exec(`DELETE FROM rag_collections WHERE name=?`, name)
 	return err
 }
 
 func (r *RAGStore) IngestFile(filePath, collectionName string, metadata map[string]interface{}) (*Document, error) {
 	data, err := os.ReadFile(filePath)
-	if err != nil { return nil, fmt.Errorf("read file: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
 
 	col, err := r.getOrCreateCollection(collectionName)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
 	docID := fmt.Sprintf("rag_doc_%d", time.Now().UnixNano())
 	filename := filepath.Base(filePath)
@@ -139,7 +155,9 @@ func (r *RAGStore) IngestFile(filePath, collectionName string, metadata map[stri
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = r.db.Exec(`INSERT INTO rag_documents(id,collection_id,filename,source_type,metadata,created_at) VALUES(?,?,?,?,?,?)`,
 		docID, col.ID, filename, sourceType, string(metaJSON), now)
-	if err != nil { return nil, fmt.Errorf("insert doc: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("insert doc: %w", err)
+	}
 
 	chunks := chunkText(string(data), col.ChunkSize)
 	chunkCount := 0
@@ -147,11 +165,15 @@ func (r *RAGStore) IngestFile(filePath, collectionName string, metadata map[stri
 		chunkID := fmt.Sprintf("rag_chk_%s_%d", docID, i)
 		_, err := r.db.Exec(`INSERT INTO rag_chunks(id,document_id,content,chunk_index,metadata) VALUES(?,?,?,?,?)`,
 			chunkID, docID, chunk, i, "{}")
-		if err != nil { continue }
+		if err != nil {
+			continue
+		}
 		chunkCount++
 		if r.embedder != nil && r.embedder.Available() {
 			if vec, e := r.embedder.Embed(chunk); e == nil && len(vec) > 0 {
-				r.hnsw.Insert(chunkID, vec)
+				if err := r.hnsw.Insert(chunkID, vec); err != nil {
+					return nil, fmt.Errorf("index chunk %q: %w", chunkID, err)
+				}
 			}
 		}
 	}
@@ -167,12 +189,18 @@ func (r *RAGStore) IngestFile(filePath, collectionName string, metadata map[stri
 
 func (r *RAGStore) IngestDir(dirPath, collectionName string) (int, error) {
 	entries, err := os.ReadDir(dirPath)
-	if err != nil { return 0, err }
+	if err != nil {
+		return 0, err
+	}
 	count := 0
 	for _, entry := range entries {
-		if entry.IsDir() { continue }
+		if entry.IsDir() {
+			continue
+		}
 		ext := strings.ToLower(filepath.Ext(entry.Name()))
-		if !isSupportedExt(ext) { continue }
+		if !isSupportedExt(ext) {
+			continue
+		}
 		path := filepath.Join(dirPath, entry.Name())
 		if _, err := r.IngestFile(path, collectionName, nil); err != nil {
 			fmt.Fprintf(os.Stderr, "  skip %s: %v\n", entry.Name(), err)
@@ -207,25 +235,34 @@ func (r *RAGStore) getOrCreateCollection(name string) (*Collection, error) {
 	row := r.db.QueryRow(`SELECT id,name,description,chunk_size FROM rag_collections WHERE name=?`, name)
 	var c Collection
 	err := row.Scan(&c.ID, &c.Name, &c.Description, &c.ChunkSize)
-	if err == nil { return &c, nil }
+	if err == nil {
+		return &c, nil
+	}
 	return r.CreateCollection(name, fmt.Sprintf("Auto-created for %s", name), 500)
 }
 
 func detectSourceType(path string) string {
 	ext := strings.ToLower(filepath.Ext(path))
 	switch ext {
-	case ".txt": return "text"
-	case ".md": return "markdown"
-	case ".json": return "json"
-	case ".csv": return "csv"
-	default: return "file"
+	case ".txt":
+		return "text"
+	case ".md":
+		return "markdown"
+	case ".json":
+		return "json"
+	case ".csv":
+		return "csv"
+	default:
+		return "file"
 	}
 }
 
 func isSupportedExt(ext string) bool {
 	switch ext {
-	case ".txt", ".md", ".json", ".csv": return true
-	default: return false
+	case ".txt", ".md", ".json", ".csv":
+		return true
+	default:
+		return false
 	}
 }
 

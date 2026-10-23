@@ -6,10 +6,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+)
+
+const (
+	defaultEmbeddingBaseURL = "https://api.jina.ai/v1"
+	defaultEmbeddingModel   = "jina-embeddings-v3"
+	defaultEmbeddingDims    = 1024
 )
 
 // OpenAIEmbedder uses any OpenAI-compatible embedding API.
@@ -29,22 +36,65 @@ type OpenAIEmbedder struct {
 	dims    int
 }
 
+// NewOpenAIEmbedder preserves the original permissive constructor for callers
+// that only need an optionally available embedder. API mode should use
+// NewOpenAIEmbedderFromEnv so invalid configuration is reported instead of
+// silently falling back to defaults.
 func NewOpenAIEmbedder() *OpenAIEmbedder {
-	apiKey := os.Getenv("EMBEDDING_API_KEY")
-	baseURL := os.Getenv("EMBEDDING_BASE_URL")
+	apiKey := strings.TrimSpace(os.Getenv("EMBEDDING_API_KEY"))
+	baseURL := strings.TrimSpace(os.Getenv("EMBEDDING_BASE_URL"))
 	if baseURL == "" {
-		baseURL = "https://api.jina.ai/v1"
+		baseURL = defaultEmbeddingBaseURL
 	}
-	model := os.Getenv("EMBEDDING_MODEL")
+	model := strings.TrimSpace(os.Getenv("EMBEDDING_MODEL"))
 	if model == "" {
-		model = "jina-embeddings-v3"
+		model = defaultEmbeddingModel
 	}
-	dims := 1024
-	if ds := os.Getenv("EMBEDDING_DIMS"); ds != "" {
+	dims := defaultEmbeddingDims
+	if ds := strings.TrimSpace(os.Getenv("EMBEDDING_DIMS")); ds != "" {
 		if d, err := strconv.Atoi(ds); err == nil && d > 0 {
 			dims = d
 		}
 	}
+	return newOpenAIEmbedder(apiKey, baseURL, model, dims)
+}
+
+// NewOpenAIEmbedderFromEnv builds an API embedder from getenv and validates
+// every value that can change the vector shape. It is used when
+// MEMORY_EMBEDDER=api is explicit, where silently accepting a typo could lead
+// to an incompatible HNSW index.
+func NewOpenAIEmbedderFromEnv(getenv func(string) string) (*OpenAIEmbedder, error) {
+	apiKey := strings.TrimSpace(getenv("EMBEDDING_API_KEY"))
+	if apiKey == "" {
+		return nil, fmt.Errorf("EMBEDDING_API_KEY is required")
+	}
+
+	baseURL := strings.TrimSpace(getenv("EMBEDDING_BASE_URL"))
+	if baseURL == "" {
+		baseURL = defaultEmbeddingBaseURL
+	}
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil || parsedURL.Host == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		return nil, fmt.Errorf("EMBEDDING_BASE_URL must be an absolute http(s) URL")
+	}
+
+	model := strings.TrimSpace(getenv("EMBEDDING_MODEL"))
+	if model == "" {
+		model = defaultEmbeddingModel
+	}
+
+	dims := defaultEmbeddingDims
+	if rawDims := strings.TrimSpace(getenv("EMBEDDING_DIMS")); rawDims != "" {
+		dims, err = strconv.Atoi(rawDims)
+		if err != nil || dims <= 0 {
+			return nil, fmt.Errorf("EMBEDDING_DIMS must be a positive integer")
+		}
+	}
+
+	return newOpenAIEmbedder(apiKey, baseURL, model, dims), nil
+}
+
+func newOpenAIEmbedder(apiKey, baseURL, model string, dims int) *OpenAIEmbedder {
 	return &OpenAIEmbedder{
 		apiKey:  apiKey,
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -80,7 +130,9 @@ func (o *OpenAIEmbedder) Embed(text string) ([]float32, error) {
 		Normalized: true,
 	}
 	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
+	if err := json.NewEncoder(&buf).Encode(body); err != nil {
+		return nil, fmt.Errorf("embed encode: %w", err)
+	}
 	req, err := http.NewRequest("POST", o.baseURL+"/embeddings", &buf)
 	if err != nil {
 		return nil, fmt.Errorf("embed: %w", err)
@@ -103,6 +155,9 @@ func (o *OpenAIEmbedder) Embed(text string) ([]float32, error) {
 	if len(result.Data) == 0 {
 		return nil, fmt.Errorf("embed: empty response")
 	}
+	if got := len(result.Data[0].Embedding); got != o.dims {
+		return nil, fmt.Errorf("%w: %s returned %d dimensions, expected %d", ErrEmbeddingDimensionMismatch, o.Name(), got, o.dims)
+	}
 	vec := make([]float32, len(result.Data[0].Embedding))
 	for i, v := range result.Data[0].Embedding {
 		vec[i] = float32(v)
@@ -110,6 +165,6 @@ func (o *OpenAIEmbedder) Embed(text string) ([]float32, error) {
 	return vec, nil
 }
 
-func (o *OpenAIEmbedder) Name() string     { return "openai/" + o.model }
-func (o *OpenAIEmbedder) Dims() int         { return o.dims }
-func (o *OpenAIEmbedder) Available() bool   { return o.apiKey != "" }
+func (o *OpenAIEmbedder) Name() string    { return "openai/" + o.model }
+func (o *OpenAIEmbedder) Dims() int       { return o.dims }
+func (o *OpenAIEmbedder) Available() bool { return o.apiKey != "" }

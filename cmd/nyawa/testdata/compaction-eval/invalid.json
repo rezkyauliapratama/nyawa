@@ -1,0 +1,25 @@
+{
+  "schema_version": "nyawa.compaction-eval/v1",
+  "suite_id": "cli-fixture",
+  "task_id": "invalid-trace",
+  "run_id": "run-invalid",
+  "condition": "summary_only",
+  "environment": {
+    "nyawa_revision": "fixture-nyawa",
+    "actor_revision": "fixture-actor",
+    "summary_mode": "captured",
+    "fingerprint_policy_id": "tool-output-bytes-v1"
+  },
+  "compactions": [],
+  "tool_events": [
+    {
+      "event_index": 1,
+      "tool_name": "terminal",
+      "output_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "outcome": "not-a-real-outcome",
+      "is_planning": false,
+      "is_polling": false
+    }
+  ],
+  "recall_probes": []
+}

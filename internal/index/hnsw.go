@@ -2,6 +2,7 @@ package index
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -10,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 )
+
+var ErrDimensionMismatch = errors.New("hnsw dimension mismatch")
 
 // tmpSeq makes temp file names unique across concurrent saves in one process
 // (pid alone is not enough when two goroutines save the same path at once).
@@ -26,7 +29,11 @@ func DefaultHNSWConfig(dim int) HNSWConfig {
 	return HNSWConfig{M: m, Mmax: m, EfConstruction: 200, EfSearch: 50, ML: 1.0 / math.Log(float64(m)), Dim: dim}
 }
 
-type Node struct{ ID string; Vec []float32; Level int }
+type Node struct {
+	ID    string
+	Vec   []float32
+	Level int
+}
 type HNSW struct {
 	mu         sync.RWMutex
 	config     HNSWConfig
@@ -45,37 +52,71 @@ func NewHNSW(cfg HNSWConfig) *HNSW {
 
 func (h *HNSW) randomLevel() int {
 	level := int(math.Floor(-math.Log(h.rng.Float64()) * h.config.ML))
-	if level > h.maxLevel+1 { level = h.maxLevel + 1 }
+	if level > h.maxLevel+1 {
+		level = h.maxLevel + 1
+	}
 	return level
 }
 
-func (h *HNSW) Insert(id string, vec []float32) {
-	h.mu.Lock(); defer h.mu.Unlock()
-	h.insertLocked(id, vec)
+// Insert adds a vector only when its dimensionality matches the index. The
+// returned error is deliberate: callers must not mix vector widths in one HNSW
+// graph, because older versions silently compared only the shortest prefix.
+func (h *HNSW) Insert(id string, vec []float32) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.insertLocked(id, vec)
 }
 
 // insertLocked adds a node without taking the write mutex; callers must hold
-// h.mu for writing. Behaviour is identical to Insert.
-func (h *HNSW) insertLocked(id string, vec []float32) {
-	if _, exists := h.nodes[id]; exists { return }
+// h.mu for writing. It validates the vector before changing the graph.
+func (h *HNSW) insertLocked(id string, vec []float32) error {
+	if err := h.validateVectorLocked(vec); err != nil {
+		return err
+	}
+	if h.config.Dim == 0 {
+		h.config.Dim = len(vec)
+	}
+	if _, exists := h.nodes[id]; exists {
+		return nil
+	}
 	level := h.randomLevel()
 	h.nodes[id] = &Node{ID: id, Vec: vec, Level: level}
-	for len(h.graph) <= level { h.graph = append(h.graph, make(map[string]map[string]float64)) }
-	for l := 0; l <= level; l++ { if h.graph[l][id] == nil { h.graph[l][id] = make(map[string]float64) } }
-	if h.entryPoint == "" { h.entryPoint = id; h.maxLevel = level; return }
+	for len(h.graph) <= level {
+		h.graph = append(h.graph, make(map[string]map[string]float64))
+	}
+	for l := 0; l <= level; l++ {
+		if h.graph[l][id] == nil {
+			h.graph[l][id] = make(map[string]float64)
+		}
+	}
+	if h.entryPoint == "" {
+		h.entryPoint = id
+		h.maxLevel = level
+		return nil
+	}
 	curr := h.entryPoint
-	for l := h.maxLevel; l > level; l-- { curr = h.searchLayer(vec, curr, 1, l)[0] }
+	for l := h.maxLevel; l > level; l-- {
+		curr = h.searchLayer(vec, curr, 1, l)[0]
+	}
 	for l := level; l >= 0; l-- {
 		ef := h.config.EfConstruction
-		if l == 0 { ef = h.config.EfConstruction }
+		if l == 0 {
+			ef = h.config.EfConstruction
+		}
 		candidates := h.searchLayer(vec, curr, ef, l)
 		neighbors := candidates[:min(len(candidates), h.config.M)]
 		for _, nID := range neighbors {
-			if nID == id { continue }
-			if h.graph[l][nID] == nil { h.graph[l][nID] = make(map[string]float64) }
+			if nID == id {
+				continue
+			}
+			if h.graph[l][nID] == nil {
+				h.graph[l][nID] = make(map[string]float64)
+			}
 			h.graph[l][id][nID] = h.distance(vec, h.nodes[nID].Vec)
 			h.graph[l][nID][id] = h.distance(h.nodes[nID].Vec, vec)
-			if len(h.graph[l][nID]) > h.config.Mmax { h.pruneNeighbors(l, nID) }
+			if len(h.graph[l][nID]) > h.config.Mmax {
+				h.pruneNeighbors(l, nID)
+			}
 		}
 		// pruneNeighbors above can drop every reverse edge to the new node when
 		// each neighbour is already full, leaving id with no incoming links. Such
@@ -89,27 +130,152 @@ func (h *HNSW) insertLocked(id string, vec []float32) {
 			}
 			h.graph[l][nearest][id] = h.distance(h.nodes[nearest].Vec, vec)
 		}
-		if len(h.graph[l][id]) > h.config.Mmax { h.pruneNeighbors(l, id) }
+		if len(h.graph[l][id]) > h.config.Mmax {
+			h.pruneNeighbors(l, id)
+		}
 		curr = candidates[0]
 	}
-	if level > h.maxLevel { h.entryPoint = id; h.maxLevel = level }
+	if level > h.maxLevel {
+		h.entryPoint = id
+		h.maxLevel = level
+	}
+	return nil
 }
 
-type SearchResult struct{ ID string; Distance float64 }
+// EnsureDimension checks the selected embedder before any memory operation
+// writes vectors. Dimensions are a structural check only: changing model or
+// provider still requires rebuilding all vectors, even if its output width is
+// the same.
+func (h *HNSW) EnsureDimension(dim int) error {
+	if dim <= 0 {
+		return fmt.Errorf("%w: embedder reports %d dimensions", ErrDimensionMismatch, dim)
+	}
 
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	indexDim, err := h.dimensionLocked()
+	if err != nil {
+		return err
+	}
+	if len(h.nodes) == 0 {
+		// An empty persisted index has no vectors to preserve, so its configured
+		// width may safely follow the explicitly selected embedder.
+		h.config.Dim = dim
+		return nil
+	}
+	if indexDim != dim {
+		return fmt.Errorf("%w: index uses %d dimensions, selected embedder uses %d", ErrDimensionMismatch, indexDim, dim)
+	}
+	if h.config.Dim == 0 {
+		h.config.Dim = indexDim
+	}
+	return nil
+}
+
+// ValidateVector checks a vector without mutating the index. Store uses this
+// before inserting a memory row so a bad embedding does not leave a partial
+// database write behind.
+func (h *HNSW) ValidateVector(vec []float32) error {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.validateVectorLocked(vec)
+}
+
+// Dimension returns the persisted (or inferred legacy) vector width.
+func (h *HNSW) Dimension() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	dim, _ := h.dimensionLocked()
+	return dim
+}
+
+func (h *HNSW) validateVectorLocked(vec []float32) error {
+	if len(vec) == 0 {
+		return fmt.Errorf("%w: vector is empty", ErrDimensionMismatch)
+	}
+	if h.config.Dim < 0 {
+		return fmt.Errorf("%w: index has invalid dimension %d", ErrDimensionMismatch, h.config.Dim)
+	}
+
+	// Old in-memory indexes can have vectors while Dim is unset. Derive the
+	// width from those vectors before accepting another one; otherwise a first
+	// post-upgrade insert could overwrite the implicit 384-width contract.
+	dim := h.config.Dim
+	if dim == 0 && len(h.nodes) > 0 {
+		var err error
+		dim, err = h.dimensionLocked()
+		if err != nil {
+			return err
+		}
+	}
+	if dim != 0 && len(vec) != dim {
+		return fmt.Errorf("%w: index uses %d dimensions, vector has %d", ErrDimensionMismatch, dim, len(vec))
+	}
+	return nil
+}
+
+func (h *HNSW) dimensionLocked() (int, error) {
+	dim := h.config.Dim
+	if dim < 0 {
+		return 0, fmt.Errorf("%w: index has invalid dimension %d", ErrDimensionMismatch, dim)
+	}
+	for id, node := range h.nodes {
+		if node == nil || len(node.Vec) == 0 {
+			return 0, fmt.Errorf("%w: node %q has an empty vector", ErrDimensionMismatch, id)
+		}
+		if dim == 0 {
+			dim = len(node.Vec)
+		}
+		if len(node.Vec) != dim {
+			return 0, fmt.Errorf("%w: node %q has %d dimensions, index uses %d", ErrDimensionMismatch, id, len(node.Vec), dim)
+		}
+	}
+	return dim, nil
+}
+
+type SearchResult struct {
+	ID       string
+	Distance float64
+}
+
+// Search keeps the legacy no-error API. New code should use SearchChecked so
+// a caller can surface an incompatible query vector instead of treating it as
+// an empty result set.
 func (h *HNSW) Search(query []float32, topK int) []SearchResult {
-	h.mu.RLock(); defer h.mu.RUnlock()
-	if h.entryPoint == "" || len(h.nodes) == 0 { return nil }
+	results, _ := h.SearchChecked(query, topK)
+	return results
+}
+
+// SearchChecked returns an error when the query shape does not match this
+// index. It is used by memory and RAG paths to make dimensional drift visible.
+func (h *HNSW) SearchChecked(query []float32, topK int) ([]SearchResult, error) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.entryPoint == "" || len(h.nodes) == 0 || topK <= 0 {
+		return nil, nil
+	}
+	if err := h.validateVectorLocked(query); err != nil {
+		return nil, err
+	}
 	ef := h.config.EfSearch
-	if topK > ef { ef = topK * 2 }
+	if topK > ef {
+		ef = topK * 2
+	}
 	curr := h.entryPoint
-	for l := h.maxLevel; l > 0; l-- { curr = h.searchLayer(query, curr, 1, l)[0] }
+	for l := h.maxLevel; l > 0; l-- {
+		curr = h.searchLayer(query, curr, 1, l)[0]
+	}
 	candidates := h.searchLayer(query, curr, ef, 0)
 	results := make([]SearchResult, len(candidates))
-	for i, id := range candidates { results[i] = SearchResult{ID: id, Distance: h.distance(query, h.nodes[id].Vec)} }
+	for i, id := range candidates {
+		results[i] = SearchResult{ID: id, Distance: h.distance(query, h.nodes[id].Vec)}
+	}
 	h.sortByDistance(results)
-	if len(results) > topK { results = results[:topK] }
-	return results
+	if len(results) > topK {
+		results = results[:topK]
+	}
+	return results, nil
 }
 
 func (h *HNSW) searchLayer(queryVec []float32, entry string, ef int, layer int) []string {
@@ -122,59 +288,100 @@ func (h *HNSW) searchLayer(queryVec []float32, entry string, ef int, layer int) 
 	visited[entry] = true
 	for !candidates.isEmpty() {
 		closest := candidates.pop()
-		if results.len() >= ef && closest.dist > results.peek().dist { break }
+		if results.len() >= ef && closest.dist > results.peek().dist {
+			break
+		}
 		for neighbor := range h.graph[layer][closest.id] {
-			if visited[neighbor] { continue }
+			if visited[neighbor] {
+				continue
+			}
 			visited[neighbor] = true
 			ndist := h.distance(queryVec, h.nodes[neighbor].Vec)
 			candidates.push(candidate{neighbor, ndist})
 			if results.len() < ef || ndist < results.peek().dist {
 				results.push(candidate{neighbor, ndist})
-				if results.len() > ef { results.pop() }
+				if results.len() > ef {
+					results.pop()
+				}
 			}
 		}
 	}
 	resultIDs := make([]string, results.len())
-	for i := len(resultIDs) - 1; i >= 0; i-- { resultIDs[i] = results.pop().id }
+	for i := len(resultIDs) - 1; i >= 0; i-- {
+		resultIDs[i] = results.pop().id
+	}
 	return resultIDs
 }
 
 func (h *HNSW) pruneNeighbors(layer int, nodeID string) {
 	neighbors := h.graph[layer][nodeID]
-	if len(neighbors) <= h.config.Mmax { return }
-	pairs := make([]struct{ id string; dist float64 }, 0, len(neighbors))
-	for nID, d := range neighbors { pairs = append(pairs, struct{ id string; dist float64 }{nID, d}) }
+	if len(neighbors) <= h.config.Mmax {
+		return
+	}
+	pairs := make([]struct {
+		id   string
+		dist float64
+	}, 0, len(neighbors))
+	for nID, d := range neighbors {
+		pairs = append(pairs, struct {
+			id   string
+			dist float64
+		}{nID, d})
+	}
 	for i := 0; i < len(pairs); i++ {
-		for j := i + 1; j < len(pairs); j++ { if pairs[j].dist < pairs[i].dist { pairs[i], pairs[j] = pairs[j], pairs[i] } }
+		for j := i + 1; j < len(pairs); j++ {
+			if pairs[j].dist < pairs[i].dist {
+				pairs[i], pairs[j] = pairs[j], pairs[i]
+			}
+		}
 	}
 	h.graph[layer][nodeID] = make(map[string]float64)
-	for i := 0; i < h.config.Mmax && i < len(pairs); i++ { h.graph[layer][nodeID][pairs[i].id] = pairs[i].dist }
+	for i := 0; i < h.config.Mmax && i < len(pairs); i++ {
+		h.graph[layer][nodeID][pairs[i].id] = pairs[i].dist
+	}
 }
 
 func (h *HNSW) distance(a, b []float32) float64 {
-	var sum float64; minLen := len(a); if len(b) < minLen { minLen = len(b) }
-	for i := 0; i < minLen; i++ { d := float64(a[i]) - float64(b[i]); sum += d * d }
+	var sum float64
+	for i := range a {
+		d := float64(a[i]) - float64(b[i])
+		sum += d * d
+	}
 	return math.Sqrt(sum)
 }
 
 func (h *HNSW) sortByDistance(results []SearchResult) {
 	for i := 0; i < len(results); i++ {
-		for j := i + 1; j < len(results); j++ { if results[j].Distance < results[i].Distance { results[i], results[j] = results[j], results[i] } }
+		for j := i + 1; j < len(results); j++ {
+			if results[j].Distance < results[i].Distance {
+				results[i], results[j] = results[j], results[i]
+			}
+		}
 	}
 }
 
 func (h *HNSW) Delete(id string) {
-	h.mu.Lock(); defer h.mu.Unlock()
-	if _, exists := h.nodes[id]; !exists { return }
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, exists := h.nodes[id]; !exists {
+		return
+	}
 	level := h.nodes[id].Level
 	delete(h.nodes, id)
 	for l := 0; l <= level && l < len(h.graph); l++ {
 		delete(h.graph[l], id)
-		for nID := range h.graph[l] { delete(h.graph[l][nID], id) }
+		for nID := range h.graph[l] {
+			delete(h.graph[l][nID], id)
+		}
 	}
 	if h.entryPoint == id {
-		h.entryPoint = ""; h.maxLevel = -1
-		for id := range h.nodes { h.entryPoint = id; h.maxLevel = h.nodes[id].Level; break }
+		h.entryPoint = ""
+		h.maxLevel = -1
+		for id := range h.nodes {
+			h.entryPoint = id
+			h.maxLevel = h.nodes[id].Level
+			break
+		}
 	}
 }
 
@@ -182,17 +389,18 @@ func (h *HNSW) Size() int { h.mu.RLock(); defer h.mu.RUnlock(); return len(h.nod
 
 // Contains reports whether a node with the given id is already indexed.
 func (h *HNSW) Contains(id string) bool {
-	h.mu.RLock(); defer h.mu.RUnlock()
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	_, ok := h.nodes[id]
 	return ok
 }
 
 type hnswData struct {
-	EntryPoint string                             `json:"ep"`
-	MaxLevel   int                                `json:"ml"`
-	Config     HNSWConfig                         `json:"cfg"`
-	Nodes      map[string]*Node                   `json:"ns"`
-	Graph      []map[string]map[string]float64     `json:"g"`
+	EntryPoint string                          `json:"ep"`
+	MaxLevel   int                             `json:"ml"`
+	Config     HNSWConfig                      `json:"cfg"`
+	Nodes      map[string]*Node                `json:"ns"`
+	Graph      []map[string]map[string]float64 `json:"g"`
 }
 
 // Save atomically persists the index to path: the payload is marshalled in
@@ -202,10 +410,13 @@ type hnswData struct {
 // serialised by a cross-process flock (path + ".lock").
 func (h *HNSW) Save(path string) error {
 	lk, err := acquireFileLock(path+lockSuffix, fileLockTimeout)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer lk.release()
 
-	h.mu.RLock(); defer h.mu.RUnlock()
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	return h.saveNoLock(path)
 }
 
@@ -213,9 +424,14 @@ func (h *HNSW) Save(path string) error {
 // Callers must hold h.mu for reading and, when another process may touch the
 // same path, the file lock.
 func (h *HNSW) saveNoLock(path string) error {
+	if _, err := h.dimensionLocked(); err != nil {
+		return err
+	}
 	data := hnswData{EntryPoint: h.entryPoint, MaxLevel: h.maxLevel, Config: h.config, Nodes: h.nodes, Graph: h.graph}
 	b, err := json.Marshal(data)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	return atomicWriteFile(path, b)
 }
 
@@ -224,17 +440,23 @@ func (h *HNSW) saveNoLock(path string) error {
 // otherwise 0644 is used.
 func atomicWriteFile(path string, data []byte) error {
 	mode := os.FileMode(0644)
-	if fi, err := os.Stat(path); err == nil { mode = fi.Mode().Perm() }
+	if fi, err := os.Stat(path); err == nil {
+		mode = fi.Mode().Perm()
+	}
 
 	tmp := fmt.Sprintf("%s.tmp-%d-%d", path, os.Getpid(), atomic.AddUint64(&tmpSeq, 1))
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-	if err != nil { return fmt.Errorf("hnsw save: create temp %s: %w", tmp, err) }
+	if err != nil {
+		return fmt.Errorf("hnsw save: create temp %s: %w", tmp, err)
+	}
 	if _, err := f.Write(data); err != nil {
-		f.Close(); os.Remove(tmp)
+		f.Close()
+		os.Remove(tmp)
 		return fmt.Errorf("hnsw save: write temp %s: %w", tmp, err)
 	}
 	if err := f.Sync(); err != nil {
-		f.Close(); os.Remove(tmp)
+		f.Close()
+		os.Remove(tmp)
 		return fmt.Errorf("hnsw save: sync temp %s: %w", tmp, err)
 	}
 	if err := f.Close(); err != nil {
@@ -245,7 +467,10 @@ func atomicWriteFile(path string, data []byte) error {
 		os.Remove(tmp)
 		return fmt.Errorf("hnsw save: rename %s -> %s: %w", tmp, path, err)
 	}
-	if d, err := os.Open(filepath.Dir(path)); err == nil { d.Sync(); d.Close() } // best-effort directory fsync
+	if d, err := os.Open(filepath.Dir(path)); err == nil {
+		d.Sync()
+		d.Close()
+	} // best-effort directory fsync
 	return nil
 }
 
@@ -257,29 +482,44 @@ func atomicWriteFile(path string, data []byte) error {
 // number of nodes recovered from disk and the total number written.
 func (h *HNSW) MergeAndSave(path string) (merged, total int, err error) {
 	lk, err := acquireFileLock(path+lockSuffix, fileLockTimeout)
-	if err != nil { return 0, 0, err }
+	if err != nil {
+		return 0, 0, err
+	}
 	defer lk.release()
 
 	h.mu.RLock()
 	local := make([]*Node, 0, len(h.nodes))
-	for _, n := range h.nodes { local = append(local, &Node{ID: n.ID, Vec: n.Vec, Level: n.Level}) }
+	for _, n := range h.nodes {
+		local = append(local, &Node{ID: n.ID, Vec: n.Vec, Level: n.Level})
+	}
 	cfg := h.config
 	h.mu.RUnlock()
 
 	disk := NewHNSW(cfg)
-	if e := disk.loadFromDisk(path); e != nil && !os.IsNotExist(e) { return 0, 0, e }
+	if e := disk.loadFromDisk(path); e != nil && !os.IsNotExist(e) {
+		return 0, 0, e
+	}
 
 	diskBefore := len(disk.nodes)
 	skipped := 0
 	for _, n := range local {
-		if _, ok := disk.nodes[n.ID]; ok { skipped++; continue }
-		disk.insertLocked(n.ID, n.Vec)
+		if _, ok := disk.nodes[n.ID]; ok {
+			skipped++
+			continue
+		}
+		if e := disk.insertLocked(n.ID, n.Vec); e != nil {
+			return 0, 0, fmt.Errorf("merge hnsw vector %q: %w", n.ID, e)
+		}
 	}
 	merged = diskBefore - skipped // nodes on disk that memory did not have
-	if merged < 0 { merged = 0 }
+	if merged < 0 {
+		merged = 0
+	}
 	total = len(disk.nodes)
 
-	if e := disk.saveNoLock(path); e != nil { return 0, 0, e }
+	if e := disk.saveNoLock(path); e != nil {
+		return 0, 0, e
+	}
 	return merged, total, nil
 }
 
@@ -287,24 +527,64 @@ func (h *HNSW) MergeAndSave(path string) (merged, total int, err error) {
 // it never observes a partial write.
 func (h *HNSW) Load(path string) error {
 	lk, err := acquireFileLock(path+lockSuffix, fileLockTimeout)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer lk.release()
 
-	h.mu.Lock(); defer h.mu.Unlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	return h.loadFromDisk(path)
 }
 
 // loadFromDisk reads and installs the on-disk index without taking any lock.
 func (h *HNSW) loadFromDisk(path string) error {
 	b, err := os.ReadFile(path)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	var data hnswData
-	if err := json.Unmarshal(b, &data); err != nil { return err }
+	if err := json.Unmarshal(b, &data); err != nil {
+		return err
+	}
+	if err := validateLoadedDimension(&data); err != nil {
+		return fmt.Errorf("hnsw load: %w", err)
+	}
 	h.entryPoint, h.maxLevel, h.config, h.nodes, h.graph = data.EntryPoint, data.MaxLevel, data.Config, data.Nodes, data.Graph
-	if h.nodes == nil { h.nodes = make(map[string]*Node) }
-	if h.graph == nil { h.graph = make([]map[string]map[string]float64, 1); h.graph[0] = make(map[string]map[string]float64) }
+	if h.nodes == nil {
+		h.nodes = make(map[string]*Node)
+	}
+	if h.graph == nil {
+		h.graph = make([]map[string]map[string]float64, 1)
+		h.graph[0] = make(map[string]map[string]float64)
+	}
 	h.symmetrizeLocked()
 	h.rng = rand.New(rand.NewSource(42))
+	return nil
+}
+
+// validateLoadedDimension rejects mixed-width vectors before Load mutates a
+// live HNSW. Older index files may omit cfg.Dim; infer it from their vectors so
+// their existing width is still enforced on future writes.
+func validateLoadedDimension(data *hnswData) error {
+	dim := data.Config.Dim
+	if dim < 0 {
+		return fmt.Errorf("%w: index has invalid dimension %d", ErrDimensionMismatch, dim)
+	}
+	for id, node := range data.Nodes {
+		if node == nil || len(node.Vec) == 0 {
+			return fmt.Errorf("%w: node %q has an empty vector", ErrDimensionMismatch, id)
+		}
+		if dim == 0 {
+			dim = len(node.Vec)
+		}
+		if len(node.Vec) != dim {
+			return fmt.Errorf("%w: node %q has %d dimensions, index uses %d", ErrDimensionMismatch, id, len(node.Vec), dim)
+		}
+	}
+	if data.Config.Dim == 0 {
+		data.Config.Dim = dim
+	}
 	return nil
 }
 
@@ -340,59 +620,88 @@ func (h *HNSW) symmetrizeLocked() {
 	}
 }
 
-type candidate struct{ id string; dist float64 }
+type candidate struct {
+	id   string
+	dist float64
+}
 type minHeap struct{ items []candidate }
+
 func newMinHeap() *minHeap { return &minHeap{} }
 func (h *minHeap) push(c candidate) {
 	h.items = append(h.items, c)
 	for i := len(h.items) - 1; i > 0; {
 		p := (i - 1) / 2
-		if h.items[i].dist >= h.items[p].dist { break }
-		h.items[i], h.items[p] = h.items[p], h.items[i]; i = p
+		if h.items[i].dist >= h.items[p].dist {
+			break
+		}
+		h.items[i], h.items[p] = h.items[p], h.items[i]
+		i = p
 	}
 }
 func (h *minHeap) pop() candidate {
 	top := h.items[0]
 	h.items[0] = h.items[len(h.items)-1]
 	h.items = h.items[:len(h.items)-1]
-	h.sink(0); return top
+	h.sink(0)
+	return top
 }
 func (h *minHeap) sink(i int) {
 	for {
-		smallest := i; l, r := 2*i+1, 2*i+2
-		if l < len(h.items) && h.items[l].dist < h.items[smallest].dist { smallest = l }
-		if r < len(h.items) && h.items[r].dist < h.items[smallest].dist { smallest = r }
-		if smallest == i { break }
-		h.items[i], h.items[smallest] = h.items[smallest], h.items[i]; i = smallest
+		smallest := i
+		l, r := 2*i+1, 2*i+2
+		if l < len(h.items) && h.items[l].dist < h.items[smallest].dist {
+			smallest = l
+		}
+		if r < len(h.items) && h.items[r].dist < h.items[smallest].dist {
+			smallest = r
+		}
+		if smallest == i {
+			break
+		}
+		h.items[i], h.items[smallest] = h.items[smallest], h.items[i]
+		i = smallest
 	}
 }
 func (h *minHeap) isEmpty() bool { return len(h.items) == 0 }
 func (h *minHeap) len() int      { return len(h.items) }
 
 type maxHeap struct{ items []candidate }
+
 func newMaxHeap() *maxHeap { return &maxHeap{} }
 func (h *maxHeap) push(c candidate) {
 	h.items = append(h.items, c)
 	for i := len(h.items) - 1; i > 0; {
 		p := (i - 1) / 2
-		if h.items[i].dist <= h.items[p].dist { break }
-		h.items[i], h.items[p] = h.items[p], h.items[i]; i = p
+		if h.items[i].dist <= h.items[p].dist {
+			break
+		}
+		h.items[i], h.items[p] = h.items[p], h.items[i]
+		i = p
 	}
 }
 func (h *maxHeap) pop() candidate {
 	top := h.items[0]
 	h.items[0] = h.items[len(h.items)-1]
 	h.items = h.items[:len(h.items)-1]
-	h.sink(0); return top
+	h.sink(0)
+	return top
 }
 func (h *maxHeap) peek() candidate { return h.items[0] }
 func (h *maxHeap) sink(i int) {
 	for {
-		largest := i; l, r := 2*i+1, 2*i+2
-		if l < len(h.items) && h.items[l].dist > h.items[largest].dist { largest = l }
-		if r < len(h.items) && h.items[r].dist > h.items[largest].dist { largest = r }
-		if largest == i { break }
-		h.items[i], h.items[largest] = h.items[largest], h.items[i]; i = largest
+		largest := i
+		l, r := 2*i+1, 2*i+2
+		if l < len(h.items) && h.items[l].dist > h.items[largest].dist {
+			largest = l
+		}
+		if r < len(h.items) && h.items[r].dist > h.items[largest].dist {
+			largest = r
+		}
+		if largest == i {
+			break
+		}
+		h.items[i], h.items[largest] = h.items[largest], h.items[i]
+		i = largest
 	}
 }
 func (h *maxHeap) isEmpty() bool { return len(h.items) == 0 }
