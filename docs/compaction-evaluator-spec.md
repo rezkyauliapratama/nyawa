@@ -1,6 +1,6 @@
 # Compaction-Aware Evaluator Specification
 
-**Status:** The pure offline scorer described here is implemented in `internal/compactioneval`, and a disabled-by-default passive Hermes event collector is implemented at `config/hermes/plugins/nyawa-compaction-trace`. The collector emits fail-open JSONL event records for the P0 baseline. Trace assembly, CLI scoring, residual-pack reader, metric endpoint, and runtime behavior remain proposal-only.
+**Status:** The pure offline evaluator, deterministic JSONL assembler, read-only snapshot recall probe runner, deterministic baseline report builder, and shadow-only pure residual-pack builder are implemented in `internal/compactioneval`. The passive Hermes event collector remains disabled-by-default. No runtime residual-pack activation, persistence schema, endpoint, prompt injection, deployment, or production mutation is implemented.
 
 **Purpose:** Define reproducible metrics for whether a compaction strategy preserves useful state and reduces avoidable agent work. The target signals are inspired by REMORY's reported repeated-tool-output and tool-error counts, plus Nyawa-specific recall-after-compaction checks.
 
@@ -15,8 +15,12 @@ This specification complements [residual-pack-proposal.md](residual-pack-proposa
 | `compact.CompactionStats` | Contains input/output message and token estimates, segment count, and pruned-tool-result count. | It is not a repeated-output, error, or recall-retention metric. |
 | `compaction_log` | Implemented with session IDs, summary ID, and created timestamp only. | It cannot uniquely identify a checkpoint or join a later tool event to one. |
 | `POST /v1/recall` | Implemented; request fields are `query`, `namespace`, `limit`, `min_score`, `exclude_types`; response results include `id`, `rank`, and score fields. | It is the current-compatible endpoint for ID-based recall probes. |
+| Offline trace assembler | Implemented in `internal/compactioneval`; `compaction-eval assemble` consumes one collector JSONL run. | It rejects mixed runs, missing summary hashes, invalid ordering, and incomplete canonical fields; it does not recover payloads. |
+| Offline recall probe runner | Implemented; `compaction-eval recall-probe` requires an explicit `--snapshot` database and supports `summary_only` and `summary_plus_baseline`. | It is FTS/read-only snapshot evidence, not a claim about live semantic recall or production state. |
+| Offline baseline report | Implemented; consumes immutable trace/result observations and emits deterministic JSON/Markdown. | Empty input is rejected; token/cost fields remain unavailable unless recorded. |
+| Residual pack shadow builder | Implemented as a pure deterministic builder; runtime integration remains proposal-only. | No persistence, endpoint, MCP field, prompt injection, or residual-pack recall is active. |
 | Existing benchmark harness | `scripts/recall-bench/` measures general recall@1/@3/@5 and MRR by running the CLI against a read-only database. | It has no compaction trace, no tool telemetry, and maps CLI output back to IDs by content. It is useful precedent, not this evaluator. |
-| Residual pack | Proposal only. | Direct pack lookup and residual-aware recall cannot be reported as implemented behavior. |
+| Residual pack | Runtime proposal only; pure deterministic shadow builder is implemented. | Direct pack lookup and residual-aware recall cannot be reported as implemented behavior. |
 
 A pure scorer is implemented at `internal/compactioneval`. It validates and scores an externally captured trace now, but Nyawa cannot autonomously produce a complete trace with the required fields yet.
 
@@ -44,6 +48,7 @@ Use explicit condition labels:
 
 - `no_compaction` — no compaction is applied.
 - `summary_only` — the existing summary block only.
+- `summary_plus_baseline` — summary plus the explicitly selected baseline memory set in a read-only snapshot probe run.
 - `summary_plus_residual_pack` — proposed future residual-pack rehydration is enabled.
 - `retrieval_only` — a distinct retrieval intervention, if tested.
 

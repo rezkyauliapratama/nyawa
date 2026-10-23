@@ -1,6 +1,6 @@
 # Deterministic Residual Packs for Compaction Checkpoints
 
-**Status:** Proposal only. This document does not change Nyawa's runtime, schema, HTTP API, MCP API, or compaction output.
+**Status:** Runtime residual packs remain proposal-only. A pure, deterministic shadow/dry-run builder is implemented in `internal/compactioneval`; it is not wired into compaction, persistence, recall, MCP, HTTP, or prompt construction. This document does not change Nyawa's runtime, schema, HTTP API, MCP API, or compaction output.
 
 **Scope:** A bounded, inspectable sidecar for information omitted at a compaction boundary. It is additive to [context-compaction-design.md](context-compaction-design.md); when that historical design document and the checked-in Go code disagree about current behavior, the code is the source of truth.
 

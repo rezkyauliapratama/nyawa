@@ -80,6 +80,10 @@ Usage:
   nyawa ns <db>                           List namespaces
   nyawa archive <db> <output-path>        Archive superseded memories
   nyawa compaction-eval score <trace.json|->  Score an immutable trace offline
+  nyawa compaction-eval assemble <events.jsonl|->  Assemble passive events offline
+  nyawa compaction-eval recall-probe <suite.json> <snapshot.db> --snapshot  Run read-only probes
+  nyawa compaction-eval baseline <observations.json> <window-start> <window-end>  Report baseline
+  nyawa compaction-eval residual-pack <input.json>  Build a shadow residual pack (never persisted)
   nyawa serve <db>                        Start HTTP + Dream Cycle
   nyawa mcp <db>                          Start MCP server
   nyawa dream <db>                        Run Dream Cycle
@@ -268,37 +272,125 @@ func cmdArchive() {
 }
 
 func cmdCompactionEval() error {
-	if len(os.Args) != 4 || os.Args[2] != "score" {
-		return fmt.Errorf("usage: nyawa compaction-eval score <trace.json|->")
+	if len(os.Args) < 3 {
+		return fmt.Errorf("usage: nyawa compaction-eval {score|assemble|recall-probe|baseline|residual-pack} ...")
 	}
-
-	inputName := os.Args[3]
-	var data []byte
-	var err error
-	if inputName == "-" {
-		data, err = io.ReadAll(os.Stdin)
-		if err != nil {
-			return fmt.Errorf("read trace from stdin: %w", err)
+	command := os.Args[2]
+	readInput := func(name string) ([]byte, error) {
+		if name == "-" {
+			return io.ReadAll(os.Stdin)
 		}
-	} else {
-		data, err = os.ReadFile(inputName)
-		if err != nil {
-			return fmt.Errorf("read trace %q: %w", inputName, err)
+		return os.ReadFile(name)
+	}
+	switch command {
+	case "score":
+		if len(os.Args) != 4 {
+			return fmt.Errorf("usage: nyawa compaction-eval score <trace.json|->")
 		}
+		data, err := readInput(os.Args[3])
+		if err != nil {
+			return fmt.Errorf("read trace: %w", err)
+		}
+		result, err := compactioneval.ScoreJSON(data)
+		if err != nil {
+			return fmt.Errorf("invalid trace: %w", err)
+		}
+		encoded, err := compactioneval.MarshalResultJSON(result)
+		if err != nil {
+			return fmt.Errorf("encode score result: %w", err)
+		}
+		_, err = fmt.Fprintln(os.Stdout, string(encoded))
+		return err
+	case "assemble":
+		if len(os.Args) != 4 {
+			return fmt.Errorf("usage: nyawa compaction-eval assemble <events.jsonl|->")
+		}
+		data, err := readInput(os.Args[3])
+		if err != nil {
+			return fmt.Errorf("read events: %w", err)
+		}
+		trace, err := compactioneval.AssembleJSONL(data)
+		if err != nil {
+			return err
+		}
+		encoded, err := json.Marshal(trace)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(os.Stdout, string(encoded))
+		return err
+	case "recall-probe":
+		if len(os.Args) != 6 || os.Args[5] != "--snapshot" {
+			return fmt.Errorf("usage: nyawa compaction-eval recall-probe <suite.json> <snapshot.db> --snapshot")
+		}
+		data, err := readInput(os.Args[3])
+		if err != nil {
+			return fmt.Errorf("read probe suite: %w", err)
+		}
+		var suite compactioneval.RecallProbeSuite
+		decoder := json.NewDecoder(strings.NewReader(string(data)))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&suite); err != nil {
+			return err
+		}
+		run, err := compactioneval.RunRecallProbeSuite(compactioneval.RecallRunnerConfig{DBPath: os.Args[4], Snapshot: true}, suite)
+		if err != nil {
+			return err
+		}
+		encoded, err := compactioneval.MarshalRecallProbeRun(run)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(os.Stdout, string(encoded))
+		return err
+	case "baseline":
+		if len(os.Args) != 6 {
+			return fmt.Errorf("usage: nyawa compaction-eval baseline <observations.json> <window-start> <window-end>")
+		}
+		data, err := readInput(os.Args[3])
+		if err != nil {
+			return err
+		}
+		observations, err := compactioneval.DecodeBaselineObservations(data)
+		if err != nil {
+			return err
+		}
+		report, err := compactioneval.BuildBaselineReport(observations, os.Args[4], os.Args[5])
+		if err != nil {
+			return err
+		}
+		encoded, err := compactioneval.MarshalBaselineJSON(report)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(os.Stdout, string(encoded))
+		return err
+	case "residual-pack":
+		if len(os.Args) != 4 {
+			return fmt.Errorf("usage: nyawa compaction-eval residual-pack <input.json|->")
+		}
+		data, err := readInput(os.Args[3])
+		if err != nil {
+			return err
+		}
+		var input compactioneval.ResidualPackInput
+		decoder := json.NewDecoder(strings.NewReader(string(data)))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&input); err != nil {
+			return err
+		}
+		result, err := compactioneval.BuildResidualPack(input)
+		if err != nil {
+			return err
+		}
+		if result.CanonicalJSON == nil {
+			return errors.New("residual pack disabled or empty")
+		}
+		_, err = fmt.Fprintln(os.Stdout, string(result.CanonicalJSON))
+		return err
+	default:
+		return fmt.Errorf("unknown compaction-eval command %q", command)
 	}
-
-	result, err := compactioneval.ScoreJSON(data)
-	if err != nil {
-		return fmt.Errorf("invalid trace %q: %w", inputName, err)
-	}
-	encoded, err := compactioneval.MarshalResultJSON(result)
-	if err != nil {
-		return fmt.Errorf("encode score result: %w", err)
-	}
-	if _, err := fmt.Fprintln(os.Stdout, string(encoded)); err != nil {
-		return fmt.Errorf("write score result: %w", err)
-	}
-	return nil
 }
 
 func cmdImport() {

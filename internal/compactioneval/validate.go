@@ -87,7 +87,7 @@ func ValidateTrace(trace Trace) error {
 	validateNonEmpty(&problems, "$.task_id", trace.TaskID)
 	validateNonEmpty(&problems, "$.run_id", trace.RunID)
 	if !validCondition(trace.Condition) {
-		problems.add("$.condition", "must be one of no_compaction, summary_only, summary_plus_residual_pack, retrieval_only")
+		problems.add("$.condition", "must be one of no_compaction, summary_only, summary_plus_baseline, summary_plus_residual_pack, retrieval_only")
 	}
 	validateNonEmpty(&problems, "$.environment.nyawa_revision", trace.Environment.NyawaRevision)
 	validateNonEmpty(&problems, "$.environment.actor_revision", trace.Environment.ActorRevision)
@@ -501,7 +501,7 @@ func validCanonicalCheckpointID(checkpointID string) bool {
 
 func validCondition(condition string) bool {
 	switch condition {
-	case ConditionNoCompaction, ConditionSummaryOnly, ConditionSummaryPlusResidualPack, ConditionRetrievalOnly:
+	case ConditionNoCompaction, ConditionSummaryOnly, ConditionSummaryPlusBaseline, ConditionSummaryPlusResidualPack, ConditionRetrievalOnly:
 		return true
 	default:
 		return false
