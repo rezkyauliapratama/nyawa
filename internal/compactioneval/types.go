@@ -20,7 +20,10 @@ const (
 	ConditionNoCompaction            = "no_compaction"
 	ConditionSummaryOnly             = "summary_only"
 	ConditionSummaryPlusResidualPack = "summary_plus_residual_pack"
-	ConditionRetrievalOnly           = "retrieval_only"
+	// ConditionSummaryPlusBaseline is the read-only P2 comparison condition.
+	// It does not imply residual-pack activation or runtime behavior.
+	ConditionSummaryPlusBaseline = "summary_plus_baseline"
+	ConditionRetrievalOnly       = "retrieval_only"
 )
 
 // Outcome is the trace producer's provider-native classification of a tool
