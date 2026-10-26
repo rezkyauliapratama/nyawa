@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"unicode"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/rezkyauliapratama/nyawa/internal/embedder"
 	"github.com/rezkyauliapratama/nyawa/internal/extract"
 	"github.com/rezkyauliapratama/nyawa/internal/graph"
 	"github.com/rezkyauliapratama/nyawa/internal/index"
@@ -108,6 +110,8 @@ type Store struct {
 	ready    bool
 }
 
+const defaultHNSWDimensions = 384
+
 func NewStore(dbPath string, emb Embedder) (*Store, error) {
 	// _busy_timeout=20000: write contention (e.g. Dream Cycle holding the
 	// write lock) used to fail fast at 5s. 20s gives concurrent stores a real
@@ -118,16 +122,38 @@ func NewStore(dbPath string, emb Embedder) (*Store, error) {
 	}
 	db.SetMaxOpenConns(2)
 	db.SetMaxIdleConns(2)
-	dim := 768
+
+	dim := defaultHNSWDimensions
 	if emb != nil {
 		dim = emb.Dims()
 	}
-	s := &Store{db: db, hnsw: index.NewHNSW(index.DefaultHNSWConfig(dim)), hnswPath: dbPath + ".hnsw", embedder: emb, classify: extract.NewClassifier()}
+	s := &Store{
+		db:       db,
+		hnsw:     index.NewHNSW(index.DefaultHNSWConfig(dim)),
+		hnswPath: dbPath + ".hnsw",
+		embedder: emb,
+		classify: extract.NewClassifier(),
+	}
+
+	// Load and check the vector index before any schema migration can write to
+	// the database. A selected embedder must agree with the persisted index;
+	// otherwise opening the store fails before a new vector can be inserted.
+	if err := s.hnsw.Load(s.hnswPath); err != nil && !os.IsNotExist(err) {
+		db.Close()
+		return nil, fmt.Errorf("load hnsw %s: %w", s.hnswPath, err)
+	}
+	if emb != nil {
+		if err := s.hnsw.EnsureDimension(emb.Dims()); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("embedding configuration is incompatible with HNSW %s: %w; keep the existing embedder or rebuild a separate index before switching models", s.hnswPath, err)
+		}
+	}
+
 	if gs, err := graph.NewStore(db); err == nil {
 		s.graph = gs
 	}
-	s.hnsw.Load(s.hnswPath)
 	if err := s.migrate(); err != nil {
+		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	s.ready = true
@@ -196,7 +222,9 @@ func (s *Store) persistHNSW() {
 	const attempts = 3
 	for attempt := 1; ; attempt++ {
 		err := s.hnsw.Save(s.hnswPath)
-		if err == nil { return }
+		if err == nil {
+			return
+		}
 		if attempt >= attempts {
 			log.Printf("persist hnsw: giving up after %d attempts (path=%s, %d vectors): %v", attempts, s.hnswPath, s.hnsw.Size(), err)
 			return
@@ -228,8 +256,13 @@ func (s *Store) migrate() error {
 }
 
 func (s *Store) InsertMemory(m *types.Memory) error {
+	vec, err := s.embeddingForInsert(m.Content)
+	if err != nil {
+		return err
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.execRetry(`INSERT INTO memories(id,content,mem_type,namespace,importance,access_count,pinned,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+	_, err = s.execRetry(`INSERT INTO memories(id,content,mem_type,namespace,importance,access_count,pinned,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
 		m.ID, m.Content, string(m.Type), m.Namespace, m.Importance, m.AccessCount, boolToInt(m.Pinned), now, now)
 	if err != nil {
 		return fmt.Errorf("insert: %w", err)
@@ -245,13 +278,37 @@ func (s *Store) InsertMemory(m *types.Memory) error {
 			s.graph.InferTypedEdges(m.ID, m.Content)
 		}
 	}
-	if s.embedder != nil && s.embedder.Available() {
-		if v, e := s.embedder.Embed(m.Content); e == nil && len(v) > 0 {
-			s.hnsw.Insert(m.ID, v)
-			s.persistHNSW()
+	if vec != nil {
+		if err := s.hnsw.Insert(m.ID, vec); err != nil {
+			return fmt.Errorf("index memory %q: %w", m.ID, err)
 		}
+		s.persistHNSW()
 	}
 	return nil
+}
+
+// embeddingForInsert keeps the existing keyword-only fallback for transient
+// embedder failures, but treats a vector-shape error as fatal before the memory
+// row is written. That prevents a successful store operation from hiding an
+// incompatible embedding configuration.
+func (s *Store) embeddingForInsert(content string) ([]float32, error) {
+	if s.embedder == nil || !s.embedder.Available() {
+		return nil, nil
+	}
+	vec, err := s.embedder.Embed(content)
+	if err != nil {
+		if errors.Is(err, embedder.ErrEmbeddingDimensionMismatch) {
+			return nil, fmt.Errorf("embed memory: %w", err)
+		}
+		return nil, nil
+	}
+	if len(vec) == 0 {
+		return nil, nil
+	}
+	if err := s.hnsw.ValidateVector(vec); err != nil {
+		return nil, fmt.Errorf("embed memory: %w", err)
+	}
+	return vec, nil
 }
 
 func (s *Store) GetMemory(id string) (*types.Memory, error) {
@@ -428,7 +485,10 @@ func (s *Store) VectorSearchAt(q []float32, tq TimeQuery) ([]string, error) {
 	if len(q) == 0 {
 		return nil, nil
 	}
-	r := s.hnsw.Search(q, tq.Limit*3)
+	r, err := s.hnsw.SearchChecked(q, tq.Limit*3)
+	if err != nil {
+		return nil, fmt.Errorf("hnsw search: %w", err)
+	}
 	if len(r) == 0 {
 		return nil, nil
 	}

@@ -138,7 +138,12 @@ Each store returns an ID:
 Stored: mem_1785720908630614152
 ```
 
-> **Embedder note:** Nyawa uses an embedder chain (BGE → Ollama → OpenAI-compatible) to generate vectors. If no embedder is available, Nyawa **still works** — it falls back to FTS5 keyword-only search (see [Embedder Setup](#embedder-setup) below).
+> **Embedder note:** the backward-compatible default is the local BGE/ONNX
+> embedder (384 dimensions), with Ollama only as its local fallback. Setting
+> `EMBEDDING_*` alone does not select an API; `MEMORY_EMBEDDER=api` is an
+> explicit opt-in and has no BGE/Ollama fallback. Nyawa falls back to FTS5
+> keyword-only search when no compatible embedder is available (see
+> [Embedder Setup](#embedder-setup)).
 
 ### 5. Search your memories
 
@@ -200,28 +205,52 @@ This runs all 7 maintenance phases immediately (instead of waiting for the hourl
 
 ## Embedder Setup
 
-Nyawa's semantic search needs **embeddings**. It tries embedders in priority order and falls back gracefully:
+Nyawa's semantic search needs **embeddings**. Memory embedding has an explicit
+mode, so an API environment variable cannot accidentally replace an existing
+local index:
 
-| Priority | Embedder | How to enable |
-|----------|----------|---------------|
-| 1 | **BGE** (local Python/ONNX) | Place model files under `internal/embedder/model/` (model path is configurable in code — see `internal/embedder/py_embedder.go`) |
-| 2 | **Ollama** | `ollama pull nomic-embed-text`, then run Ollama on `http://localhost:11434` |
-| 3 | **OpenAI-compatible** | Set `EMBEDDING_API_KEY` + `EMBEDDING_BASE_URL` (+ `EMBEDDING_MODEL`) |
-| 4 | **None** | Falls back to FTS5 keyword-only search — recall still works, just less semantic |
+| `MEMORY_EMBEDDER` | Selection | Default vector width |
+|-------------------|-----------|----------------------|
+| unset / `local` (default) | local BGE/ONNX, then Ollama if BGE is unavailable | BGE: 384; Ollama: model-dependent (currently 768) |
+| `api` | only the OpenAI-compatible embedder | `EMBEDDING_DIMS` (1024 if unset) |
 
-Re-ranking (RAG): set `JINA_API_KEY` (or `RERANK_API_KEY`) for Jina cross-encoder reranking.
+`bge` remains accepted as an alias for `local`. Any other value is rejected at
+startup. API mode requires `EMBEDDING_API_KEY`, a valid absolute HTTP(S)
+`EMBEDDING_BASE_URL`, and a positive integer `EMBEDDING_DIMS`; it does **not**
+fall back to BGE or Ollama after an API error.
 
-**Recommended quickest path to full semantic search:**
+Copy [`.env.example`](.env.example) into your deployment configuration (do not
+commit a real `.env`), or set the variables in the process manager:
 
 ```bash
-# Option A: Ollama (easiest)
-ollama pull nomic-embed-text
+# Backward-compatible default; this keeps an existing BGE/384 index usable.
+export MEMORY_EMBEDDER=local
 
-# Option B: OpenAI-compatible API
-export EMBEDDING_API_KEY=sk-...
-export EMBEDDING_BASE_URL=https://api.openai.com/v1
-export EMBEDDING_MODEL=text-embedding-3-small
+# Explicit API mode, for a new or fully rebuilt index only.
+export MEMORY_EMBEDDER=api
+export EMBEDDING_API_KEY="from-your-secret-manager"
+export EMBEDDING_BASE_URL=https://api.jina.ai/v1
+export EMBEDDING_MODEL=jina-embeddings-v3
+export EMBEDDING_DIMS=1024
 ```
+
+### HNSW compatibility guard
+
+The persisted `<db>.hnsw` records its vector dimension. Before a store with an
+embedder is opened, Nyawa compares that dimension with the selected embedder.
+A mismatch (for example, a 1024-dimensional API configuration against an
+existing 384-dimensional BGE index) fails the command **before schema migration
+or vector writes**. HNSW also rejects mismatched insert/query vectors, and the
+OpenAI-compatible embedder verifies that the API response has the configured
+length.
+
+A matching dimension is necessary but does not prove that two models share the
+same vector space. Changing embedding model or provider therefore requires a
+separate or fully rebuilt HNSW index even if both report the same width. The
+current `nyawa reindex` command is additive: it preserves existing vectors and
+is **not** a model-migration tool.
+
+Re-ranking (RAG): set `JINA_API_KEY` (or `RERANK_API_KEY`) for Jina cross-encoder reranking.
 
 ---
 
@@ -450,9 +479,15 @@ atomically so a running gateway's concurrent writes are not lost.
 ./nyawa reindex /tmp/nyawa.db
 ```
 
-The command needs a live embedder: without one it logs `BGE unavailable`, the
-embedding calls fail, and the memories that still need a vector are counted as
-failed rather than reindexed. Example output:
+The command needs a compatible live embedder. If none is available, memories
+that still need a vector are counted as failed rather than reindexed. If the
+selected embedder's declared dimension differs from the persisted HNSW, Nyawa
+refuses to open the store; it does not append a mixed-width vector. Reindex is
+safe to run concurrently only when the embedding model and vector space are the
+same as the existing index. It is not safe, and is not intended, as a migration
+between BGE, Ollama, or API models.
+
+Example output:
 
 ```
 nyawa: hnsw: nothing to reindex, 8386 vectors in memory (coverage 187.5% of 4473 active memories)
@@ -461,7 +496,7 @@ Reindexed 0 memories (0 already indexed, 0 failed)
 
 Coverage is `persisted / total active memories * 100`; values above 100% are
 expected because the index can retain vectors for memories that are no longer
-active. Reindex is safe to run against a live database.
+active.
 
 ---
 
@@ -743,7 +778,7 @@ GET    /dashboard              Web dashboard (Memory + RAG + Graph stats)
 ||      Evict→Contra→Dedup→Link→Prio→Snap→GraphBuild      |
 +----------------------------------------------------------+
 ||                    Embedder Chain                       |
-||         BGE (ONNX) <-- priority --> Ollama <-- OpenAI   |
+||         local: BGE (384) → Ollama | api: OpenAI-compatible |
 +----------------------------------------------------------+
 ||                    SQLite (single file)                 |
 ||   memories + fts5 + rag_collections + entity_nodes      |

@@ -1,0 +1,48 @@
+{
+  "schema_version": "nyawa.compaction-eval/v1",
+  "suite_id": "cli-fixture",
+  "task_id": "after-compaction",
+  "run_id": "run-after",
+  "condition": "summary_only",
+  "environment": {
+    "nyawa_revision": "fixture-nyawa",
+    "actor_revision": "fixture-actor",
+    "summary_mode": "captured",
+    "fingerprint_policy_id": "tool-output-bytes-v1"
+  },
+  "compactions": [
+    {
+      "checkpoint_id": "legacy-boundary",
+      "event_index": 10,
+      "source_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "summary_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "residual_pack_sha256": null,
+      "namespace": "context"
+    }
+  ],
+  "tool_events": [
+    {
+      "event_index": 1,
+      "tool_name": "terminal",
+      "tool_input_sha256": null,
+      "output_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "outcome": "success",
+      "error_class": null,
+      "is_planning": false,
+      "is_polling": false,
+      "checkpoint_id": null
+    },
+    {
+      "event_index": 11,
+      "tool_name": "terminal",
+      "tool_input_sha256": null,
+      "output_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "outcome": "success",
+      "error_class": null,
+      "is_planning": false,
+      "is_polling": false,
+      "checkpoint_id": "legacy-boundary"
+    }
+  ],
+  "recall_probes": []
+}

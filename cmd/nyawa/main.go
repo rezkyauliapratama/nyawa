@@ -2,12 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/rezkyauliapratama/nyawa/internal/compactioneval"
 	"github.com/rezkyauliapratama/nyawa/internal/dream"
 	"github.com/rezkyauliapratama/nyawa/internal/embedder"
 	"github.com/rezkyauliapratama/nyawa/internal/graph"
@@ -21,25 +24,48 @@ import (
 )
 
 func main() {
-	log.SetFlags(0); log.SetPrefix("nyawa: ")
-	if len(os.Args) < 2 { printUsage(); os.Exit(1) }
+	log.SetFlags(0)
+	log.SetPrefix("nyawa: ")
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(1)
+	}
 	switch os.Args[1] {
-	case "store": cmdStore()
-	case "recall": cmdRecall()
-	case "search": cmdSearch()
-	case "stats": cmdStats()
-	case "init": cmdInit()
-	case "serve": cmdServe()
-	case "mcp": cmdMCP()
-	case "dream": cmdDream()
-	case "ns": cmdNamespace()
-	case "archive": cmdArchive()
-	case "import": cmdImport()
-	case "graph": cmdGraph()
-	case "reindex": cmdReindex()
+	case "store":
+		cmdStore()
+	case "recall":
+		cmdRecall()
+	case "search":
+		cmdSearch()
+	case "stats":
+		cmdStats()
+	case "init":
+		cmdInit()
+	case "serve":
+		cmdServe()
+	case "mcp":
+		cmdMCP()
+	case "dream":
+		cmdDream()
+	case "ns":
+		cmdNamespace()
+	case "archive":
+		cmdArchive()
+	case "import":
+		cmdImport()
+	case "compaction-eval":
+		if err := cmdCompactionEval(); err != nil {
+			log.Fatalf("compaction-eval: %v", err)
+		}
+	case "graph":
+		cmdGraph()
+	case "reindex":
+		cmdReindex()
 	case "version":
 		fmt.Println(version.String())
-	default: printUsage(); os.Exit(1)
+	default:
+		printUsage()
+		os.Exit(1)
 	}
 }
 
@@ -53,6 +79,7 @@ Usage:
   nyawa stats <db>
   nyawa ns <db>                           List namespaces
   nyawa archive <db> <output-path>        Archive superseded memories
+  nyawa compaction-eval score <trace.json|->  Score an immutable trace offline
   nyawa serve <db>                        Start HTTP + Dream Cycle
   nyawa mcp <db>                          Start MCP server
   nyawa dream <db>                        Run Dream Cycle
@@ -64,10 +91,16 @@ Usage:
 
 func parseFlags() (ns string, atTime time.Time) {
 	for i := 2; i < len(os.Args); i++ {
-		if os.Args[i] == "--ns" && i+1 < len(os.Args) { ns = os.Args[i+1] }
+		if os.Args[i] == "--ns" && i+1 < len(os.Args) {
+			ns = os.Args[i+1]
+		}
 		if os.Args[i] == "--at" && i+1 < len(os.Args) {
-			if t, err := time.Parse(time.RFC3339, os.Args[i+1]); err == nil { atTime = t } else {
-				if t, err := time.Parse("2006-01-02", os.Args[i+1]); err == nil { atTime = t }
+			if t, err := time.Parse(time.RFC3339, os.Args[i+1]); err == nil {
+				atTime = t
+			} else {
+				if t, err := time.Parse("2006-01-02", os.Args[i+1]); err == nil {
+					atTime = t
+				}
 			}
 		}
 	}
@@ -76,11 +109,37 @@ func parseFlags() (ns string, atTime time.Time) {
 
 func getStore(p string, emb store.Embedder) *store.Store {
 	s, err := store.NewStore(p, emb)
-	if err != nil { log.Fatalf("store: %v", err) }
+	if err != nil {
+		log.Fatalf("store: %v", err)
+	}
 	return s
 }
 
-func getEmbedder() *embedder.PriorityChain {
+const (
+	memoryEmbedderLocal = "local"
+	memoryEmbedderAPI   = "api"
+)
+
+// getEmbedder selects the memory embedder. The default deliberately remains
+// BGE/384 with Ollama only as its existing fallback. API use is opt-in: a
+// configured EMBEDDING_* value alone never changes a production index.
+func getEmbedder() (*embedder.PriorityChain, error) {
+	mode, err := memoryEmbedderMode(os.Getenv("MEMORY_EMBEDDER"))
+	if err != nil {
+		return nil, err
+	}
+	if mode == memoryEmbedderAPI {
+		api, err := embedder.NewOpenAIEmbedderFromEnv(os.Getenv)
+		if err != nil {
+			return nil, fmt.Errorf("MEMORY_EMBEDDER=api: %w", err)
+		}
+		// API mode is intentionally a single-element chain. Falling back to BGE
+		// or Ollama here would silently put a different vector space into the
+		// same HNSW index when an API request fails.
+		log.Printf("memory embedder: api (%s, dim=%d)", api.Name(), api.Dims())
+		return embedder.NewPriorityChain(api), nil
+	}
+
 	dir, source := embedder.DefaultModelDir()
 	bge := embedder.NewPythonEmbedder(dir)
 	if err := bge.Start(); err != nil {
@@ -89,69 +148,167 @@ func getEmbedder() *embedder.PriorityChain {
 		log.Printf("BGE embedder ready (model=%s, source=%s, dim=%d)", dir, source, bge.Dims())
 	}
 	ollama := embedder.NewOllamaEmbedder(embedder.OllamaConfig{BaseURL: "http://localhost:11434", Model: "nomic-embed-text"})
-	return embedder.NewPriorityChain(bge, ollama)
+	return embedder.NewPriorityChain(bge, ollama), nil
+}
+
+func mustGetEmbedder() *embedder.PriorityChain {
+	emb, err := getEmbedder()
+	if err != nil {
+		log.Fatal(err)
+	}
+	return emb
+}
+
+func memoryEmbedderMode(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", memoryEmbedderLocal, "bge":
+		return memoryEmbedderLocal, nil
+	case memoryEmbedderAPI:
+		return memoryEmbedderAPI, nil
+	default:
+		return "", fmt.Errorf("MEMORY_EMBEDDER must be %q or %q, got %q", memoryEmbedderLocal, memoryEmbedderAPI, raw)
+	}
 }
 
 func cmdInit() {
-	if len(os.Args) < 3 { log.Fatal("usage: nyawa init <db-path>") }
-	s := getStore(os.Args[2], nil); defer s.Close()
-	stats, _ := s.Stats(); b, _ := json.Marshal(stats); fmt.Println(string(b))
+	if len(os.Args) < 3 {
+		log.Fatal("usage: nyawa init <db-path>")
+	}
+	s := getStore(os.Args[2], nil)
+	defer s.Close()
+	stats, _ := s.Stats()
+	b, _ := json.Marshal(stats)
+	fmt.Println(string(b))
 }
 
 func cmdStore() {
-	if len(os.Args) < 4 { log.Fatal("usage: nyawa store <db> <content>") }
+	if len(os.Args) < 4 {
+		log.Fatal("usage: nyawa store <db> <content>")
+	}
 	content := strings.TrimSpace(os.Args[3])
-	if content == "" { log.Fatal("content cannot be empty") }
-	emb := getEmbedder(); defer emb.StopAll()
-	s := getStore(os.Args[2], emb); defer s.Close()
+	if content == "" {
+		log.Fatal("content cannot be empty")
+	}
+	emb := mustGetEmbedder()
+	defer emb.StopAll()
+	s := getStore(os.Args[2], emb)
+	defer s.Close()
 	id := fmt.Sprintf("mem_%d", time.Now().UnixNano())
-	s.InsertMemory(&types.Memory{ID: id, Content: content, Type: types.TypeNote, Namespace: "default"})
+	if err := s.InsertMemory(&types.Memory{ID: id, Content: content, Type: types.TypeNote, Namespace: "default"}); err != nil {
+		log.Fatalf("store: %v", err)
+	}
 	fmt.Printf("Stored: %s\n", id)
 }
 
 func cmdRecall() {
-	if len(os.Args) < 4 { log.Fatal("usage: nyawa recall <db> <query> [--ns <ns>] [--at <time>]") }
+	if len(os.Args) < 4 {
+		log.Fatal("usage: nyawa recall <db> <query> [--ns <ns>] [--at <time>]")
+	}
 	ns, atTime := parseFlags()
-	emb := getEmbedder(); defer emb.StopAll()
-	s := getStore(os.Args[2], emb); defer s.Close()
+	emb := mustGetEmbedder()
+	defer emb.StopAll()
+	s := getStore(os.Args[2], emb)
+	defer s.Close()
 	p := search.NewPipeline(s, emb, types.DefaultConfig().Search)
 
 	q := types.StoreQuery{QueryText: os.Args[3], Limit: 10, Namespace: ns}
-	if !atTime.IsZero() { q.TimeTravel = &atTime }
+	if !atTime.IsZero() {
+		q.TimeTravel = &atTime
+	}
 
 	results, err := p.Search(q)
-	if err != nil { log.Fatalf("search: %v", err) }
+	if err != nil {
+		log.Fatalf("search: %v", err)
+	}
 	defer p.ReleaseResults(results)
-	for i, r := range results { fmt.Printf("#%d [%.4f] %s\n", i+1, r.Score, r.Content) }
+	for i, r := range results {
+		fmt.Printf("#%d [%.4f] %s\n", i+1, r.Score, r.Content)
+	}
 }
 func cmdSearch() { cmdRecall() }
 
 func cmdStats() {
-	if len(os.Args) < 3 { log.Fatal("usage: nyawa stats <db>") }
-	s := getStore(os.Args[2], nil); defer s.Close()
-	stats, _ := s.Stats(); b, _ := json.MarshalIndent(stats, "", "  "); fmt.Println(string(b))
+	if len(os.Args) < 3 {
+		log.Fatal("usage: nyawa stats <db>")
+	}
+	s := getStore(os.Args[2], nil)
+	defer s.Close()
+	stats, _ := s.Stats()
+	b, _ := json.MarshalIndent(stats, "", "  ")
+	fmt.Println(string(b))
 }
 
 func cmdNamespace() {
-	if len(os.Args) < 3 { log.Fatal("usage: nyawa ns <db>") }
-	s := getStore(os.Args[2], nil); defer s.Close()
+	if len(os.Args) < 3 {
+		log.Fatal("usage: nyawa ns <db>")
+	}
+	s := getStore(os.Args[2], nil)
+	defer s.Close()
 	ns, _ := s.ListNamespaces()
-	if len(ns) == 0 { fmt.Println("No namespaces."); return }
-	for name, count := range ns { fmt.Printf("%s: %d memories\n", name, count) }
+	if len(ns) == 0 {
+		fmt.Println("No namespaces.")
+		return
+	}
+	for name, count := range ns {
+		fmt.Printf("%s: %d memories\n", name, count)
+	}
 }
 
 func cmdArchive() {
-	if len(os.Args) < 4 { log.Fatal("usage: nyawa archive <db> <output-path>") }
-	s := getStore(os.Args[2], nil); defer s.Close()
+	if len(os.Args) < 4 {
+		log.Fatal("usage: nyawa archive <db> <output-path>")
+	}
+	s := getStore(os.Args[2], nil)
+	defer s.Close()
 	count, err := s.ArchiveSuperseded(os.Args[3])
-	if err != nil { log.Fatalf("archive: %v", err) }
+	if err != nil {
+		log.Fatalf("archive: %v", err)
+	}
 	fmt.Printf("Archived %d memories to %s\n", count, os.Args[3])
 }
 
+func cmdCompactionEval() error {
+	if len(os.Args) != 4 || os.Args[2] != "score" {
+		return fmt.Errorf("usage: nyawa compaction-eval score <trace.json|->")
+	}
+
+	inputName := os.Args[3]
+	var data []byte
+	var err error
+	if inputName == "-" {
+		data, err = io.ReadAll(os.Stdin)
+		if err != nil {
+			return fmt.Errorf("read trace from stdin: %w", err)
+		}
+	} else {
+		data, err = os.ReadFile(inputName)
+		if err != nil {
+			return fmt.Errorf("read trace %q: %w", inputName, err)
+		}
+	}
+
+	result, err := compactioneval.ScoreJSON(data)
+	if err != nil {
+		return fmt.Errorf("invalid trace %q: %w", inputName, err)
+	}
+	encoded, err := compactioneval.MarshalResultJSON(result)
+	if err != nil {
+		return fmt.Errorf("encode score result: %w", err)
+	}
+	if _, err := fmt.Fprintln(os.Stdout, string(encoded)); err != nil {
+		return fmt.Errorf("write score result: %w", err)
+	}
+	return nil
+}
+
 func cmdImport() {
-	if len(os.Args) < 4 { log.Fatal("usage: nyawa import <db> <file.json|->") }
-	emb := getEmbedder(); defer emb.StopAll()
-	s := getStore(os.Args[2], emb); defer s.Close()
+	if len(os.Args) < 4 {
+		log.Fatal("usage: nyawa import <db> <file.json|->")
+	}
+	emb := mustGetEmbedder()
+	defer emb.StopAll()
+	s := getStore(os.Args[2], emb)
+	defer s.Close()
 
 	var data []byte
 	if os.Args[3] == "-" {
@@ -159,7 +316,9 @@ func cmdImport() {
 	} else {
 		var err error
 		data, err = os.ReadFile(os.Args[3])
-		if err != nil { log.Fatalf("read file: %v", err) }
+		if err != nil {
+			log.Fatalf("read file: %v", err)
+		}
 	}
 
 	var entries []struct {
@@ -174,9 +333,17 @@ func cmdImport() {
 	now := time.Now()
 	imported, failed := 0, 0
 	for i, entry := range entries {
-		if entry.Content == "" { continue }
-		ns := entry.Namespace; if ns == "" { ns = "default" }
-		mt := types.MemoryType(entry.Type); if mt == "" { mt = types.TypeNote }
+		if entry.Content == "" {
+			continue
+		}
+		ns := entry.Namespace
+		if ns == "" {
+			ns = "default"
+		}
+		mt := types.MemoryType(entry.Type)
+		if mt == "" {
+			mt = types.TypeNote
+		}
 		id := fmt.Sprintf("mem_%d_%d", now.UnixNano(), i)
 		if err := s.InsertMemory(&types.Memory{ID: id, Content: entry.Content, Type: mt, Namespace: ns}); err != nil {
 			failed++
@@ -192,16 +359,24 @@ func readStdin() []byte {
 	b := make([]byte, 4096)
 	for {
 		n, err := os.Stdin.Read(b)
-		if n > 0 { buf = append(buf, b[:n]...) }
-		if err != nil { break }
+		if n > 0 {
+			buf = append(buf, b[:n]...)
+		}
+		if err != nil {
+			break
+		}
 	}
 	return buf
 }
 
 func cmdServe() {
-	if len(os.Args) < 3 { log.Fatal("usage: nyawa serve <db>") }
-	emb := getEmbedder(); defer emb.StopAll()
-	st := getStore(os.Args[2], emb); defer st.Close()
+	if len(os.Args) < 3 {
+		log.Fatal("usage: nyawa serve <db>")
+	}
+	emb := mustGetEmbedder()
+	defer emb.StopAll()
+	st := getStore(os.Args[2], emb)
+	defer st.Close()
 
 	engine := dream.New(st.GetDB(), st.GetHNSW(), st.GetHNSWPath())
 	engine.SetGraphStore(st.GetGraph())
@@ -223,27 +398,39 @@ func cmdServe() {
 		}
 	}()
 
-	hc := embedder.NewHealthCheckRunner(emb, 60*time.Second); hc.Start(); defer hc.Stop()
+	hc := embedder.NewHealthCheckRunner(emb, 60*time.Second)
+	hc.Start()
+	defer hc.Stop()
 	p := search.NewPipeline(st, emb, types.DefaultConfig().Search)
 	rs := rag.NewRAGStore(st.GetDB(), st.GetHNSW(), st.GetHNSWPath(), emb)
 	srv := server.New(st, p, emb, rs, server.DefaultServerConfig())
 	log.Printf("Server — db=%s embedder=%s dream=%v", os.Args[2], emb.Current(), engine.Running())
-	if err := srv.Start(); err != nil { log.Fatalf("server: %v", err) }
+	if err := srv.Start(); err != nil {
+		log.Fatalf("server: %v", err)
+	}
 }
 
 func cmdMCP() {
-	if len(os.Args) < 3 { log.Fatal("usage: nyawa mcp <db>") }
-	emb := getEmbedder(); defer emb.StopAll()
+	if len(os.Args) < 3 {
+		log.Fatal("usage: nyawa mcp <db>")
+	}
+	emb := mustGetEmbedder()
+	defer emb.StopAll()
 	st := getStore(os.Args[2], emb)
 	log.Printf("MCP — db=%s embedder=%s", os.Args[2], emb.Current())
 	p := search.NewPipeline(st, emb, types.DefaultConfig().Search)
 	rs := rag.NewRAGStore(st.GetDB(), st.GetHNSW(), st.GetHNSWPath(), emb)
-	if err := mcp.NewServer(st, p, rs).Run(); err != nil { log.Fatalf("mcp: %v", err) }
+	if err := mcp.NewServer(st, p, rs).Run(); err != nil {
+		log.Fatalf("mcp: %v", err)
+	}
 }
 
 func cmdDream() {
-	if len(os.Args) < 3 { log.Fatal("usage: nyawa dream <db-path>") }
-	st := getStore(os.Args[2], nil); defer st.Close()
+	if len(os.Args) < 3 {
+		log.Fatal("usage: nyawa dream <db-path>")
+	}
+	st := getStore(os.Args[2], nil)
+	defer st.Close()
 	stats, _ := st.Stats()
 	b, _ := json.MarshalIndent(stats, "", "  ")
 	fmt.Println(string(b))
@@ -257,31 +444,44 @@ func cmdDream() {
 }
 
 func cmdGraph() {
-	if len(os.Args) < 4 { log.Fatal("usage: nyawa graph <db> <query> [--depth 2] [--limit 10]") }
+	if len(os.Args) < 4 {
+		log.Fatal("usage: nyawa graph <db> <query> [--depth 2] [--limit 10]")
+	}
 	dbPath := os.Args[2]
 	query := os.Args[3]
 	depth := 2
 	limit := 10
 	for i := 4; i < len(os.Args); i++ {
 		if os.Args[i] == "--depth" && i+1 < len(os.Args) {
-			if d, err := fmt.Sscanf(os.Args[i+1], "%d", &depth); d != 1 || err != nil { depth = 2 }
+			if d, err := fmt.Sscanf(os.Args[i+1], "%d", &depth); d != 1 || err != nil {
+				depth = 2
+			}
 		}
 		if os.Args[i] == "--limit" && i+1 < len(os.Args) {
-			if l, err := fmt.Sscanf(os.Args[i+1], "%d", &limit); l != 1 || err != nil { limit = 10 }
+			if l, err := fmt.Sscanf(os.Args[i+1], "%d", &limit); l != 1 || err != nil {
+				limit = 10
+			}
 		}
 	}
-	s := getStore(dbPath, nil); defer s.Close()
+	s := getStore(dbPath, nil)
+	defer s.Close()
 
 	// Seed entities from query text
 	names, err := s.ListEntityNames(10000)
-	if err != nil { log.Fatalf("list entity names: %v", err) }
+	if err != nil {
+		log.Fatalf("list entity names: %v", err)
+	}
 	queryLower := strings.ToLower(query)
 	var seeds []string
 	for _, name := range names {
-		if len(name) < 3 { continue }
+		if len(name) < 3 {
+			continue
+		}
 		if strings.Contains(queryLower, strings.ToLower(name)) {
 			seeds = append(seeds, name)
-			if len(seeds) >= 3 { break }
+			if len(seeds) >= 3 {
+				break
+			}
 		}
 	}
 
@@ -291,8 +491,12 @@ func cmdGraph() {
 	}
 
 	results, err := s.TraverseGraph(seeds, depth, limit)
-	if err != nil { log.Fatalf("traverse graph: %v", err) }
-	if results == nil { results = []graph.TraversalResult{} }
+	if err != nil {
+		log.Fatalf("traverse graph: %v", err)
+	}
+	if results == nil {
+		results = []graph.TraversalResult{}
+	}
 	out, _ := json.MarshalIndent(map[string]any{"query": query, "seeds": seeds, "results": results, "count": len(results)}, "", "  ")
 	fmt.Println(string(out))
 }
@@ -305,31 +509,52 @@ func cmdGraph() {
 // reloads the on-disk index, merges vectors written by a running gateway while
 // the reindex was in flight, and writes the union once, atomically.
 func cmdReindex() {
-	if len(os.Args) < 3 { log.Fatal("usage: nyawa reindex <db>") }
-	emb := getEmbedder(); defer emb.StopAll()
-	s := getStore(os.Args[2], emb); defer s.Close()
+	if len(os.Args) < 3 {
+		log.Fatal("usage: nyawa reindex <db>")
+	}
+	emb := mustGetEmbedder()
+	defer emb.StopAll()
+	s := getStore(os.Args[2], emb)
+	defer s.Close()
 
 	mems, err := s.ListAllMemories()
-	if err != nil { log.Fatalf("list memories: %v", err) }
+	if err != nil {
+		log.Fatalf("list memories: %v", err)
+	}
 	total := len(mems)
 
 	hnsw := s.GetHNSW()
 	before := hnsw.Size()
 	already, reindexed, failed := 0, 0, 0
 	for _, m := range mems {
-		if hnsw.Contains(m.ID) { already++; continue }
+		if hnsw.Contains(m.ID) {
+			already++
+			continue
+		}
 		v, e := emb.Embed(m.Content)
-		if e != nil || len(v) == 0 { failed++; continue }
-		hnsw.Insert(m.ID, v)
+		if e != nil || len(v) == 0 {
+			if errors.Is(e, embedder.ErrEmbeddingDimensionMismatch) {
+				log.Fatalf("reindex refused: %v", e)
+			}
+			failed++
+			continue
+		}
+		if err := hnsw.Insert(m.ID, v); err != nil {
+			log.Fatalf("reindex refused: %v", err)
+		}
 		reindexed++
 	}
 	after := hnsw.Size()
 
 	if reindexed > 0 {
 		merged, persisted, err := hnsw.MergeAndSave(s.GetHNSWPath())
-		if err != nil { log.Fatalf("persist hnsw: %v", err) }
+		if err != nil {
+			log.Fatalf("persist hnsw: %v", err)
+		}
 		coverage := 0.0
-		if total > 0 { coverage = float64(persisted) / float64(total) * 100 }
+		if total > 0 {
+			coverage = float64(persisted) / float64(total) * 100
+		}
 		log.Printf("hnsw merge: persisted %d vectors (%d recovered from disk during reindex, in-memory %d -> %d), coverage %.1f%% of %d active memories",
 			persisted, merged, before, after, coverage, total)
 	} else {
@@ -341,6 +566,8 @@ func cmdReindex() {
 
 // coveragePct returns indexed as a percentage of total, or 0 when total is 0.
 func coveragePct(indexed, total int) float64 {
-	if total == 0 { return 0 }
+	if total == 0 {
+		return 0
+	}
 	return float64(indexed) / float64(total) * 100
 }

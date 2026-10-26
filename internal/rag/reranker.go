@@ -57,8 +57,12 @@ func NewPythonCrossEncoder() *PythonCrossEncoder {
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
 			line := scanner.Text()
-			if strings.Contains(line, "READY") { doneCh <- struct{}{} }
-			if strings.Contains(line, "Traceback") || strings.Contains(line, "Error") { errCh <- fmt.Errorf(line) }
+			if strings.Contains(line, "READY") {
+				doneCh <- struct{}{}
+			}
+			if strings.Contains(line, "Traceback") || strings.Contains(line, "Error") {
+				errCh <- fmt.Errorf(line)
+			}
 		}
 	}()
 	select {
@@ -92,8 +96,10 @@ func (r *PythonCrossEncoder) Rerank(query string, candidates []string) ([]float6
 		return nil, fmt.Errorf("no response")
 	}
 	var resp struct {
-		Result *struct{ Scores []float64 `json:"scores"` } `json:"result"`
-		Error  *struct{ Message string } `json:"error"`
+		Result *struct {
+			Scores []float64 `json:"scores"`
+		} `json:"result"`
+		Error *struct{ Message string } `json:"error"`
 	}
 	if err := json.Unmarshal(r.stdout.Bytes(), &resp); err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
@@ -227,8 +233,12 @@ func (r *RAGStore) QueryWithRerank(query string, topK int, collectionName string
 	}
 
 	results, err := r.queryInternal(query, fetchK, collectionName)
-	if err != nil { return nil, err }
-	if len(results) == 0 { return nil, nil }
+	if err != nil {
+		return nil, err
+	}
+	if len(results) == 0 {
+		return nil, nil
+	}
 
 	if reranker != nil && reranker.Available() && reranker.Name() != "noop" {
 		candidates := make([]string, len(results))
@@ -262,17 +272,28 @@ func (r *RAGStore) queryInternal(query string, topK int, collectionName string) 
 	if r.embedder == nil || !r.embedder.Available() {
 		return nil, fmt.Errorf("embedder not available")
 	}
-	if topK <= 0 { topK = 5 }
+	if topK <= 0 {
+		topK = 5
+	}
 
 	vec, err := r.embedder.Embed(query)
-	if err != nil { return nil, fmt.Errorf("embed query: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("embed query: %w", err)
+	}
 
-	results := r.hnsw.Search(vec, topK*3)
-	if len(results) == 0 { return nil, nil }
+	results, err := r.hnsw.SearchChecked(vec, topK*3)
+	if err != nil {
+		return nil, fmt.Errorf("hnsw search: %w", err)
+	}
+	if len(results) == 0 {
+		return nil, nil
+	}
 
 	var ragResults []RAGResult
 	for _, res := range results {
-		if !strings.HasPrefix(res.ID, "rag_chk_") { continue }
+		if !strings.HasPrefix(res.ID, "rag_chk_") {
+			continue
+		}
 		var content string
 		var docID string
 		var chunkIdx int
@@ -282,10 +303,14 @@ func (r *RAGStore) queryInternal(query string, topK int, collectionName string) 
 		if collectionName != "" {
 			var colID int
 			r.db.QueryRow(`SELECT collection_id FROM rag_documents WHERE id=?`, docID).Scan(&colID)
-			if colID == 0 { continue }
+			if colID == 0 {
+				continue
+			}
 			var colName string
 			r.db.QueryRow(`SELECT name FROM rag_collections WHERE id=?`, colID).Scan(&colName)
-			if colName != collectionName { continue }
+			if colName != collectionName {
+				continue
+			}
 		}
 		var filename string
 		r.db.QueryRow(`SELECT filename FROM rag_documents WHERE id=?`, docID).Scan(&filename)
