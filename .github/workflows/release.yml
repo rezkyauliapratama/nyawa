@@ -37,7 +37,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          EXPECTED="v${TAG#v}"
+          EXPECTED="nyawa v${TAG#v}"
           GOT="$(./nyawa-linux-amd64 version)"
           echo "nyawa version -> ${GOT}"
           if [ "${GOT}" != "${EXPECTED}" ]; then
