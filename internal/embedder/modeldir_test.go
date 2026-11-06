@@ -66,13 +66,13 @@ func TestResolveModelDirFallsBackToFirstWhenNoneExist(t *testing.T) {
 	}
 }
 
-// The persistent-volume venv must be probed before the image's own venv, since
-// only the former survives container recreation.
-func TestPythonCandidatesPreferPersistentVenv(t *testing.T) {
+// The durable image must probe the interpreter installed in the image before
+// generic PATH lookup; it must not depend on a host or persistent-volume venv.
+func TestPythonCandidatesPreferImageInterpreter(t *testing.T) {
 	if len(embedPythonCandidates) == 0 {
 		t.Fatal("no python candidates configured")
 	}
-	if got, want := embedPythonCandidates[0], "/opt/data/bge-venv/bin/python3"; got != want {
+	if got, want := embedPythonCandidates[0], "/usr/local/bin/python3"; got != want {
 		t.Errorf("first python candidate = %q, want %q", got, want)
 	}
 }

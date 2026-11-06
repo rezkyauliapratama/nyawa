@@ -1,0 +1,16 @@
+# The runtime image needs only Go build inputs and the embedded BGE assets.
+# Keep repository metadata, documentation, benchmarks, CI files, and local
+# artifacts out of the Docker build context.
+*
+!go.mod
+!go.sum
+!cmd/
+!cmd/nyawa/
+!cmd/nyawa/**
+!internal/
+!internal/**
+!runtime/
+!runtime/Dockerfile
+!runtime/requirements.lock
+!runtime/model/
+!runtime/model/**

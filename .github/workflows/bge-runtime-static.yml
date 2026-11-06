@@ -1,0 +1,31 @@
+name: Nyawa BGE runtime static validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "runtime/**"
+      - "internal/embedder/**"
+      - "scripts/validate-bge-runtime.py"
+      - "scripts/test-bge-handshake.py"
+      - ".dockerignore"
+      - ".github/workflows/bge-runtime-static.yml"
+      - ".github/workflows/bge-runtime-publish.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Python syntax, runtime contract, and JSONL handshake
+        run: |
+          python3 -m py_compile internal/embedder/bge_server.py scripts/validate-bge-runtime.py scripts/test-bge-handshake.py
+          python3 scripts/validate-bge-runtime.py
+          python3 scripts/test-bge-handshake.py
+      - name: Validate Go formatting and source diff
+        run: |
+          test "$(gofmt -d internal/embedder/py_embedder.go internal/embedder/py_embedder_socket_test.go internal/embedder/modeldir_test.go)" = ""
+          git diff --check
