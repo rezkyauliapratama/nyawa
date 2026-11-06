@@ -1,0 +1,77 @@
+name: Publish Nyawa Embedded BGE Runtime
+
+on:
+  push:
+    tags:
+      - "bge-v*"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Immutable image tag, for example bge-v1.2.4"
+        required: true
+        default: "bge-v1.2.4"
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}/bge-runtime
+  IMAGE_TAG: ${{ inputs.image_tag || github.ref_name }}
+
+jobs:
+  publish:
+    name: Build and push embedded BGE runtime
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GHCR_PAT_USER }}
+          password: ${{ secrets.GHCR_PAT }}
+
+      - name: Download and verify model asset
+        env:
+          MODEL_URL: https://github.com/${{ github.repository }}/releases/download/bge-model-v1.2.4/model.onnx
+          MODEL_SHA256: 66fc00f5f29afcaff34092e1bdd20008ca3918265a82fb9695a551e510cc4ebc
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --output runtime/model/model.onnx "${MODEL_URL}"
+          echo "${MODEL_SHA256}  runtime/model/model.onnx" | sha256sum --check --strict
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ env.IMAGE_TAG }}
+            type=sha
+          labels: |
+            org.opencontainers.image.title=Nyawa Embedded BGE Runtime
+            org.opencontainers.image.description=Self-contained Nyawa runtime with local BGE embeddings
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: runtime/Dockerfile
+          push: true
+          build-args: |
+            RELEASE_VERSION=${{ env.IMAGE_TAG }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=bge-runtime
+          cache-to: type=gha,mode=max,scope=bge-runtime
+          provenance: true
+          sbom: true

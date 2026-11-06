@@ -2,11 +2,9 @@ package embedder
 
 import (
 	"bufio"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -14,70 +12,23 @@ import (
 	"time"
 )
 
-// Default unix socket used for the shared embedder (Fix B). Each nyawa process
-// probes this socket and reuses the running bge_server.py if one exists, so the
-// BGE model is loaded only once for the whole stack. Socket path is namespaced
-// by model dir so different models don't collide.
-func socketPathFor(modelPath string) string {
-	h := sha256.Sum256([]byte(modelPath))
-	return fmt.Sprintf("/tmp/nyawa-bge-%x.sock", h[:4])
-}
-
 type PythonEmbedder struct {
-	mu         sync.Mutex
-	modelPath  string
-	cmd        *exec.Cmd
-	conn       net.Conn // unix socket connection (shared mode)
-	socketMode bool
-	stdin      *json.Encoder
-	stdout     *bufio.Scanner
-	ready      bool
-	dim        int
+	mu        sync.Mutex
+	modelPath string
+	cmd       *exec.Cmd
+	stdin     *json.Encoder
+	stdout    *bufio.Scanner
+	ready     bool
+	dim       int
 }
 
 func NewPythonEmbedder(modelPath string) *PythonEmbedder {
 	return &PythonEmbedder{modelPath: modelPath, dim: 384}
 }
 
-// probeSocket dials an existing unix socket and verifies it answers an "embed"
-// probe. On success it wires p.stdin/p.stdout to the socket so Embed() works
-// unchanged, and returns true.
-func (p *PythonEmbedder) probeSocket(conn net.Conn) bool {
-	conn.SetDeadline(time.Now().Add(10 * time.Second))
-	enc := json.NewEncoder(conn)
-	sc := bufio.NewScanner(conn)
-	if err := enc.Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "embed", "params": map[string]string{"text": "probe"}}); err != nil {
-		return false
-	}
-	if !sc.Scan() {
-		return false
-	}
-	var resp struct {
-		Result *struct {
-			Embedding []float64 `json:"embedding"`
-			Dim       int       `json:"dim"`
-		} `json:"result"`
-		Error *struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(sc.Bytes(), &resp); err != nil {
-		return false
-	}
-	if resp.Error != nil || resp.Result == nil || resp.Result.Embedding == nil {
-		return false
-	}
-	if resp.Result.Dim > 0 {
-		p.dim = resp.Result.Dim
-	}
-	conn.SetDeadline(time.Time{})
-	p.conn = conn
-	p.socketMode = true
-	p.stdin = json.NewEncoder(conn)
-	p.stdout = bufio.NewScanner(conn)
-	return true
-}
-
+// Start owns exactly one BGE server subprocess and connects it through private
+// stdin/stdout pipes. The runtime image supplies both the interpreter and the
+// model, so startup has no host venv, socket, or second-process discovery path.
 func (p *PythonEmbedder) Start() error {
 	scriptPath := findScriptPath()
 	if scriptPath == "" {
@@ -87,91 +38,11 @@ func (p *PythonEmbedder) Start() error {
 	if pythonPath == "" {
 		return fmt.Errorf("no python with onnxruntime+numpy")
 	}
-
-	socketPath := socketPathFor(p.modelPath)
-
-	// 1) Reuse an already-running shared embedder (Fix B).
-	if conn, err := net.Dial("unix", socketPath); err == nil {
-		if p.probeSocket(conn) {
-			p.ready = true
-			log.Printf("BGE embedder: reused shared socket %s (dim=%d)", socketPath, p.dim)
-			return nil
-		}
-		conn.Close()
-	}
-
-	// 2) Spawn a new shared embedder in socket-serve mode and connect to it.
-	// startSocketServer probes the socket itself, wiring p.conn/p.stdin/p.stdout.
-	if cmd, _, err := p.startSocketServer(scriptPath, pythonPath, socketPath); err == nil {
-		p.cmd = cmd
-		p.ready = true
-		log.Printf("BGE embedder: started shared socket %s (dim=%d)", socketPath, p.dim)
-		return nil
-	}
-
-	// 3) Fallback: legacy stdin/stdout subprocess (backward compatible).
 	return p.startLegacy(scriptPath, pythonPath)
 }
 
-// startSocketServer launches bge_server.py in `serve <socket>` mode, waits for
-// READY on stderr, then dials the socket and probes it.
-func (p *PythonEmbedder) startSocketServer(scriptPath, pythonPath, socketPath string) (*exec.Cmd, net.Conn, error) {
-	cmd := exec.Command(pythonPath, scriptPath, "serve", socketPath)
-	cmd.Env = append(os.Environ(), "NYAWA_MODEL_DIR="+p.modelPath)
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, nil, fmt.Errorf("start python: %w", err)
-	}
-	ready := make(chan struct{}, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.Contains(line, "READY") {
-				ready <- struct{}{}
-			}
-			if strings.Contains(line, "Error") || strings.Contains(line, "Traceback") {
-				errCh <- fmt.Errorf(line)
-			}
-		}
-	}()
-	select {
-	case <-ready:
-	case err := <-errCh:
-		cmd.Process.Kill()
-		cmd.Wait()
-		return nil, nil, fmt.Errorf("python error: %w", err)
-	case <-time.After(30 * time.Second):
-		cmd.Process.Kill()
-		cmd.Wait()
-		return nil, nil, fmt.Errorf("timeout waiting for embedder")
-	}
-
-	// Dial the socket, retrying briefly as the server binds.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		conn, derr := net.Dial("unix", socketPath)
-		if derr == nil {
-			if p.probeSocket(conn) {
-				return cmd, conn, nil
-			}
-			conn.Close()
-		}
-		if time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	cmd.Process.Kill()
-	cmd.Wait()
-	return nil, nil, fmt.Errorf("could not connect to shared embedder socket")
-}
-
-// startLegacy is the original behavior: one bge_server.py over stdin/stdout.
+// startLegacy is the sole process-start path: bge_server.py speaks
+// line-delimited JSON-RPC over stdin/stdout and reports readiness on stderr.
 func (p *PythonEmbedder) startLegacy(scriptPath, pythonPath string) error {
 	p.cmd = exec.Command(pythonPath, scriptPath)
 	p.cmd.Env = append(os.Environ(), "NYAWA_MODEL_DIR="+p.modelPath)
@@ -202,29 +73,27 @@ func (p *PythonEmbedder) startLegacy(scriptPath, pythonPath string) error {
 				stderrDone <- struct{}{}
 			}
 			if strings.Contains(line, "Error") || strings.Contains(line, "Traceback") {
-				errCh <- fmt.Errorf(line)
+				errCh <- fmt.Errorf("%s", line)
 			}
 		}
 	}()
 	select {
 	case <-stderrDone:
 		p.ready = true
-		log.Printf("BGE embedder ready (legacy, dim=%d)", p.dim)
+		log.Printf("BGE embedder ready (embedded stdin/stdout, dim=%d)", p.dim)
 		return nil
 	case err := <-errCh:
 		p.cmd.Process.Kill()
+		p.cmd.Wait()
 		return fmt.Errorf("python error: %w", err)
 	case <-time.After(30 * time.Second):
 		p.cmd.Process.Kill()
+		p.cmd.Wait()
 		return fmt.Errorf("timeout waiting for embedder")
 	}
 }
 
 func (p *PythonEmbedder) Stop() {
-	if p.conn != nil {
-		p.conn.Close()
-		p.conn = nil
-	}
 	if p.cmd != nil && p.cmd.Process != nil {
 		p.cmd.Process.Kill()
 		p.cmd.Wait()
@@ -236,11 +105,6 @@ func (p *PythonEmbedder) Embed(text string) ([]float32, error) {
 	defer p.mu.Unlock()
 	if !p.ready {
 		return nil, fmt.Errorf("embedder not ready")
-	}
-	if p.socketMode && p.conn != nil {
-		p.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
-		p.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		defer p.conn.SetDeadline(time.Time{})
 	}
 	if err := p.stdin.Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "embed", "params": map[string]string{"text": text}}); err != nil {
 		return nil, fmt.Errorf("write: %w", err)
@@ -316,23 +180,17 @@ func findScriptPath() string {
 	return ""
 }
 
-// embedPythonCandidates are probed in order for an interpreter that can import
-// onnxruntime+numpy. The venv under /opt/data lives on a persistent volume, so
-// it survives container recreation (unlike the image's own venv); the rest are
-// the original fallbacks. NYAWA_EMBED_PYTHON overrides the whole list.
+// embedPythonCandidates are the interpreters shipped with or explicitly
+// installed in the runtime image. A host or persistent-volume venv is never
+// consulted by the durable runtime.
 var embedPythonCandidates = []string{
-	"/opt/data/bge-venv/bin/python3",
-	"/opt/hermes/.venv/bin/python3",
+	"/usr/local/bin/python3",
 	"/usr/bin/python3",
 	"python3",
 }
 
 func findPythonPath() string {
-	candidates := embedPythonCandidates
-	if p := strings.TrimSpace(os.Getenv("NYAWA_EMBED_PYTHON")); p != "" {
-		candidates = append([]string{p}, candidates...)
-	}
-	for _, c := range candidates {
+	for _, c := range embedPythonCandidates {
 		cmd := exec.Command(c, "-c", "import onnxruntime, numpy; print('ok')")
 		if out, err := cmd.Output(); err == nil && strings.TrimSpace(string(out)) == "ok" {
 			return c
