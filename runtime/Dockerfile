@@ -23,8 +23,10 @@ RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
     -o /nyawa ./cmd/nyawa/
 
 FROM python:3.13-slim-bookworm
+ARG RELEASE_VERSION=dev
 LABEL io.nyawa.provenance="source-build" \
-      io.nyawa.approved-baseline-digest="sha256:6a2830f831b8aa8bcc6c82ed07b5ccbfd82882aa98c0bfb176e7a97a498b1ec0"
+      io.nyawa.approved-baseline-digest="sha256:6a2830f831b8aa8bcc6c82ed07b5ccbfd82882aa98c0bfb176e7a97a498b1ec0" \
+      org.opencontainers.image.version="${RELEASE_VERSION}"
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     NYAWA_EMBED_MODEL_DIR=/opt/nyawa/model \
@@ -36,6 +38,7 @@ COPY --from=nyawa-builder /nyawa /usr/local/bin/nyawa
 COPY internal/embedder/bge_server.py /opt/nyawa/internal/embedder/bge_server.py
 COPY runtime/model /opt/nyawa/model
 RUN test -s /usr/local/bin/nyawa \
+    && test "$(/usr/local/bin/nyawa version)" = "nyawa v${RELEASE_VERSION}" \
     && test -s /opt/nyawa/internal/embedder/bge_server.py \
     && test -s /opt/nyawa/model/model.onnx \
     && test -s /opt/nyawa/model/tokenizer.json

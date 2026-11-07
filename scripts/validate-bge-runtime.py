@@ -22,6 +22,7 @@ def sha256(path: Path) -> str:
 
 def main() -> None:
     dockerfile = (ROOT / "runtime/Dockerfile").read_text()
+    workflow = (ROOT / ".github/workflows/bge-runtime-publish.yml").read_text()
     requirements = (ROOT / "runtime/requirements.lock").read_text()
     server = (ROOT / "internal/embedder/bge_server.py").read_text()
     embedder = (ROOT / "internal/embedder/py_embedder.go").read_text()
@@ -30,6 +31,15 @@ def main() -> None:
     assert "io.nyawa.provenance=\"source-build\"" in dockerfile
     assert f"io.nyawa.approved-baseline-digest=\"{DIGEST}\"" in dockerfile
     assert "approved-nyawa-v124" not in dockerfile
+    assert "ARG RELEASE_VERSION=dev" in dockerfile
+    assert 'org.opencontainers.image.version="${RELEASE_VERSION}"' in dockerfile
+    assert '$(/usr/local/bin/nyawa version)" = "nyawa v${RELEASE_VERSION}' in dockerfile
+    assert "name: Normalize image tag to runtime semver" in workflow
+    assert 'release_version="${IMAGE_TAG#bge-v}"' in workflow
+    assert "-r[0-9]+" in workflow
+    assert "org.opencontainers.image.version=${{ steps.version.outputs.release_version }}" in workflow
+    assert "RELEASE_VERSION=${{ steps.version.outputs.release_version }}" in workflow
+    assert "RELEASE_VERSION=${{ env.IMAGE_TAG }}" not in workflow
     assert "COPY runtime/model /opt/nyawa/model" in dockerfile
     assert "COPY internal/embedder/bge_server.py" in dockerfile
     assert "NYAWA_EMBED_MODEL_DIR=/opt/nyawa/model" in dockerfile

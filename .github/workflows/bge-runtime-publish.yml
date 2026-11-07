@@ -38,6 +38,30 @@ jobs:
           username: ${{ secrets.GHCR_PAT_USER }}
           password: ${{ secrets.GHCR_PAT }}
 
+      - name: Normalize image tag to runtime semver
+        id: version
+        env:
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+        run: |
+          set -euo pipefail
+          case "${IMAGE_TAG}" in
+            bge-v[0-9]*)
+              release_version="${IMAGE_TAG#bge-v}"
+              ;;
+            *)
+              echo "::error::image tag must match bge-v<semver> or bge-v<semver>-r<number>: ${IMAGE_TAG}"
+              exit 1
+              ;;
+          esac
+          if [[ "${release_version}" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-r[0-9]+$ ]]; then
+            release_version="${BASH_REMATCH[1]}"
+          elif [[ ! "${release_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::image tag does not contain a supported semver: ${IMAGE_TAG}"
+            exit 1
+          fi
+          printf 'release_version=%s\n' "${release_version}" >> "${GITHUB_OUTPUT}"
+          echo "${IMAGE_TAG} -> runtime version ${release_version}"
+
       - name: Download and verify model asset
         env:
           MODEL_URL: https://github.com/${{ github.repository }}/releases/download/bge-model-v1.2.4/model.onnx
@@ -59,6 +83,7 @@ jobs:
             org.opencontainers.image.title=Nyawa Embedded BGE Runtime
             org.opencontainers.image.description=Self-contained Nyawa runtime with local BGE embeddings
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.version.outputs.release_version }}
             org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Build and push
@@ -68,7 +93,7 @@ jobs:
           file: runtime/Dockerfile
           push: true
           build-args: |
-            RELEASE_VERSION=${{ env.IMAGE_TAG }}
+            RELEASE_VERSION=${{ steps.version.outputs.release_version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=bge-runtime
