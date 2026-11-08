@@ -2,7 +2,7 @@
   "schema_version": "c8.shadow-retrieval.v1",
   "description": "Fictional, synthetic-only C8 retrieval corpus. No user or production memories.",
   "records": [
-    {"fixture_id": "R01_SHA", "namespace": "c8-synthetic-main", "type": "fact", "content": "Synthetic C8 fixture. Marker C8_SHA_ARTIFACT_01. Fictional model snapshot SHA-256: sha256:c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8."},
+    {"fixture_id": "R01_SHA", "namespace": "c8-synthetic-main", "type": "fact", "content": "Synthetic C8 fixture. Marker C8_SHA_ARTIFACT_01. Fictional grouped model snapshot SHA-256: sha256:c8c8c8c8:c8c8c8c8:c8c8c8c8:c8c8c8c8:c8c8c8c8:c8c8c8c8:c8c8c8c8:c8c8c8c8."},
     {"fixture_id": "R02_PATH", "namespace": "c8-synthetic-main", "type": "fact", "content": "Synthetic C8 fixture. Marker C8_PATH_RETENTION_02. Fictional file path: /synthetic/c8/retention-plan.md."},
     {"fixture_id": "R03_URL", "namespace": "c8-synthetic-main", "type": "fact", "content": "Synthetic C8 fixture. Marker C8_URL_AMBER_MAPLE_03. Fictional artifact URL: https://example.test/c8/amber-maple."},
     {"fixture_id": "R04_BRANCH", "namespace": "c8-synthetic-main", "type": "fact", "content": "Synthetic C8 fixture. Marker C8_BRANCH_RELEASE_04. Fictional source branch: feat/c8-synthetic-stable."},
@@ -35,7 +35,7 @@
     {"fixture_id": "R31_SCOPE_05_B", "namespace": "c8-synthetic-scope-05-b", "type": "fact", "content": "Synthetic C8 fixture. Marker C8_SCOPE_05_B_31. Fictional scope 05 chat B label is bright river."}
   ],
   "cases": [
-    {"case_id": "Q01_SHA", "category": "exact_identifier", "namespace": "c8-synthetic-main", "query": "Find the fictional SHA-256 for the model snapshot.", "relevant_markers": ["sha256:c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8"], "forbidden_markers": [], "exclude_types": [], "min_score": 0.0},
+    {"case_id": "Q01_SHA", "category": "exact_identifier", "namespace": "c8-synthetic-main", "query": "Find the fictional grouped SHA-256 for the model snapshot.", "relevant_markers": ["sha256:c8c8c8c8:c8c8c8c8:c8c8c8c8:c8c8c8c8:c8c8c8c8:c8c8c8c8:c8c8c8c8:c8c8c8c8"], "forbidden_markers": [], "exclude_types": [], "min_score": 0.0},
     {"case_id": "Q02_PATH", "category": "exact_identifier", "namespace": "c8-synthetic-main", "query": "What exact path names the fictional retention plan file?", "relevant_markers": ["/synthetic/c8/retention-plan.md"], "forbidden_markers": [], "exclude_types": [], "min_score": 0.0},
     {"case_id": "Q03_URL", "category": "exact_identifier", "namespace": "c8-synthetic-main", "query": "Give me the fictional amber maple artifact URL.", "relevant_markers": ["https://example.test/c8/amber-maple"], "forbidden_markers": [], "exclude_types": [], "min_score": 0.0},
     {"case_id": "Q04_BRANCH", "category": "exact_identifier", "namespace": "c8-synthetic-main", "query": "Which fictional source branch is recorded?", "relevant_markers": ["feat/c8-synthetic-stable"], "forbidden_markers": [], "exclude_types": [], "min_score": 0.0},
