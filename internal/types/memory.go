@@ -109,6 +109,8 @@ type MemoryResult struct {
 	AccessBoost     float64 `json:"access_boost"`
 	LengthBoost     float64 `json:"length_boost"`
 	Rank            int     `json:"rank"`
+	VectorRank      int     `json:"vector_rank,omitempty"`
+	FTS5Rank        int     `json:"fts5_rank,omitempty"`
 }
 
 func (r *MemoryResult) Reset() {
@@ -132,6 +134,8 @@ func (r *MemoryResult) Reset() {
 	r.AccessBoost = 0
 	r.LengthBoost = 0
 	r.Rank = 0
+	r.VectorRank = 0
+	r.FTS5Rank = 0
 }
 
 type StoreQuery struct {

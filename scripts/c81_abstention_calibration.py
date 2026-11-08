@@ -7,13 +7,14 @@ import hashlib
 import json
 import math
 import os
+import re
 import statistics
 import subprocess
 import sys
 import time
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from c81_fixture_generator import SCHEMA, build_dataset, validate_dataset
 
@@ -25,7 +26,14 @@ LABEL_KEY = "org.nyawa.c81-abstention-calibration"
 MEMORY_LIMIT = 4 * 1024**3
 MIN_AVAILABLE_MEMORY = 5 * 1024**3
 FIXTURE_DEFAULT = Path(__file__).resolve().parents[1] / "tests/fixtures/c81-abstention-calibration-fixtures.json"
-SIGNALS = ("score", "rrf_score", "final_margin", "rrf_margin")
+SIGNALS = (
+    "score", "rrf_score", "final_margin", "rrf_margin", "lexical_coverage", "lexical_margin",
+    "vector_rank", "fts5_rank", "both_modalities", "exact_identifier_match",
+)
+LEXICAL_STOPWORDS = frozenset(
+    "a an and are as at be by for from has have how in is it of on or the to was what when where which who why with did does do this that these those find give tell me fictional synthetic fixture marker c8 c81 synth id dan yang apa berapa untuk dari pada ini itu adalah sebagai dengan bagaimana siapa kapan dimana mengapa antrean kebijakan mode berapa sebuah sebuahnya".split()
+)
+SYNTHETIC_ID = re.compile(r"SYNTH-C81-ID-[0-9]{4}", re.IGNORECASE)
 
 HTTP_HELPER = r"""
 import json, sys, urllib.error, urllib.request
@@ -57,12 +65,38 @@ def _content(item: dict[str, Any]) -> str:
     return str(item.get("Content", item.get("content", "")))
 
 
-def _numeric(value: Any) -> bool:
+def _numeric(value: Any) -> TypeGuard[int | float]:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _both_modalities_present(candidate: dict[str, Any]) -> bool:
+    vector_rank, fts5_rank = candidate.get("vector_rank"), candidate.get("fts5_rank")
+    return _numeric(vector_rank) and _numeric(fts5_rank) and vector_rank > 0 and fts5_rank > 0
+
+
+def _rank_within(candidate: dict[str, Any], signal: str, threshold: float | None) -> bool:
+    value = candidate.get(signal)
+    return threshold is not None and _numeric(value) and value > 0 and value <= threshold
 
 
 def _field(item: dict[str, Any], upper: str, lower: str) -> Any:
     return item.get(upper, item.get(lower))
+
+
+def _tokens(text: str) -> set[str]:
+    return {token for token in re.findall(r"[a-z0-9]+", text.lower()) if token not in LEXICAL_STOPWORDS}
+
+
+def _lexical_coverage(query: str, content: str) -> float:
+    query_tokens = _tokens(query)
+    if not query_tokens:
+        return 0.0
+    return len(query_tokens & _tokens(content)) / len(query_tokens)
+
+
+def _exact_synthetic_identifier_match(query: str, content: str) -> bool:
+    query_ids = {value.upper() for value in SYNTHETIC_ID.findall(query)}
+    return bool(query_ids & {value.upper() for value in SYNTHETIC_ID.findall(content)})
 
 
 def _margin(candidates: list[dict[str, Any]], field: str) -> float | None:
@@ -85,11 +119,19 @@ def score_case(
     candidates: list[dict[str, Any]] = []
     chars = 0
     numeric = True
+    modality_numeric_all = True
     for rank, item in enumerate(items[:k], start=1):
         content = _content(item)
         score = _field(item, "Score", "score")
         rrf_score = _field(item, "RRFScore", "rrf_score")
+        vector_rank = _field(item, "VectorRank", "vector_rank")
+        fts5_rank = _field(item, "FTS5Rank", "fts5_rank")
         numeric = numeric and _numeric(score) and _numeric(rrf_score)
+        modality_numeric = (
+            isinstance(vector_rank, int) and not isinstance(vector_rank, bool) and vector_rank >= 0
+            and isinstance(fts5_rank, int) and not isinstance(fts5_rank, bool) and fts5_rank >= 0
+        )
+        modality_numeric_all = modality_numeric_all and modality_numeric
         item_id = str(_field(item, "ID", "id") or "")
         marker_hits = [marker for marker in relevant if marker in content]
         forbidden_hits = [marker for marker in forbidden if marker in content]
@@ -100,6 +142,12 @@ def score_case(
             "rrf_score": float(rrf_score) if _numeric(rrf_score) else None,
             "temporal_boost": float(item.get("TemporalBoost", 0.0)) if _numeric(item.get("TemporalBoost", 0.0)) else None,
             "importance_boost": float(item.get("ImportanceBoost", 0.0)) if _numeric(item.get("ImportanceBoost", 0.0)) else None,
+            "vector_rank": int(vector_rank) if modality_numeric else None,
+            "fts5_rank": int(fts5_rank) if modality_numeric else None,
+            "modality_evidence_present": modality_numeric,
+            "both_modalities": bool(modality_numeric and vector_rank > 0 and fts5_rank > 0),
+            "lexical_coverage": _lexical_coverage(case["query"], content),
+            "exact_identifier_match": _exact_synthetic_identifier_match(case["query"], content),
             "type": str(item.get("Type", item.get("type", ""))),
             "relevant": bool(marker_hits),
             "forbidden_markers_found": forbidden_hits,
@@ -122,12 +170,15 @@ def score_case(
         "reciprocal_rank": (1.0 / first_relevant_rank) if first_relevant_rank is not None else (0.0 if relevant else None),
         "result_count": len(candidates),
         "scores_numeric": numeric,
+        "modality_ranks_numeric": modality_numeric_all,
+        "modality_evidence_present": bool(candidates) and all(candidate["modality_evidence_present"] for candidate in candidates),
         "fixture_ids_mapped": all(candidate["fixture_id"] != "unknown-fixture" for candidate in candidates),
         "latency_ms": round(float(latency_ms), 2),
         "candidate_chars": chars,
         "estimated_candidate_tokens": math.ceil(chars / 4),
         "final_margin": _margin(candidates, "score"),
         "rrf_margin": _margin(candidates, "rrf_score"),
+        "lexical_margin": _margin(candidates, "lexical_coverage"),
         "forbidden_markers_found": forbidden_hits,
         "candidates": candidates,
     }
@@ -152,9 +203,15 @@ def evaluate_policy(
     for case in cases:
         row = by_id[case["case_id"]]
         candidates = row["candidates"]
-        if signal in ("final_margin", "rrf_margin"):
+        if signal in ("final_margin", "rrf_margin", "lexical_margin"):
             margin = row.get(signal)
             accepted = candidates if threshold is not None and _numeric(margin) and margin >= threshold else []
+        elif signal == "both_modalities":
+            accepted = [candidate for candidate in candidates if _both_modalities_present(candidate)]
+        elif signal == "exact_identifier_match":
+            accepted = [candidate for candidate in candidates if candidate.get("exact_identifier_match", False)]
+        elif signal in ("vector_rank", "fts5_rank"):
+            accepted = [candidate for candidate in candidates if _rank_within(candidate, signal, threshold)]
         elif signal is not None:
             accepted = [
                 candidate for candidate in candidates
@@ -185,6 +242,13 @@ def evaluate_policy(
             namespace_leaks += forbidden_for_case
 
     precision = correct_candidate_count / accepted_candidate_count if accepted_candidate_count else 0.0
+    rows_with_candidates = [
+        by_id[case["case_id"]]
+        for case in cases
+        if by_id[case["case_id"]].get("result_count", len(by_id[case["case_id"]].get("candidates", []))) > 0
+    ]
+    modality_evidence_available = bool(rows_with_candidates) and all(row.get("modality_evidence_present", False) for row in rows_with_candidates)
+    modality_ranks_numeric = bool(rows_with_candidates) and all(row.get("modality_ranks_numeric", False) for row in rows_with_candidates)
     metrics = {
         "positive_queries": len(positives),
         "negative_queries": len(negatives),
@@ -200,6 +264,8 @@ def evaluate_policy(
         "accepted_precision": precision,
         "namespace_leaks": namespace_leaks,
         "forbidden_marker_leaks": forbidden_leaks,
+        "modality_evidence_available": modality_evidence_available,
+        "modality_ranks_numeric": modality_ranks_numeric,
     }
     return {"metrics": metrics, "accepted_case_rows": accepted_case_rows}
 
@@ -211,12 +277,20 @@ def passes_gates(metrics: dict[str, Any], gates: dict[str, Any]) -> bool:
         and metrics["negative_false_positive_rate"] <= float(gates["negative_false_positive_rate_max"])
         and metrics["namespace_leaks"] <= int(gates["namespace_leaks_max"])
         and metrics["forbidden_marker_leaks"] <= int(gates["forbidden_marker_leaks_max"])
+        and (
+            not gates.get("require_modality_evidence", False)
+            or (metrics["modality_evidence_available"] and metrics["modality_ranks_numeric"])
+        )
     )
 
 
 def threshold_values(rows: list[dict[str, Any]], signal: str) -> list[float]:
+    if signal == "both_modalities":
+        return [1.0] if any(row.get("modality_evidence_present") for row in rows) else []
+    if signal == "exact_identifier_match":
+        return [1.0]
     values: set[float] = set()
-    if signal in ("final_margin", "rrf_margin"):
+    if signal in ("final_margin", "rrf_margin", "lexical_margin"):
         for row in rows:
             value = row.get(signal)
             if _numeric(value):
@@ -310,6 +384,17 @@ def summarize(dataset: dict[str, Any], case_results: list[dict[str, Any]]) -> di
         holdout_pass = passes_gates(holdout_policy_metrics, gates)
     all_numeric = all(row["scores_numeric"] for row in case_results)
     fixture_ids_mapped = all(row.get("fixture_ids_mapped", True) for row in case_results)
+    returned_candidates = [candidate for row in case_results for candidate in row["candidates"]]
+    modality_evidence_available = bool(returned_candidates) and all(candidate.get("modality_evidence_present", False) for candidate in returned_candidates)
+    candidate_rows = [row for row in case_results if row.get("result_count", len(row.get("candidates", []))) > 0]
+    modality_ranks_numeric = bool(candidate_rows) and all(row.get("modality_ranks_numeric", False) for row in candidate_rows)
+    source_counts = {"vector_only": 0, "fts5_only": 0, "both": 0, "neither": 0}
+    if modality_evidence_available:
+        for candidate in returned_candidates:
+            vector_hit = candidate["vector_rank"] > 0
+            fts5_hit = candidate["fts5_rank"] > 0
+            key = "both" if vector_hit and fts5_hit else "vector_only" if vector_hit else "fts5_only" if fts5_hit else "neither"
+            source_counts[key] += 1
     status = "PASS" if selected and holdout_pass and all_numeric and fixture_ids_mapped else "FAIL"
     latencies = sorted(row["latency_ms"] for row in case_results)
     p95_index = max(0, math.ceil(0.95 * len(latencies)) - 1) if latencies else 0
@@ -328,6 +413,9 @@ def summarize(dataset: dict[str, Any], case_results: list[dict[str, Any]]) -> di
         "holdout_gates_pass": holdout_pass,
         "numeric_score_and_rrf_fields": all_numeric,
         "fixture_ids_mapped": fixture_ids_mapped,
+        "modality_evidence_available": modality_evidence_available,
+        "modality_ranks_numeric": modality_ranks_numeric,
+        "source_counts": source_counts,
         "latency_median_ms": round(statistics.median(latencies), 2) if latencies else 0.0,
         "latency_p95_ms": round(latencies[p95_index], 2) if latencies else 0.0,
         "candidate_chars_total": sum(row["candidate_chars"] for row in case_results),
@@ -515,18 +603,60 @@ class C81CalibrationTests(unittest.TestCase):
         self.assertTrue(calibration_markers.isdisjoint(holdout_markers))
 
     def test_score_case_records_both_score_signals_without_content(self) -> None:
-        case = {"case_id": "Q", "category": "exact_identifier", "split": "calibration", "answerable": True, "namespace": "c8-synthetic-main", "relevant_markers": ["GOLD"], "forbidden_markers": []}
-        result = score_case(case, [{"ID": "m1", "Content": "GOLD value", "Score": 0.9, "RRFScore": 0.6, "Rank": 1}], 12, 5, {"m1": "F01"})
+        case = {"case_id": "Q", "category": "exact_identifier", "split": "calibration", "answerable": True, "namespace": "c8-synthetic-main", "query": "Find exact identifier SYNTH-C81-ID-0001", "relevant_markers": ["GOLD"], "forbidden_markers": []}
+        result = score_case(case, [{"ID": "m1", "Content": "Synthetic C8.1 record GOLD SYNTH-C81-ID-0001", "Score": 0.9, "RRFScore": 0.6, "Rank": 1, "VectorRank": 2, "FTS5Rank": 1}], 12, 5, {"m1": "F01"})
         candidate = result["candidates"][0]
         self.assertEqual(candidate["fixture_id"], "F01")
         self.assertEqual(candidate["score"], 0.9)
         self.assertEqual(candidate["rrf_score"], 0.6)
         self.assertTrue(candidate["relevant"])
+        self.assertTrue(candidate["modality_evidence_present"])
+        self.assertEqual((candidate["vector_rank"], candidate["fts5_rank"]), (2, 1))
+        self.assertTrue(candidate["both_modalities"])
+        self.assertTrue(candidate["exact_identifier_match"])
+        self.assertGreater(candidate["lexical_coverage"], 0.0)
         self.assertNotIn("content", candidate)
         self.assertTrue(result["scores_numeric"])
         self.assertTrue(result["fixture_ids_mapped"])
         unknown = score_case(case, [{"ID": "m2", "Content": "other", "Score": 0.1, "RRFScore": 0.2}], 1, 5, {})
         self.assertFalse(unknown["fixture_ids_mapped"])
+        self.assertFalse(unknown["candidates"][0]["modality_evidence_present"])
+        legacy = score_case(case, [{"ID": "m1", "Content": "GOLD", "Score": 0.8, "RRFScore": 0.5}], 1, 5, {"m1": "F01"})
+        self.assertFalse(legacy["modality_evidence_present"])
+        self.assertFalse(legacy["modality_ranks_numeric"])
+
+    def test_modality_agreement_can_abstain_on_single_source_candidate(self) -> None:
+        cases = [
+            {"case_id": "P", "answerable": True, "category": "semantic_paraphrase"},
+            {"case_id": "N", "answerable": False, "category": "negative_query"},
+        ]
+        rows = [
+            {"case_id": "P", "candidates": [{"score": 0.8, "rrf_score": 0.7, "vector_rank": 2, "fts5_rank": 1, "relevant": True, "forbidden_markers_found": []}]},
+            {"case_id": "N", "candidates": [{"score": 1.0, "rrf_score": 0.8, "vector_rank": 1, "fts5_rank": 0, "relevant": False, "forbidden_markers_found": []}]},
+        ]
+        result = evaluate_policy(cases, rows, "both_modalities", 1.0)["metrics"]
+        self.assertEqual(result["positive_recall_at_k"], 1.0)
+        self.assertEqual(result["negative_false_positive_rate"], 0.0)
+
+    def test_modality_evidence_gate_fails_closed_when_fields_are_missing(self) -> None:
+        gates = {
+            "positive_recall_at_k_min": 0.9,
+            "exact_identifier_recall_min": 1.0,
+            "negative_false_positive_rate_max": 0.05,
+            "namespace_leaks_max": 0,
+            "forbidden_marker_leaks_max": 0,
+            "require_modality_evidence": True,
+        }
+        metrics = {
+            "positive_recall_at_k": 1.0,
+            "exact_identifier_recall": 1.0,
+            "negative_false_positive_rate": 0.0,
+            "namespace_leaks": 0,
+            "forbidden_marker_leaks": 0,
+            "modality_evidence_available": False,
+            "modality_ranks_numeric": False,
+        }
+        self.assertFalse(passes_gates(metrics, gates))
 
     def test_policy_metrics_and_zero_fpr_gate(self) -> None:
         cases = [
@@ -567,11 +697,15 @@ class C81CalibrationTests(unittest.TestCase):
                 candidates = [{
                     "fixture_id": f"TARGET_{case['case_id']}", "rank": 1, "score": 0.9,
                     "rrf_score": 0.8, "temporal_boost": 0.0, "importance_boost": 0.0,
+                    "vector_rank": 1, "fts5_rank": 1, "modality_evidence_present": True,
+                    "both_modalities": True, "exact_identifier_match": False, "lexical_coverage": 0.75,
                     "type": "fact", "relevant": True, "forbidden_markers_found": [],
                 }]
             rows.append({
                 "case_id": case["case_id"], "scores_numeric": True,
-                "candidates": candidates, "final_margin": 0.9 if candidates else None,
+                "modality_ranks_numeric": True, "modality_evidence_present": bool(candidates),
+                "result_count": len(candidates), "candidates": candidates,
+                "final_margin": 0.9 if candidates else None,
                 "rrf_margin": 0.8 if candidates else None, "latency_ms": 1.0,
                 "candidate_chars": 10, "estimated_candidate_tokens": 3,
             })

@@ -465,6 +465,12 @@ normalised RRF score in `[0,1]` plus the small bounded boosts (see the table
 above), so a sensible threshold is well under `1` (roughly `0.1` to `0.3`).
 `0` disables it rather than selecting everything.
 
+The REST `/v1/recall` result also exposes `VectorRank` and `FTS5Rank` as
+read-only provenance for each candidate. Ranks are one-based when present and
+`0` means the candidate was not returned by that retrieval leg (including
+graph-only candidates). These ranks explain candidate provenance; they are not
+calibrated confidence values and must not be treated as probability scores.
+
 ### Reindexing the vector index
 
 The HNSW vector index lives beside the database as `<db>.hnsw`. Memories stored

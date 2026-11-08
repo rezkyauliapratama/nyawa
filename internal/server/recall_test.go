@@ -114,3 +114,30 @@ func TestHandleRecallAppliesFilters(t *testing.T) {
 		t.Fatalf("filter-before-limit count/types = %d %v, want 1 result", count, types)
 	}
 }
+
+func TestHandleRecallExposesModalityRanks(t *testing.T) {
+	srv := newRecallHTTPServer(t) // no embedder configured: FTS5-only results
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/recall", strings.NewReader(`{"query":"alpha project planning","namespace":"hermes","limit":5}`))
+	srv.handleRecall(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /v1/recall = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Results []struct {
+			VectorRank int `json:"VectorRank"`
+			FTS5Rank   int `json:"FTS5Rank"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	if len(payload.Results) == 0 {
+		t.Fatal("expected FTS5 candidates")
+	}
+	for i, result := range payload.Results {
+		if result.VectorRank != 0 || result.FTS5Rank < 1 {
+			t.Errorf("result %d modality ranks = vector:%d fts5:%d, want vector:0 and fts5>=1", i, result.VectorRank, result.FTS5Rank)
+		}
+	}
+}

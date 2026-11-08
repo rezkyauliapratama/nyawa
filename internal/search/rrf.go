@@ -156,6 +156,12 @@ func (pp *PostProcessor) Process(fused []FusionResult, memories map[string]*type
 		r.Memory = *mem
 		r.RRFScore = fr.Score
 		r.Rank = i + 1
+		if fr.VectorRank > 0 && fr.VectorRank < math.MaxInt32 {
+			r.VectorRank = fr.VectorRank
+		}
+		if fr.FTS5Rank > 0 && fr.FTS5Rank < math.MaxInt32 {
+			r.FTS5Rank = fr.FTS5Rank
+		}
 		ageHours := now - float64(mem.CreatedAt.Unix())/3600.0
 		if ageHours < 0 {
 			ageHours = 0
