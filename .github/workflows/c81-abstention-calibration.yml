@@ -1,0 +1,68 @@
+name: C8.1 Abstention Calibration
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: c81-abstention-calibration
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  C81_IMAGE: ghcr.io/rezkyauliapratama/nyawa/bge-runtime@sha256:61da25caf922c0925f4fd8e3af1d811f6fc9d3a9df21beb44138c7300d47efb6
+  C81_CONTAINER: nyawa-c81-eval-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  calibration:
+    name: Synthetic C8.1 abstention calibration
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate deterministic fixture and validate evaluator
+        run: |
+          FIXTURE="$RUNNER_TEMP/c81-abstention-fixtures.json"
+          python3 -m py_compile scripts/c81_fixture_generator.py scripts/c81_abstention_calibration.py
+          python3 scripts/c81_fixture_generator.py --output "$FIXTURE"
+          python3 scripts/c81_abstention_calibration.py --mode self-test --fixtures "$FIXTURE"
+
+      - name: Check runner capacity before any container starts
+        run: python3 scripts/c81_abstention_calibration.py --mode preflight
+
+      - name: Authenticate to GHCR for package read
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull pinned image and run synthetic C8.1 evaluation
+        run: |
+          python3 scripts/c81_abstention_calibration.py \
+            --mode e2e \
+            --image "$C81_IMAGE" \
+            --container "$C81_CONTAINER" \
+            --fixtures "$RUNNER_TEMP/c81-abstention-fixtures.json"
+
+      - name: Final cleanup verification
+        if: always()
+        run: |
+          if docker inspect "$C81_CONTAINER" >/dev/null 2>&1; then
+            image="$(docker inspect --format '{{.Config.Image}}' "$C81_CONTAINER")"
+            owned="$(docker inspect --format '{{index .Config.Labels \"org.nyawa.c81-abstention-calibration\"}}' "$C81_CONTAINER")"
+            if [[ "$image" != "$C81_IMAGE" || "$owned" != "true" ]]; then
+              echo "::error::refusing to remove a container not created by this C8.1 run"
+              exit 1
+            fi
+            docker rm --force "$C81_CONTAINER" >/dev/null
+          fi
+          if docker inspect "$C81_CONTAINER" >/dev/null 2>&1; then
+            echo "::error::disposable C8.1 container remains after cleanup"
+            exit 1
+          fi
+          echo "Disposable C8.1 container absent after cleanup."
