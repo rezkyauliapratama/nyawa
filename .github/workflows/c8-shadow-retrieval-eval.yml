@@ -1,0 +1,61 @@
+name: C8 Shadow Retrieval Evaluation
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: c8-shadow-retrieval-eval
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  C8_IMAGE: ghcr.io/rezkyauliapratama/nyawa/bge-runtime@sha256:61da25caf922c0925f4fd8e3af1d811f6fc9d3a9df21beb44138c7300d47efb6
+  C8_CONTAINER: nyawa-c8-eval-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  shadow-eval:
+    name: Synthetic C8 retrieval evaluation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate evaluator, fixture schema, and metric unit tests
+        run: |
+          python3 -m py_compile scripts/c8-shadow-retrieval-eval.py
+          python3 scripts/c8-shadow-retrieval-eval.py --mode self-test
+
+      - name: Check runner capacity before any container starts
+        run: python3 scripts/c8-shadow-retrieval-eval.py --mode preflight
+
+      - name: Authenticate to GHCR for package read
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull pinned image and run synthetic C8 evaluation
+        run: python3 scripts/c8-shadow-retrieval-eval.py --mode e2e --image "$C8_IMAGE" --container "$C8_CONTAINER"
+
+      - name: Final cleanup verification
+        if: always()
+        run: |
+          if docker inspect "$C8_CONTAINER" >/dev/null 2>&1; then
+            image="$(docker inspect --format '{{.Config.Image}}' "$C8_CONTAINER")"
+            owned="$(docker inspect --format '{{index .Config.Labels "org.nyawa.c8-shadow-eval"}}' "$C8_CONTAINER")"
+            if [[ "$image" != "$C8_IMAGE" || "$owned" != "true" ]]; then
+              echo "::error::refusing to remove a container not created by this C8 run"
+              exit 1
+            fi
+            docker rm --force "$C8_CONTAINER" >/dev/null
+          fi
+          if docker inspect "$C8_CONTAINER" >/dev/null 2>&1; then
+            echo "::error::disposable C8 container remains after cleanup"
+            exit 1
+          fi
+          echo "Disposable C8 container absent after cleanup."
