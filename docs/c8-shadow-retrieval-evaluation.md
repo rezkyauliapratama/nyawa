@@ -17,13 +17,13 @@ C8 asks whether Nyawa returns the expected synthetic memory, in the right namesp
 
 `tests/fixtures/c8-shadow-retrieval-fixtures.json` has 5 query cases in each supported category, 25 queries total:
 
-- exact identifiers: SHA-256, path, URL, and other literal anchors;
+- exact identifiers: grouped synthetic SHA-256 display, path, URL, branch, and ticket ID;
 - semantic/bilingual paraphrases;
 - namespace isolation;
 - active-vs-retired type filtering (`exclude_types`);
 - negative queries with no expected answer.
 
-All records and queries are fictional. The retired records use type `superseded` so the API's `exclude_types` path can be exercised. This does **not** test the Nyawa supersession lifecycle or `superseded_at` mutation; the C4/C7-lite policy tests remain responsible for that. C8 also does not decide conflict policy.
+All records and queries are fictional. The SHA-256 display is split into eight-character groups because Nyawa's secret filter intentionally rejects long contiguous key-like strings; it is a synthetic grouped display, not a canonical ungrouped digest. Retired records use type `superseded` so the API's `exclude_types` path can be exercised. This does **not** test the Nyawa supersession lifecycle or `superseded_at` mutation; the C4/C7-lite policy tests remain responsible for that. C8 also does not decide conflict policy.
 
 ## Measurement
 

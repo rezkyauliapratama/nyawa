@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import statistics
 import subprocess
 import sys
@@ -22,6 +23,7 @@ IMAGE = (
 FIXTURES = Path(__file__).resolve().parents[1] / "tests/fixtures/c8-shadow-retrieval-fixtures.json"
 MEMORY_LIMIT = 4 * 1024**3
 MIN_AVAILABLE_MEMORY = 5 * 1024**3
+AWS_SECRET_SHAPED = re.compile(r"[A-Za-z0-9/+=]{40}")
 
 HTTP_HELPER = r"""
 import json, sys, urllib.error, urllib.request
@@ -62,6 +64,8 @@ def validate_dataset(dataset: dict[str, Any]) -> None:
             raise ValueError(f"non-synthetic namespace rejected: {namespace!r}")
         if not isinstance(content, str) or "Synthetic C8" not in content:
             raise ValueError(f"record {record['fixture_id']} is not clearly synthetic")
+        if AWS_SECRET_SHAPED.search(content):
+            raise ValueError(f"record {record['fixture_id']} resembles a blocked secret-shaped string")
         record_content_by_namespace.setdefault(namespace, []).append(content)
         all_record_content.append(content)
     case_ids = [str(case.get("case_id", "")) for case in cases]
@@ -229,7 +233,8 @@ def preflight() -> None:
     available = available_kib * 1024
     if available < MIN_AVAILABLE_MEMORY:
         raise RuntimeError(f"runner preflight failed: MemAvailable={available}; need {MIN_AVAILABLE_MEMORY}; no container started")
-    if os.cpu_count() is None or os.cpu_count() < 2:
+    cpu_count = os.cpu_count()
+    if cpu_count is None or cpu_count < 2:
         raise RuntimeError("runner preflight failed: at least 2 CPUs required; no container started")
     stat = os.statvfs(os.environ.get("RUNNER_TEMP", "/tmp"))
     free_bytes = stat.f_bavail * stat.f_frsize
@@ -391,6 +396,13 @@ class C8MetricsTests(unittest.TestCase):
         for category in {case["category"] for case in dataset["cases"]}:
             self.assertGreaterEqual(sum(case["category"] == category for case in dataset["cases"]), 5)
         self.assertTrue(all(r["namespace"].startswith("c8-synthetic-") for r in dataset["records"]))
+        self.assertFalse(any(AWS_SECRET_SHAPED.search(r["content"]) for r in dataset["records"]))
+
+    def test_fixture_rejects_secret_shaped_strings(self) -> None:
+        dataset = load_dataset()
+        dataset["records"][0]["content"] += " " + "A" * 40
+        with self.assertRaisesRegex(ValueError, "secret-shaped"):
+            validate_dataset(dataset)
 
     def test_recall_precision_and_mrr(self) -> None:
         case = {"case_id": "Q", "category": "semantic", "namespace": "c8-synthetic-main", "relevant_markers": ["GOLD"], "forbidden_markers": []}
