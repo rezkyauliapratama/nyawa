@@ -1,0 +1,61 @@
+name: C7 Nyawa BGE Shadow E2E
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: c7-shadow-e2e
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  C7_IMAGE: ghcr.io/rezkyauliapratama/nyawa/bge-runtime@sha256:61da25caf922c0925f4fd8e3af1d811f6fc9d3a9df21beb44138c7300d47efb6
+  C7_CONTAINER: nyawa-c7-shadow-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  shadow-e2e:
+    name: Synthetic Nyawa/BGE retrieval shadow check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate harness syntax and shadow envelope unit tests
+        run: |
+          python3 -m py_compile scripts/c7-shadow-e2e.py
+          python3 scripts/c7-shadow-e2e.py --mode self-test
+
+      - name: Check runner capacity before any container starts
+        run: python3 scripts/c7-shadow-e2e.py --mode preflight
+
+      - name: Authenticate to GHCR for package read
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull pinned Nyawa BGE image and run synthetic shadow E2E
+        run: python3 scripts/c7-shadow-e2e.py --mode e2e --image "$C7_IMAGE" --container "$C7_CONTAINER"
+
+      - name: Final cleanup verification
+        if: always()
+        run: |
+          if docker inspect "$C7_CONTAINER" >/dev/null 2>&1; then
+            image="$(docker inspect --format '{{.Config.Image}}' "$C7_CONTAINER")"
+            owned="$(docker inspect --format '{{index .Config.Labels "org.nyawa.c7-shadow-e2e"}}' "$C7_CONTAINER")"
+            if [[ "$image" != "$C7_IMAGE" || "$owned" != "true" ]]; then
+              echo "::error::refusing to remove a container not created by this C7 run"
+              exit 1
+            fi
+            docker rm --force "$C7_CONTAINER" >/dev/null
+          fi
+          if docker inspect "$C7_CONTAINER" >/dev/null 2>&1; then
+            echo "::error::disposable C7 container remains after cleanup"
+            exit 1
+          fi
+          echo "Disposable C7 container absent after cleanup."
