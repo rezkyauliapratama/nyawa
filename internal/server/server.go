@@ -195,10 +195,10 @@ func (s *Server) handleRecall(w http.ResponseWriter, r *http.Request) {
 	results, err := s.pipeline.Search(types.StoreQuery{QueryText: req.Query, Namespace: req.Namespace, Limit: req.Limit, MinScore: req.MinScore, ExcludeTypes: req.ExcludeTypes})
 	if err != nil { writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "search failed"}); return }
 	defer s.pipeline.ReleaseResults(results)
-	type item struct{ ID, Content, Type string; Score, RRFScore, TemporalBoost, ImportanceBoost float64; Rank, VectorRank, FTS5Rank int; Pinned bool; CreatedAt string }
+	type item struct{ ID, Content, Type string; Score, RRFScore, TemporalBoost, ImportanceBoost float64; Rank, VectorRank, FTS5Rank int; VectorDistance, FTS5RankScore *float64; Pinned bool; CreatedAt string }
 	items := make([]item, len(results))
 	for i, r := range results {
-		items[i] = item{ID: r.ID, Content: r.Content, Type: string(r.Type), Score: r.Score, RRFScore: r.RRFScore, TemporalBoost: r.TemporalBoost, ImportanceBoost: r.ImportanceBoost, Rank: r.Rank, VectorRank: r.VectorRank, FTS5Rank: r.FTS5Rank, Pinned: r.Pinned, CreatedAt: r.CreatedAt.Format(time.RFC3339)}
+		items[i] = item{ID: r.ID, Content: r.Content, Type: string(r.Type), Score: r.Score, RRFScore: r.RRFScore, TemporalBoost: r.TemporalBoost, ImportanceBoost: r.ImportanceBoost, Rank: r.Rank, VectorRank: r.VectorRank, FTS5Rank: r.FTS5Rank, VectorDistance: r.VectorDistance, FTS5RankScore: r.FTS5RankScore, Pinned: r.Pinned, CreatedAt: r.CreatedAt.Format(time.RFC3339)}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"results": items, "count": len(items)})
 }

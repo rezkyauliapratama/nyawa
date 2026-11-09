@@ -40,6 +40,13 @@ type StoreReader interface {
 	ListEntityNames(limit int) ([]string, error)
 }
 
+// ModalityScoreReader is optional so existing StoreReader implementations keep
+// working unchanged while the production store can expose calibration telemetry.
+type ModalityScoreReader interface {
+	FTS5SearchHits(query string, topK int, namespace string) ([]store.FTS5Hit, error)
+	VectorSearchHits(queryVector []float32, topK int, namespace string) ([]store.VectorHit, error)
+}
+
 func NewPipeline(store StoreReader, emb *embedder.PriorityChain, cfg types.SearchConfig) *Pipeline {
 	rp := pool.NewResultPool(64)
 	w := WeightsFromConfig(cfg)
@@ -66,24 +73,51 @@ func (p *Pipeline) Search(q types.StoreQuery) ([]*types.MemoryResult, error) {
 		log.Printf("embedder unavailable, falling back to FTS5-only search: %v", err)
 	}
 	var (
-		vectorIDs []string
-		fts5IDs   []string
-		wg        sync.WaitGroup
-		errVec    error
-		errFTS5   error
+		vectorIDs       []string
+		fts5IDs         []string
+		vectorDistances = make(map[string]float64)
+		fts5RankScores  = make(map[string]float64)
+		wg              sync.WaitGroup
+		errVec          error
+		errFTS5         error
 	)
+	scoredReader, hasScoredReader := p.store.(ModalityScoreReader)
 	limit := q.Limit
 	if limit <= 0 { limit = types.DefaultQueryLimit }
 	searchTopK := forceMin(limit*3, 50)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		if hasScoredReader {
+			hits, err := scoredReader.FTS5SearchHits(q.QueryText, searchTopK, q.Namespace)
+			errFTS5 = err
+			if err == nil {
+				fts5IDs = make([]string, len(hits))
+				for i, hit := range hits {
+					fts5IDs[i] = hit.ID
+					fts5RankScores[hit.ID] = hit.RankScore
+				}
+			}
+			return
+		}
 		fts5IDs, errFTS5 = p.store.FTS5Search(q.QueryText, searchTopK, q.Namespace)
 	}()
 	if haveVector {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if hasScoredReader {
+				hits, err := scoredReader.VectorSearchHits(queryVec, searchTopK, q.Namespace)
+				errVec = err
+				if err == nil {
+					vectorIDs = make([]string, len(hits))
+					for i, hit := range hits {
+						vectorIDs[i] = hit.ID
+						vectorDistances[hit.ID] = hit.Distance
+					}
+				}
+				return
+			}
 			vectorIDs, errVec = p.store.VectorSearch(queryVec, searchTopK, q.Namespace)
 		}()
 	}
@@ -98,6 +132,18 @@ func (p *Pipeline) Search(q types.StoreQuery) ([]*types.MemoryResult, error) {
 		fts5IDs = nil
 	}
 	fused := p.rrf.FuseWeighted(vectorIDs, fts5IDs, p.post.W.VectorWeight, p.post.W.FTSWeight)
+	if hasScoredReader {
+		for i := range fused {
+			if distance, ok := vectorDistances[fused[i].MemoryID]; ok {
+				value := distance
+				fused[i].VectorDistance = &value
+			}
+			if rankScore, ok := fts5RankScores[fused[i].MemoryID]; ok {
+				value := rankScore
+				fused[i].FTS5RankScore = &value
+			}
+		}
+	}
 	allIDs := make([]string, 0, len(fused))
 	for _, fr := range fused { allIDs = append(allIDs, fr.MemoryID) }
 	memories, err := p.store.GetMemoriesByIDs(allIDs)

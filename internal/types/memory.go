@@ -109,8 +109,10 @@ type MemoryResult struct {
 	AccessBoost     float64 `json:"access_boost"`
 	LengthBoost     float64 `json:"length_boost"`
 	Rank            int     `json:"rank"`
-	VectorRank      int     `json:"vector_rank,omitempty"`
-	FTS5Rank        int     `json:"fts5_rank,omitempty"`
+	VectorRank      int      `json:"vector_rank,omitempty"`
+	FTS5Rank        int      `json:"fts5_rank,omitempty"`
+	VectorDistance  *float64 `json:"vector_distance,omitempty"`
+	FTS5RankScore   *float64 `json:"fts5_rank_score,omitempty"`
 }
 
 func (r *MemoryResult) Reset() {
@@ -136,6 +138,8 @@ func (r *MemoryResult) Reset() {
 	r.Rank = 0
 	r.VectorRank = 0
 	r.FTS5Rank = 0
+	r.VectorDistance = nil
+	r.FTS5RankScore = nil
 }
 
 type StoreQuery struct {
