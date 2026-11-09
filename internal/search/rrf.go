@@ -10,8 +10,8 @@ import (
 
 // RRF implements Reciprocal Rank Fusion over the vector (HNSW) and keyword
 // (FTS5/BM25) candidate lists. RRF needs no score calibration between the two
-// modalities — it only uses ranks — which is what we want because HNSW cosine
-// distances and BM25 scores live on incomparable scales. Both lists therefore
+// modalities — it only uses ranks — because HNSW Euclidean distances and FTS5
+// BM25 rank scores live on incomparable scales. Both lists therefore
 // take part in the final ordering; neither can be ignored.
 //
 // k (default 60: the value from the original RRF paper and Elasticsearch's
@@ -27,10 +27,12 @@ func NewRRF(k int) *RRF {
 }
 
 type FusionResult struct {
-	MemoryID   string
-	Score      float64
-	VectorRank int
-	FTS5Rank   int
+	MemoryID      string
+	Score         float64
+	VectorRank    int
+	FTS5Rank      int
+	VectorDistance *float64
+	FTS5RankScore  *float64
 }
 
 func (r *RRF) Fuse(vectorIDs, fts5IDs []string) []FusionResult {
@@ -155,6 +157,8 @@ func (pp *PostProcessor) Process(fused []FusionResult, memories map[string]*type
 		r := pp.resultPool.Get()
 		r.Memory = *mem
 		r.RRFScore = fr.Score
+		r.VectorDistance = fr.VectorDistance
+		r.FTS5RankScore = fr.FTS5RankScore
 		r.Rank = i + 1
 		if fr.VectorRank > 0 && fr.VectorRank < math.MaxInt32 {
 			r.VectorRank = fr.VectorRank

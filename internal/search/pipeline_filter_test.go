@@ -1,6 +1,7 @@
 package search
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -57,6 +58,20 @@ func (f *fakeStore) TraverseGraph(seeds []string, depth, limit int) ([]graph.Tra
 }
 func (f *fakeStore) ListEntityNames(limit int) ([]string, error) { return nil, nil }
 
+type scoredFakeStore struct {
+	*fakeStore
+	ftsHits    []store.FTS5Hit
+	vectorHits []store.VectorHit
+}
+
+func (f *scoredFakeStore) FTS5SearchHits(query string, topK int, namespace string) ([]store.FTS5Hit, error) {
+	return f.ftsHits, nil
+}
+
+func (f *scoredFakeStore) VectorSearchHits(queryVector []float32, topK int, namespace string) ([]store.VectorHit, error) {
+	return f.vectorHits, nil
+}
+
 func newFilterPipeline() *Pipeline {
 	now := time.Now()
 	st := &fakeStore{
@@ -89,6 +104,60 @@ func equalIDs(got []string, want ...string) bool {
 		}
 	}
 	return true
+}
+
+func TestScoredModalityTelemetryDoesNotChangeRRFResults(t *testing.T) {
+	now := time.Now()
+	memories := map[string]*types.Memory{
+		"memA": {ID: "memA", Content: "A", Type: types.TypeDecision, Namespace: "hermes", CreatedAt: now},
+		"memB": {ID: "memB", Content: "B", Type: types.TypeNote, Namespace: "hermes", CreatedAt: now},
+		"memC": {ID: "memC", Content: "C", Type: types.TypeFact, Namespace: "hermes", CreatedAt: now},
+	}
+	legacyStore := &fakeStore{fts: []string{"memA", "memB", "memC"}, vector: []string{"memA"}, mems: memories}
+	scoredStore := &scoredFakeStore{
+		fakeStore: legacyStore,
+		ftsHits: []store.FTS5Hit{{ID: "memA", RankScore: -0.8}, {ID: "memB", RankScore: -0.2}, {ID: "memC", RankScore: 0}},
+		vectorHits: []store.VectorHit{{ID: "memA", Distance: 0}},
+	}
+	cfg := types.SearchConfig{RRFK: 60, RecencyWeight: 0.05, ImportanceWeight: 0.10}
+	legacyPipeline := NewPipeline(legacyStore, embedder.NewPriorityChain(fakeEmbedder{}), cfg)
+	scoredPipeline := NewPipeline(scoredStore, embedder.NewPriorityChain(fakeEmbedder{}), cfg)
+	query := types.StoreQuery{QueryText: "q", Namespace: "hermes", Limit: 10}
+	legacy, err := legacyPipeline.Search(query)
+	if err != nil {
+		t.Fatalf("legacy search: %v", err)
+	}
+	defer legacyPipeline.ReleaseResults(legacy)
+	scored, err := scoredPipeline.Search(query)
+	if err != nil {
+		t.Fatalf("scored search: %v", err)
+	}
+	defer scoredPipeline.ReleaseResults(scored)
+	if !equalIDs(idsOf(scored), idsOf(legacy)...) {
+		t.Fatalf("raw scores changed result order: scored=%v legacy=%v", idsOf(scored), idsOf(legacy))
+	}
+	legacyByID := make(map[string]*types.MemoryResult, len(legacy))
+	scoredByID := make(map[string]*types.MemoryResult, len(scored))
+	for _, result := range legacy { legacyByID[result.ID] = result }
+	for _, result := range scored { scoredByID[result.ID] = result }
+	for id, previous := range legacyByID {
+		current := scoredByID[id]
+		if current == nil || current.RRFScore != previous.RRFScore || math.Abs(current.Score-previous.Score) > 1e-8 {
+			t.Fatalf("telemetry changed %s ranking scores: current=%+v previous=%+v", id, current, previous)
+		}
+	}
+	if got := scoredByID["memA"].VectorDistance; got == nil || *got != 0 {
+		t.Fatalf("zero vector distance should be present, got %v", got)
+	}
+	if got := scoredByID["memA"].FTS5RankScore; got == nil || *got != -0.8 {
+		t.Fatalf("FTS5 rank score missing/wrong: %v", got)
+	}
+	if got := scoredByID["memB"].VectorDistance; got != nil {
+		t.Fatalf("vector-only score should be absent for FTS-only memory, got %v", *got)
+	}
+	if got := scoredByID["memC"].FTS5RankScore; got == nil || *got != 0 {
+		t.Fatalf("zero FTS5 rank score should be present, got %v", got)
+	}
 }
 
 // TestRecallMinScoreFilterDropsLowScores is the unit guard for the filter the

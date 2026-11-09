@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -57,5 +58,19 @@ func TestVectorSearchNamespaceFilterPreservesHNSWOrder(t *testing.T) {
 	want := []string{"z-near", "b-middle", "a-far"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("namespace-filtered vector order = %v, want HNSW order %v", got, want)
+	}
+
+	hits, err := st.VectorSearchHits([]float32{0, 0}, 3, "target")
+	if err != nil {
+		t.Fatalf("scored vector search: %v", err)
+	}
+	if len(hits) != len(want) {
+		t.Fatalf("scored vector hit count = %d, want %d", len(hits), len(want))
+	}
+	wantDistances := []float64{0.01, 1, 10}
+	for i, hit := range hits {
+		if hit.ID != want[i] || math.Abs(hit.Distance-wantDistances[i]) > 1e-6 {
+			t.Fatalf("scored hit[%d] = %+v, want ID=%s distance=%g", i, hit, want[i], wantDistances[i])
+		}
 	}
 }

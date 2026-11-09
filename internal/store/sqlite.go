@@ -437,7 +437,29 @@ type TimeQuery struct {
 	Limit int
 }
 
+type VectorHit struct {
+	ID       string
+	Distance float64
+}
+
+type FTS5Hit struct {
+	ID       string
+	RankScore float64
+}
+
 func (s *Store) FTS5SearchAt(query string, tq TimeQuery) ([]string, error) {
+	hits, err := s.FTS5SearchHitsAt(query, tq)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(hits))
+	for i, hit := range hits {
+		ids[i] = hit.ID
+	}
+	return ids, nil
+}
+
+func (s *Store) FTS5SearchHitsAt(query string, tq TimeQuery) ([]FTS5Hit, error) {
 	if tq.Limit <= 0 {
 		tq.Limit = 10
 	}
@@ -451,19 +473,19 @@ func (s *Store) FTS5SearchAt(query string, tq TimeQuery) ([]string, error) {
 	var args []any
 	if tq.Time.IsZero() {
 		if tq.NS != "" {
-			q = `SELECT m.id FROM memories_fts f JOIN memories m ON m.rowid=f.rowid WHERE memories_fts MATCH ? AND m.namespace=? AND m.superseded_at IS NULL ORDER BY rank LIMIT ?`
+			q = `SELECT m.id, f.rank FROM memories_fts f JOIN memories m ON m.rowid=f.rowid WHERE memories_fts MATCH ? AND m.namespace=? AND m.superseded_at IS NULL ORDER BY rank LIMIT ?`
 			args = []any{query, tq.NS, tq.Limit}
 		} else {
-			q = `SELECT m.id FROM memories_fts f JOIN memories m ON m.rowid=f.rowid WHERE memories_fts MATCH ? AND m.superseded_at IS NULL ORDER BY rank LIMIT ?`
+			q = `SELECT m.id, f.rank FROM memories_fts f JOIN memories m ON m.rowid=f.rowid WHERE memories_fts MATCH ? AND m.superseded_at IS NULL ORDER BY rank LIMIT ?`
 			args = []any{query, tq.Limit}
 		}
 	} else {
 		ts := tq.Time.UTC().Format(time.RFC3339)
 		if tq.NS != "" {
-			q = `SELECT m.id FROM memories_fts f JOIN memories m ON m.rowid=f.rowid WHERE memories_fts MATCH ? AND m.namespace=? AND m.created_at <= ? AND (m.superseded_at IS NULL OR m.superseded_at > ?) ORDER BY rank LIMIT ?`
+			q = `SELECT m.id, f.rank FROM memories_fts f JOIN memories m ON m.rowid=f.rowid WHERE memories_fts MATCH ? AND m.namespace=? AND m.created_at <= ? AND (m.superseded_at IS NULL OR m.superseded_at > ?) ORDER BY rank LIMIT ?`
 			args = []any{query, tq.NS, ts, ts, tq.Limit}
 		} else {
-			q = `SELECT m.id FROM memories_fts f JOIN memories m ON m.rowid=f.rowid WHERE memories_fts MATCH ? AND m.created_at <= ? AND (m.superseded_at IS NULL OR m.superseded_at > ?) ORDER BY rank LIMIT ?`
+			q = `SELECT m.id, f.rank FROM memories_fts f JOIN memories m ON m.rowid=f.rowid WHERE memories_fts MATCH ? AND m.created_at <= ? AND (m.superseded_at IS NULL OR m.superseded_at > ?) ORDER BY rank LIMIT ?`
 			args = []any{query, ts, ts, tq.Limit}
 		}
 	}
@@ -472,16 +494,37 @@ func (s *Store) FTS5SearchAt(query string, tq TimeQuery) ([]string, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var ids []string
+	var hits []FTS5Hit
 	for rows.Next() {
-		var id string
-		rows.Scan(&id)
-		ids = append(ids, id)
+		var hit FTS5Hit
+		if err := rows.Scan(&hit.ID, &hit.RankScore); err != nil {
+			return nil, err
+		}
+		hits = append(hits, hit)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return hits, nil
+}
+
+func (s *Store) FTS5SearchHits(query string, k int, ns string) ([]FTS5Hit, error) {
+	return s.FTS5SearchHitsAt(query, TimeQuery{NS: ns, Limit: k})
+}
+
+func (s *Store) VectorSearchAt(q []float32, tq TimeQuery) ([]string, error) {
+	hits, err := s.VectorSearchHitsAt(q, tq)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(hits))
+	for i, hit := range hits {
+		ids[i] = hit.ID
 	}
 	return ids, nil
 }
 
-func (s *Store) VectorSearchAt(q []float32, tq TimeQuery) ([]string, error) {
+func (s *Store) VectorSearchHitsAt(q []float32, tq TimeQuery) ([]VectorHit, error) {
 	if len(q) == 0 {
 		return nil, nil
 	}
@@ -492,14 +535,34 @@ func (s *Store) VectorSearchAt(q []float32, tq TimeQuery) ([]string, error) {
 	if len(r) == 0 {
 		return nil, nil
 	}
-	ids := make([]string, 0, len(r))
-	for _, v := range r {
-		ids = append(ids, v.ID)
+	hits := make([]VectorHit, len(r))
+	ids := make([]string, len(r))
+	for i, result := range r {
+		hits[i] = VectorHit{ID: result.ID, Distance: result.Distance}
+		ids[i] = result.ID
 	}
 	if tq.NS != "" || !tq.Time.IsZero() {
-		return s.filterActiveIDs(ids, tq)
+		filteredIDs, err := s.filterActiveIDs(ids, tq)
+		if err != nil {
+			return nil, err
+		}
+		hitByID := make(map[string]VectorHit, len(hits))
+		for _, hit := range hits {
+			hitByID[hit.ID] = hit
+		}
+		filteredHits := make([]VectorHit, 0, len(filteredIDs))
+		for _, id := range filteredIDs {
+			if hit, ok := hitByID[id]; ok {
+				filteredHits = append(filteredHits, hit)
+			}
+		}
+		return filteredHits, nil
 	}
-	return ids, nil
+	return hits, nil
+}
+
+func (s *Store) VectorSearchHits(q []float32, k int, ns string) ([]VectorHit, error) {
+	return s.VectorSearchHitsAt(q, TimeQuery{NS: ns, Limit: k})
 }
 
 func (s *Store) filterActiveIDs(ids []string, tq TimeQuery) ([]string, error) {

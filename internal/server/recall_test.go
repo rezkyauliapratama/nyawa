@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -112,6 +113,36 @@ func TestHandleRecallAppliesFilters(t *testing.T) {
 	count, types = postRecall(t, srv, `{"query":"alpha project planning","namespace":"hermes","limit":1,"exclude_types":["decision"]}`)
 	if count != 1 || len(types) != 1 {
 		t.Fatalf("filter-before-limit count/types = %d %v, want 1 result", count, types)
+	}
+}
+
+func TestHandleRecallExposesRawFTS5RankScore(t *testing.T) {
+	srv := newRecallHTTPServer(t) // FTS5-only: vector raw score should be absent.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/recall", strings.NewReader(`{"query":"alpha project planning","namespace":"hermes","limit":5}`))
+	srv.handleRecall(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /v1/recall = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Results []struct {
+			VectorDistance *float64 `json:"VectorDistance"`
+			FTS5RankScore  *float64 `json:"FTS5RankScore"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	if len(payload.Results) == 0 {
+		t.Fatal("expected FTS5 candidates")
+	}
+	for i, result := range payload.Results {
+		if result.VectorDistance != nil {
+			t.Errorf("FTS5-only result %d unexpectedly has vector distance %v", i, *result.VectorDistance)
+		}
+		if result.FTS5RankScore == nil || math.IsNaN(*result.FTS5RankScore) || math.IsInf(*result.FTS5RankScore, 0) {
+			t.Errorf("result %d has no finite raw FTS5 rank score: %v", i, result.FTS5RankScore)
+		}
 	}
 }
 
