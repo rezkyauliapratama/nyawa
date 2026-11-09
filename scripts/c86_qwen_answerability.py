@@ -177,7 +177,7 @@ class QwenPilotTests(unittest.TestCase):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("self-test", "e2e"), required=True)
+    parser.add_argument("--mode", choices=("self-test", "calibration-only", "e2e"), required=True)
     parser.add_argument("--image", default=C86_IMAGE)
     parser.add_argument("--container", default="nyawa-c86-qwen-eval")
     parser.add_argument(
@@ -195,6 +195,7 @@ def main() -> int:
         report = calibration.run_e2e(
             args.container, args.image, args.fixtures,
             candidate_scorer=scorer, qwen_only=True, preflight_passed=True,
+            evaluate_holdout=args.mode == "e2e",
         )
         report.update({
             "answerability_model": MODEL_ID,
@@ -204,6 +205,8 @@ def main() -> int:
             "provider_called": False,
         })
         print(json.dumps(report, indent=2, sort_keys=True))
+        if args.mode == "calibration-only":
+            return 0 if report.get("calibration_policy_feasible", False) else 1
         return 0 if report["status"] == "PASS" else 1
     except Exception as error:
         print(f"C8.6 Qwen answerability pilot FAILED: {error}", file=sys.stderr)

@@ -883,13 +883,20 @@ def run_calibration_phases(
     retrieve_case: Any,
     qwen_only: bool = False,
     before_holdout: Any | None = None,
+    evaluate_holdout: bool = True,
 ) -> dict[str, Any]:
     """Query holdout only after the selected calibration policy passes its gates."""
     calibration_cases = [case for case in dataset["cases"] if case["split"] == "calibration"]
     calibration_results = [retrieve_case(case) for case in calibration_cases]
     calibration_report = summarize(dataset, calibration_results, qwen_only=qwen_only)
     selected = calibration_report["selected_policy"]
+    calibration_report["calibration_policy_feasible"] = selected is not None
     if selected is None:
+        if qwen_only and not evaluate_holdout:
+            calibration_report["status"] = "CALIBRATION_INFEASIBLE"
+        return calibration_report
+    if qwen_only and not evaluate_holdout:
+        calibration_report["status"] = "CALIBRATION_FEASIBLE"
         return calibration_report
     if qwen_only and (
         selected.get("signal") != "qwen_identifier_guard"
@@ -977,6 +984,7 @@ def run_e2e(
     candidate_scorer: Any | None = None,
     qwen_only: bool = False,
     preflight_passed: bool = False,
+    evaluate_holdout: bool = True,
 ) -> dict[str, Any]:
     dataset = load_dataset(fixture_path)
     if qwen_only and (dataset["schema_version"] != SCHEMA_C86 or candidate_scorer is None):
@@ -1106,6 +1114,7 @@ def run_e2e(
         report = run_calibration_phases(
             dataset, retrieve_case, qwen_only=qwen_only,
             before_holdout=insert_holdout_records if qwen_only else None,
+            evaluate_holdout=evaluate_holdout,
         )
         report.update({
             "image": image,
@@ -1733,6 +1742,15 @@ class C81CalibrationTests(unittest.TestCase):
 
         def before_holdout() -> None:
             events.append("holdout-insert")
+
+        calibration_only = run_calibration_phases(
+            dataset, retrieve, qwen_only=True, evaluate_holdout=False,
+        )
+        self.assertTrue(calibration_only["calibration_policy_feasible"])
+        self.assertEqual(calibration_only["status"], "CALIBRATION_FEASIBLE")
+        self.assertFalse(calibration_only["holdout_evaluated"])
+        self.assertEqual(events, ["calibration"] * 150)
+        events.clear()
 
         report = run_calibration_phases(
             dataset, retrieve, qwen_only=True, before_holdout=before_holdout,

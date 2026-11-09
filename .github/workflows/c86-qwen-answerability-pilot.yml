@@ -1,28 +1,21 @@
 name: C8.6 Qwen3 Answerability Calibration Pilot
 
 on:
-  pull_request:
-    paths:
-      - "scripts/c81_abstention_calibration.py"
-      - "scripts/c81_fixture_generator.py"
-      - "scripts/c83_fixture_generator.py"
-      - "scripts/c84_fixture_generator.py"
-      - "scripts/c85_fixture_generator.py"
-      - "scripts/c86_fixture_generator.py"
-      - "scripts/c86_qwen_answerability.py"
-      - "scripts/requirements-c86-qwen-ci.txt"
-      - "tests/fixtures/c86-abstention-calibration-fixtures.json"
-      - "docs/c8.6-qwen-answerability-pilot.md"
-      - ".github/workflows/c86-qwen-answerability-pilot.yml"
-      - ".github/workflows/bge-runtime-static.yml"
+  workflow_dispatch:
+    inputs:
+      evaluate_holdout:
+        description: "Evaluate the frozen holdout once after Qwen calibration passes all gates"
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
   packages: read
 
 concurrency:
-  group: c86-qwen-answerability-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: c86-qwen-answerability-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
 
 jobs:
   calibration:
@@ -34,6 +27,7 @@ jobs:
       HF_HUB_DISABLE_TELEMETRY: "1"
       HF_HUB_DISABLE_PROGRESS_BARS: "1"
       TOKENIZERS_PARALLELISM: "false"
+      QWEN_EVALUATE_HOLDOUT: ${{ inputs.evaluate_holdout }}
       C86_IMAGE: ghcr.io/rezkyauliapratama/nyawa/bge-runtime@sha256:57fb872aca5dd9bf24547d33d920787fb6fef73a8f6e63087f8e785fc27c2fea
       C86_CONTAINER: nyawa-c86-qwen-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -76,8 +70,10 @@ jobs:
 
       - name: Run local Qwen3 C8.6 pilot
         run: |
+          MODE=calibration-only
+          if [[ "$QWEN_EVALUATE_HOLDOUT" == "true" ]]; then MODE=e2e; fi
           python3 scripts/c86_qwen_answerability.py \
-            --mode e2e \
+            --mode "$MODE" \
             --image "$C86_IMAGE" \
             --container "$C86_CONTAINER" \
             --fixtures "$RUNNER_TEMP/c86-qwen-fixtures.json"
