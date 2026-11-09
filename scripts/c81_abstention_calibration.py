@@ -16,10 +16,11 @@ import unittest
 from pathlib import Path
 from typing import Any, TypeGuard
 
-from c81_fixture_generator import SCHEMA, SCHEMA_C83, SCHEMA_C84, SCHEMA_C85, build_dataset, validate_dataset
+from c81_fixture_generator import SCHEMA, SCHEMA_C83, SCHEMA_C84, SCHEMA_C85, SCHEMA_C86, build_dataset, validate_dataset
 from c83_fixture_generator import build_dataset as build_c83_dataset
 from c84_fixture_generator import build_dataset as build_c84_dataset
 from c85_fixture_generator import build_dataset as build_c85_dataset
+from c86_fixture_generator import build_dataset as build_c86_dataset
 
 IMAGE_C81 = (
     "ghcr.io/rezkyauliapratama/nyawa/bge-runtime@"
@@ -37,7 +38,8 @@ IMAGE_C85 = (
     "ghcr.io/rezkyauliapratama/nyawa/bge-runtime@"
     "sha256:57fb872aca5dd9bf24547d33d920787fb6fef73a8f6e63087f8e785fc27c2fea"
 )
-APPROVED_IMAGES = {SCHEMA: IMAGE_C81, SCHEMA_C83: IMAGE_C83, SCHEMA_C84: IMAGE_C84, SCHEMA_C85: IMAGE_C85}
+IMAGE_C86 = IMAGE_C85
+APPROVED_IMAGES = {SCHEMA: IMAGE_C81, SCHEMA_C83: IMAGE_C83, SCHEMA_C84: IMAGE_C84, SCHEMA_C85: IMAGE_C85, SCHEMA_C86: IMAGE_C86}
 IMAGE = IMAGE_C81
 LABEL_KEY = "org.nyawa.abstention-calibration"
 MEMORY_LIMIT = 4 * 1024**3
@@ -50,9 +52,12 @@ SIGNALS = (
 RAW_SIGNALS = ("vector_distance", "fts5_rank_score", "vector_distance_margin", "fts5_rank_score_margin")
 CROSS_ENCODER_SIGNALS = ("cross_encoder_score", "cross_encoder_margin")
 LEXICAL_STOPWORDS = frozenset(
-    "a an and are as at be by for from has have how in is it of on or the to was what when where which who why with did does do this that these those find give tell me fictional synthetic fixture marker c8 c81 c83 c84 c85 synth id dan yang apa berapa untuk dari pada ini itu adalah sebagai dengan bagaimana siapa kapan dimana mengapa antrean kebijakan mode berapa sebuah sebuahnya".split()
+    "a an and are as at be by for from has have how in is it of on or the to was what when where which who why with did does do this that these those find give tell me fictional synthetic fixture marker c8 c81 c83 c84 c85 c86 synth id dan yang apa berapa untuk dari pada ini itu adalah sebagai dengan bagaimana siapa kapan dimana mengapa antrean kebijakan mode berapa sebuah sebuahnya".split()
 )
-SYNTHETIC_ID = re.compile(r"SYNTH-C(?:81|83|84|85)-ID-[0-9]{4}", re.IGNORECASE)
+STRUCTURED_IDENTIFIER = re.compile(
+    r"(?<![A-Z0-9])(?=[A-Z0-9._/-]*[A-Z])(?=[A-Z0-9._/-]*[0-9])[A-Z0-9]+(?:[-_./][A-Z0-9]+)+(?![A-Z0-9])",
+    re.IGNORECASE,
+)
 
 HTTP_HELPER = r"""
 import json, sys, urllib.error, urllib.request
@@ -113,9 +118,16 @@ def _lexical_coverage(query: str, content: str) -> float:
     return len(query_tokens & _tokens(content)) / len(query_tokens)
 
 
-def _exact_synthetic_identifier_match(query: str, content: str) -> bool:
-    query_ids = {value.upper() for value in SYNTHETIC_ID.findall(query)}
-    return bool(query_ids & {value.upper() for value in SYNTHETIC_ID.findall(content)})
+def _structured_identifiers(text: str) -> set[str]:
+    return {
+        value.upper() for value in STRUCTURED_IDENTIFIER.findall(text)
+        if not re.fullmatch(r"C[0-9]+\.[0-9]+", value, re.IGNORECASE)
+    }
+
+
+def _exact_identifier_match(query: str, content: str) -> bool:
+    query_ids = _structured_identifiers(query)
+    return bool(query_ids) and query_ids.issubset(_structured_identifiers(content))
 
 
 def _margin(candidates: list[dict[str, Any]], field: str) -> float | None:
@@ -193,7 +205,7 @@ def score_case(
             "raw_modality_scores_numeric": bool(raw_score_values_numeric),
             "both_modalities": bool(modality_numeric and vector_rank > 0 and fts5_rank > 0),
             "lexical_coverage": _lexical_coverage(case["query"], content),
-            "exact_identifier_match": _exact_synthetic_identifier_match(case["query"], content),
+            "exact_identifier_match": _exact_identifier_match(case["query"], content),
             "type": str(item.get("Type", item.get("type", ""))),
             "relevant": bool(marker_hits),
             "forbidden_markers_found": forbidden_hits,
@@ -260,7 +272,17 @@ def evaluate_policy(
     for case in cases:
         row = by_id[case["case_id"]]
         candidates = row["candidates"]
-        if signal == "dual_raw_cross_encoder":
+        if signal == "identifier_guard_cross_encoder":
+            accepted = []
+            query_ids = _structured_identifiers(case.get("query", ""))
+            for candidate in candidates:
+                score = candidate.get("cross_encoder_score")
+                if threshold is None or isinstance(threshold, dict) or not _numeric(score) or score < threshold:
+                    continue
+                if query_ids and not candidate.get("exact_identifier_match", False):
+                    continue
+                accepted.append(candidate)
+        elif signal == "dual_raw_cross_encoder":
             accepted = []
             if isinstance(threshold, dict):
                 for candidate in candidates:
@@ -411,6 +433,8 @@ def passes_gates(metrics: dict[str, Any], gates: dict[str, Any]) -> bool:
 
 
 def threshold_values(rows: list[dict[str, Any]], signal: str) -> list[float]:
+    if signal == "identifier_guard_cross_encoder":
+        signal = "cross_encoder_score"
     if signal == "both_modalities":
         return [1.0] if any(row.get("modality_evidence_present") for row in rows) else []
     if signal == "exact_identifier_match":
@@ -680,7 +704,7 @@ def summarize(
     calibration_raw = evaluate_policy(calibration_cases, calibration_rows)["metrics"]
     if dataset["schema_version"] == SCHEMA_C84:
         signals = [*SIGNALS, *RAW_SIGNALS]
-    elif dataset["schema_version"] == SCHEMA_C85:
+    elif dataset["schema_version"] in (SCHEMA_C85, SCHEMA_C86):
         signals = [*SIGNALS, *RAW_SIGNALS, *CROSS_ENCODER_SIGNALS]
     else:
         signals = list(SIGNALS)
@@ -697,6 +721,13 @@ def summarize(
             calibrate_joint_signals(dataset, calibration_cases, calibration_rows)
             + calibrate_raw_joint_signals(dataset, calibration_cases, calibration_rows)
             + calibrate_cross_encoder_joint_signals(dataset, calibration_cases, calibration_rows)
+        )
+    elif dataset["schema_version"] == SCHEMA_C86:
+        joint_sweeps = (
+            calibrate_joint_signals(dataset, calibration_cases, calibration_rows)
+            + calibrate_raw_joint_signals(dataset, calibration_cases, calibration_rows)
+            + calibrate_cross_encoder_joint_signals(dataset, calibration_cases, calibration_rows)
+            + [calibrate_signal(dataset, calibration_cases, calibration_rows, "identifier_guard_cross_encoder")]
         )
     else:
         joint_sweeps = []
@@ -757,6 +788,8 @@ def summarize(
     status = "PASS" if selected and holdout_evaluated and holdout_pass and all_numeric and fixture_ids_mapped else "FAIL"
     if dataset["schema_version"] == SCHEMA_C85:
         protocol = "local cross-encoder calibration on C8.4's unopened holdout; holdout queried only after a feasible calibration policy"
+    elif dataset["schema_version"] == SCHEMA_C86:
+        protocol = "fresh identifier-aware C8.6 calibration; holdout queried only after a feasible calibration policy"
     elif dataset["schema_version"] == SCHEMA_C84:
         protocol = "calibration-only selection; holdout queried only after a feasible policy exists"
     else:
@@ -885,23 +918,23 @@ def run_e2e(container: str, image: str, fixture_path: Path) -> dict[str, Any]:
     image_info = json.loads(docker(["image", "inspect", image]).stdout)[0]
     if image not in image_info.get("RepoDigests", []):
         raise RuntimeError("pulled image digest does not match the pinned image")
-    if dataset["schema_version"] == SCHEMA_C85:
+    if dataset["schema_version"] in (SCHEMA_C85, SCHEMA_C86):
         labels = image_info.get("Config", {}).get("Labels") or {}
         if labels.get("io.nyawa.cross-encoder.enabled") != "true":
-            raise RuntimeError("pinned C8.5 image does not declare the local cross-encoder enabled")
+            raise RuntimeError("pinned cross-encoder image does not declare the local scorer enabled")
         expected_model = "Horizon-Labs/multilingual-reranker-small@23139fec6f1f448cdf89a5ac2d2c6bf5e8c7b398"
         if labels.get("io.nyawa.cross-encoder.model") != expected_model:
-            raise RuntimeError("pinned C8.5 image model label does not match the approved model revision")
+            raise RuntimeError("pinned cross-encoder image model label does not match the approved small-model revision")
     if docker(["inspect", container], timeout=15, check=False).returncode == 0:
         raise RuntimeError("container name already exists; refusing to replace it")
-    stage = {SCHEMA: "c81", SCHEMA_C83: "c83", SCHEMA_C84: "c84", SCHEMA_C85: "c85"}[dataset["schema_version"]]
+    stage = {SCHEMA: "c81", SCHEMA_C83: "c83", SCHEMA_C84: "c84", SCHEMA_C85: "c85", SCHEMA_C86: "c86"}[dataset["schema_version"]]
     db_path = f"/scratch/{stage}-abstention.db"
     container_env = [
         "--env", "MEMORY_EMBEDDER=local",
         "--env", "NYAWA_EMBED_MODEL_DIR=/opt/nyawa/model",
         "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp",
     ]
-    if dataset["schema_version"] == SCHEMA_C85:
+    if dataset["schema_version"] in (SCHEMA_C85, SCHEMA_C86):
         container_env.extend([
             "--env", "NYAWA_ENABLE_CROSS_ENCODER=1",
             "--env", "NYAWA_RERANKER_MODEL_DIR=/opt/nyawa/model/reranker",
@@ -1378,6 +1411,111 @@ class C81CalibrationTests(unittest.TestCase):
         self.assertTrue(report["holdout_gates_pass"])
         self.assertTrue(report["cross_encoder_scores_numeric"])
 
+    def test_c86_runtime_image_pin_uses_approved_r5_digest(self) -> None:
+        self.assertEqual(IMAGE_C86, IMAGE_C85)
+        self.assertEqual(APPROVED_IMAGES[SCHEMA_C86], IMAGE_C86)
+
+    def test_structured_identifier_parser_and_exact_match_are_format_agnostic(self) -> None:
+        identifiers = ("ERR-2026-1001", "DOC_A1002", "TKT/2026/1003", "POL.26.1004", "INV-BE-1005")
+        for identifier in identifiers:
+            with self.subTest(identifier=identifier):
+                self.assertEqual(_structured_identifiers(f"Look up {identifier}"), {identifier})
+                self.assertTrue(_exact_identifier_match(f"Look up {identifier}", f"Record {identifier.lower()} is present"))
+                self.assertFalse(_exact_identifier_match(f"Look up {identifier}", f"Record {identifier[:-1]}9 is present"))
+        self.assertFalse(_structured_identifiers("How many items were logged in 2026?"))
+        self.assertFalse(_structured_identifiers("Read the C8.6 calibration notes."))
+
+    def test_c86_fixture_is_fresh_larger_and_split_isolated(self) -> None:
+        dataset = build_c86_dataset()
+        validate_dataset(dataset)
+        self.assertEqual(dataset["schema_version"], SCHEMA_C86)
+        self.assertEqual(len(dataset["records"]), 164)
+        self.assertEqual(len(dataset["cases"]), 300)
+        old = [build_dataset(), build_c83_dataset(), build_c84_dataset(), build_c85_dataset()]
+        queries = {case["query"] for case in dataset["cases"]}
+        markers = {match for record in dataset["records"] for match in re.findall(r"Marker ([A-Z0-9_]+)", record["content"])}
+        for prior in old:
+            self.assertTrue(queries.isdisjoint({case["query"] for case in prior["cases"]}))
+            prior_markers = {match for record in prior["records"] for match in re.findall(r"Marker ([A-Z0-9_]+)", record["content"])}
+            self.assertTrue(markers.isdisjoint(prior_markers))
+        calibration_records = {record["fixture_id"] for record in dataset["records"] if record["split"] == "calibration"}
+        holdout_records = {record["fixture_id"] for record in dataset["records"] if record["split"] == "holdout"}
+        self.assertTrue(calibration_records.isdisjoint(holdout_records))
+        calibration_ids = {token for case in dataset["cases"] if case["split"] == "calibration" for token in _structured_identifiers(case["query"])}
+        holdout_ids = {token for case in dataset["cases"] if case["split"] == "holdout" for token in _structured_identifiers(case["query"])}
+        self.assertTrue(calibration_ids.isdisjoint(holdout_ids))
+        calibration_content = {record["content"] for record in dataset["records"] if record["split"] == "calibration"}
+        holdout_content = {record["content"] for record in dataset["records"] if record["split"] == "holdout"}
+        self.assertTrue(calibration_content.isdisjoint(holdout_content))
+        for split in ("calibration", "holdout"):
+            split_cases = [case for case in dataset["cases"] if case["split"] == split]
+            self.assertEqual(sum(case["answerable"] for case in split_cases), 50)
+            self.assertEqual(sum(not case["answerable"] for case in split_cases), 100)
+
+    def test_identifier_guard_calibrates_on_calibration_only(self) -> None:
+        dataset = build_c86_dataset()
+        calibration_cases = [case for case in dataset["cases"] if case["split"] == "calibration"]
+        content_by_marker = {
+            marker: record["content"]
+            for record in dataset["records"]
+            for marker in re.findall(r"Marker ([A-Z0-9_]+)", record["content"])
+        }
+        rows = []
+        for case in calibration_cases:
+            query_ids = _structured_identifiers(case["query"])
+            if case["answerable"]:
+                content = content_by_marker[case["relevant_markers"][0]]
+                exact = _exact_identifier_match(case["query"], content)
+                score, relevant = 2.0, True
+            else:
+                exact = False
+                score, relevant = (4.0, False) if query_ids else (0.5, False)
+            candidate = {
+                "score": 0.9, "rrf_score": 0.8, "cross_encoder_score": score,
+                "vector_rank": 1, "fts5_rank": 1, "vector_distance": 0.1,
+                "fts5_rank_score": -0.5, "modality_evidence_present": True,
+                "raw_modality_score_present": True, "raw_modality_scores_numeric": True,
+                "both_modalities": True, "exact_identifier_match": exact,
+                "lexical_coverage": 0.7, "type": "fact", "relevant": relevant,
+                "forbidden_markers_found": [],
+            }
+            rows.append({
+                "case_id": case["case_id"], "scores_numeric": True,
+                "modality_ranks_numeric": True, "modality_evidence_present": True,
+                "raw_modality_scores_available": True, "raw_modality_scores_numeric": True,
+                "cross_encoder_scores_numeric": True, "result_count": 1, "candidates": [candidate],
+                "final_margin": 0.1, "rrf_margin": 0.1, "lexical_margin": 0.1,
+                "vector_distance_margin": 0.1, "fts5_rank_score_margin": 0.1,
+                "cross_encoder_margin": score, "latency_ms": 1.0,
+                "candidate_chars": 24, "estimated_candidate_tokens": 5,
+                "fixture_ids_mapped": True,
+            })
+        sweep = calibrate_signal(dataset, calibration_cases, rows, "identifier_guard_cross_encoder")
+        self.assertIsNotNone(sweep["best_feasible"])
+        self.assertTrue(passes_gates(sweep["best_feasible"], dataset["gates"]))
+        report = summarize(dataset, rows)
+        self.assertIsNotNone(report["selected_policy"])
+        self.assertFalse(report["holdout_evaluated"])
+
+    def test_identifier_guard_filters_near_ids_but_keeps_natural_language_policy(self) -> None:
+        cases = [
+            {"case_id": "P-ID", "query": "Find ERR-2026-1001", "answerable": True, "category": "exact_identifier"},
+            {"case_id": "P-NL", "query": "What mode does the ember relay use?", "answerable": True, "category": "semantic_paraphrase"},
+            {"case_id": "N-ID", "query": "Resolve ERR-2026-1021", "answerable": False, "category": "negative_query"},
+            {"case_id": "N-NL", "query": "Who approved the orbital warranty?", "answerable": False, "category": "negative_query"},
+        ]
+        rows = [
+            {"case_id": "P-ID", "candidates": [{"cross_encoder_score": 2.0, "exact_identifier_match": True, "relevant": True, "forbidden_markers_found": []}]},
+            {"case_id": "P-NL", "candidates": [{"cross_encoder_score": 2.0, "exact_identifier_match": False, "relevant": True, "forbidden_markers_found": []}]},
+            {"case_id": "N-ID", "candidates": [{"cross_encoder_score": 3.0, "exact_identifier_match": False, "relevant": False, "forbidden_markers_found": []}]},
+            {"case_id": "N-NL", "candidates": [{"cross_encoder_score": 3.0, "exact_identifier_match": False, "relevant": False, "forbidden_markers_found": []}]},
+        ]
+        accepted = dict((case["case_id"], items) for case, items in evaluate_policy(cases, rows, "identifier_guard_cross_encoder", 1.5)["accepted_case_rows"])
+        self.assertEqual(len(accepted["P-ID"]), 1)
+        self.assertEqual(len(accepted["P-NL"]), 1)
+        self.assertEqual(len(accepted["N-ID"]), 0)
+        self.assertEqual(len(accepted["N-NL"]), 1)
+
     def test_c85_cross_encoder_gate_fails_closed_when_missing(self) -> None:
         gates = {
             "positive_recall_at_k_min": 0.9, "exact_identifier_recall_min": 1.0,
@@ -1460,11 +1598,25 @@ def main() -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
         summary = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary:
-            stage = {SCHEMA: "C8.1", SCHEMA_C83: "C8.3", SCHEMA_C84: "C8.4", SCHEMA_C85: "C8.5"}[report["schema_version"]]
+            stage = {SCHEMA: "C8.1", SCHEMA_C83: "C8.3", SCHEMA_C84: "C8.4", SCHEMA_C85: "C8.5", SCHEMA_C86: "C8.6"}[report["schema_version"]]
+            summary_report = report
+            if report["schema_version"] == SCHEMA_C86:
+                summary_keys = (
+                    "status", "schema_version", "protocol", "gates", "raw_retrieval",
+                    "threshold_sweeps", "joint_threshold_sweeps", "selected_policy",
+                    "holdout_evaluated", "holdout_policy_metrics", "holdout_gates_pass",
+                    "numeric_score_and_rrf_fields", "fixture_ids_mapped",
+                    "modality_evidence_available", "modality_ranks_numeric",
+                    "raw_modality_scores_available", "raw_modality_scores_numeric",
+                    "cross_encoder_scores_numeric", "source_counts", "latency_median_ms",
+                    "latency_p95_ms", "candidate_chars_total", "estimated_candidate_tokens_total",
+                    "queries_run", "synthetic_records_inserted", "vector_indexed", "result_limit_k",
+                )
+                summary_report = {key: report[key] for key in summary_keys if key in report}
             with open(summary, "a", encoding="utf-8") as stream:
                 stream.write(f"## {stage} Abstention Calibration\n\n```json\n")
-                stream.write(json.dumps(report, indent=2, sort_keys=True))
-                stream.write("\n```\n\nSynthetic-only; calibration selects policy, holdout remains frozen. No provider/Hermes call or context injection.\n")
+                stream.write(json.dumps(summary_report, indent=2, sort_keys=True))
+                stream.write("\n```\n\nSynthetic-only; calibration selects policy, holdout is evaluated only after a feasible calibration policy. No provider/Hermes call or context injection.\n")
         return 0 if report["status"] == "PASS" else 1
     except Exception as error:
         print(f"abstention evaluation FAILED: {error}", file=sys.stderr)
