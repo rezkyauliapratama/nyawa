@@ -16,9 +16,10 @@ import unittest
 from pathlib import Path
 from typing import Any, TypeGuard
 
-from c81_fixture_generator import SCHEMA, SCHEMA_C83, SCHEMA_C84, build_dataset, validate_dataset
+from c81_fixture_generator import SCHEMA, SCHEMA_C83, SCHEMA_C84, SCHEMA_C85, build_dataset, validate_dataset
 from c83_fixture_generator import build_dataset as build_c83_dataset
 from c84_fixture_generator import build_dataset as build_c84_dataset
+from c85_fixture_generator import build_dataset as build_c85_dataset
 
 IMAGE_C81 = (
     "ghcr.io/rezkyauliapratama/nyawa/bge-runtime@"
@@ -43,10 +44,11 @@ SIGNALS = (
     "vector_rank", "fts5_rank", "both_modalities", "exact_identifier_match",
 )
 RAW_SIGNALS = ("vector_distance", "fts5_rank_score", "vector_distance_margin", "fts5_rank_score_margin")
+CROSS_ENCODER_SIGNALS = ("cross_encoder_score", "cross_encoder_margin")
 LEXICAL_STOPWORDS = frozenset(
-    "a an and are as at be by for from has have how in is it of on or the to was what when where which who why with did does do this that these those find give tell me fictional synthetic fixture marker c8 c81 c83 c84 synth id dan yang apa berapa untuk dari pada ini itu adalah sebagai dengan bagaimana siapa kapan dimana mengapa antrean kebijakan mode berapa sebuah sebuahnya".split()
+    "a an and are as at be by for from has have how in is it of on or the to was what when where which who why with did does do this that these those find give tell me fictional synthetic fixture marker c8 c81 c83 c84 c85 synth id dan yang apa berapa untuk dari pada ini itu adalah sebagai dengan bagaimana siapa kapan dimana mengapa antrean kebijakan mode berapa sebuah sebuahnya".split()
 )
-SYNTHETIC_ID = re.compile(r"SYNTH-C(?:81|83|84)-ID-[0-9]{4}", re.IGNORECASE)
+SYNTHETIC_ID = re.compile(r"SYNTH-C(?:81|83|84|85)-ID-[0-9]{4}", re.IGNORECASE)
 
 HTTP_HELPER = r"""
 import json, sys, urllib.error, urllib.request
@@ -150,6 +152,7 @@ def score_case(
         fts5_rank = _field(item, "FTS5Rank", "fts5_rank")
         vector_distance = _field(item, "VectorDistance", "vector_distance")
         fts5_rank_score = _field(item, "FTS5RankScore", "fts5_rank_score")
+        cross_encoder_score = _field(item, "CrossEncoderScore", "cross_encoder_score")
         numeric = numeric and _numeric(score) and _numeric(rrf_score)
         modality_numeric = (
             isinstance(vector_rank, int) and not isinstance(vector_rank, bool) and vector_rank >= 0
@@ -179,6 +182,8 @@ def score_case(
             "fts5_rank": int(fts5_rank) if modality_numeric else None,
             "vector_distance": float(vector_distance) if _numeric(vector_distance) else None,
             "fts5_rank_score": float(fts5_rank_score) if _numeric(fts5_rank_score) else None,
+            "cross_encoder_score": float(cross_encoder_score) if _numeric(cross_encoder_score) else None,
+            "cross_encoder_score_numeric": _numeric(cross_encoder_score),
             "modality_evidence_present": modality_numeric,
             "raw_modality_score_present": bool(raw_score_available),
             "raw_modality_scores_numeric": bool(raw_score_values_numeric),
@@ -216,6 +221,7 @@ def score_case(
         "modality_evidence_present": bool(candidates) and all(candidate["modality_evidence_present"] for candidate in candidates),
         "raw_modality_scores_available": bool(scored_candidates) and all(candidate["raw_modality_score_present"] for candidate in scored_candidates),
         "raw_modality_scores_numeric": bool(scored_candidates) and all(candidate["raw_modality_scores_numeric"] for candidate in scored_candidates),
+        "cross_encoder_scores_numeric": bool(candidates) and all(candidate["cross_encoder_score_numeric"] for candidate in candidates),
         "fixture_ids_mapped": all(candidate["fixture_id"] != "unknown-fixture" for candidate in candidates),
         "latency_ms": round(float(latency_ms), 2),
         "candidate_chars": chars,
@@ -225,6 +231,7 @@ def score_case(
         "lexical_margin": _margin(candidates, "lexical_coverage"),
         "vector_distance_margin": _lower_better_margin(candidates, "vector_distance"),
         "fts5_rank_score_margin": _lower_better_margin(candidates, "fts5_rank_score"),
+        "cross_encoder_margin": _margin(candidates, "cross_encoder_score"),
         "forbidden_markers_found": forbidden_hits,
         "candidates": candidates,
     }
@@ -249,7 +256,26 @@ def evaluate_policy(
     for case in cases:
         row = by_id[case["case_id"]]
         candidates = row["candidates"]
-        if signal in ("dual_raw", "dual_raw_score", "dual_raw_rrf", "dual_raw_lexical"):
+        if signal == "dual_raw_cross_encoder":
+            accepted = []
+            if isinstance(threshold, dict):
+                for candidate in candidates:
+                    vector_distance, fts5_rank_score = candidate.get("vector_distance"), candidate.get("fts5_rank_score")
+                    cross_score = candidate.get("cross_encoder_score")
+                    if not (_numeric(vector_distance) and _numeric(fts5_rank_score) and _numeric(cross_score)):
+                        continue
+                    if vector_distance > threshold["vector_distance_max"] or fts5_rank_score > threshold["fts5_rank_score_max"] or cross_score < threshold["cross_encoder_min"]:
+                        continue
+                    accepted.append(candidate)
+        elif signal in ("cross_encoder_score_rrf", "cross_encoder_score_lexical"):
+            accepted = []
+            if isinstance(threshold, dict):
+                secondary = "rrf_score" if signal == "cross_encoder_score_rrf" else "lexical_coverage"
+                for candidate in candidates:
+                    cross_score, other_score = candidate.get("cross_encoder_score"), candidate.get(secondary)
+                    if _numeric(cross_score) and _numeric(other_score) and cross_score >= threshold["cross_encoder_min"] and other_score >= threshold[f"{secondary}_min"]:
+                        accepted.append(candidate)
+        elif signal in ("dual_raw", "dual_raw_score", "dual_raw_rrf", "dual_raw_lexical"):
             accepted = []
             if isinstance(threshold, dict):
                 for candidate in candidates:
@@ -279,7 +305,7 @@ def evaluate_policy(
                         if minimum is None or not _numeric(value) or value < minimum:
                             continue
                     accepted.append(candidate)
-        elif signal in ("final_margin", "rrf_margin", "lexical_margin", "vector_distance_margin", "fts5_rank_score_margin"):
+        elif signal in ("final_margin", "rrf_margin", "lexical_margin", "vector_distance_margin", "fts5_rank_score_margin", "cross_encoder_margin"):
             margin = row.get(signal)
             accepted = candidates if threshold is not None and not isinstance(threshold, dict) and _numeric(margin) and margin >= threshold else []
         elif signal in ("vector_distance", "fts5_rank_score"):
@@ -333,6 +359,7 @@ def evaluate_policy(
     modality_ranks_numeric = bool(rows_with_candidates) and all(row.get("modality_ranks_numeric", False) for row in rows_with_candidates)
     raw_modality_scores_available = bool(rows_with_candidates) and all(row.get("raw_modality_scores_available", False) for row in rows_with_candidates)
     raw_modality_scores_numeric = bool(rows_with_candidates) and all(row.get("raw_modality_scores_numeric", False) for row in rows_with_candidates)
+    cross_encoder_scores_numeric = bool(rows_with_candidates) and all(row.get("cross_encoder_scores_numeric", False) for row in rows_with_candidates)
     metrics = {
         "positive_queries": len(positives),
         "negative_queries": len(negatives),
@@ -352,6 +379,7 @@ def evaluate_policy(
         "modality_ranks_numeric": modality_ranks_numeric,
         "raw_modality_scores_available": raw_modality_scores_available,
         "raw_modality_scores_numeric": raw_modality_scores_numeric,
+        "cross_encoder_scores_numeric": cross_encoder_scores_numeric,
     }
     return {"metrics": metrics, "accepted_case_rows": accepted_case_rows}
 
@@ -371,6 +399,10 @@ def passes_gates(metrics: dict[str, Any], gates: dict[str, Any]) -> bool:
             not gates.get("require_raw_modality_scores", False)
             or (metrics["raw_modality_scores_available"] and metrics["raw_modality_scores_numeric"])
         )
+        and (
+            not gates.get("require_cross_encoder_scores", False)
+            or metrics["cross_encoder_scores_numeric"]
+        )
     )
 
 
@@ -380,7 +412,7 @@ def threshold_values(rows: list[dict[str, Any]], signal: str) -> list[float]:
     if signal == "exact_identifier_match":
         return [1.0]
     values: set[float] = set()
-    row_signals = ("final_margin", "rrf_margin", "lexical_margin", "vector_distance_margin", "fts5_rank_score_margin")
+    row_signals = ("final_margin", "rrf_margin", "lexical_margin", "vector_distance_margin", "fts5_rank_score_margin", "cross_encoder_margin")
     if signal in row_signals:
         for row in rows:
             value = row.get(signal)
@@ -575,6 +607,60 @@ def calibrate_raw_joint_signals(
     return results
 
 
+def calibrate_cross_encoder_joint_signals(
+    dataset: dict[str, Any],
+    cases: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Sweep cross-encoder cutoffs and selected conjunctions on calibration only."""
+    values: dict[str, set[float]] = {
+        "cross_encoder_score": set(), "score": set(), "rrf_score": set(),
+        "lexical_coverage": set(), "vector_distance": set(), "fts5_rank_score": set(),
+    }
+    for row in rows:
+        for candidate in row["candidates"]:
+            for field, found in values.items():
+                value = candidate.get(field)
+                if _numeric(value):
+                    found.add(float(value))
+    cross_thresholds = _sample_thresholds(values["cross_encoder_score"])
+    rule_specs: list[tuple[str, list[dict[str, float]]]] = []
+    for signal, field in (
+        ("cross_encoder_score_rrf", "rrf_score"),
+        ("cross_encoder_score_lexical", "lexical_coverage"),
+    ):
+        rule_specs.append((signal, [
+            {"cross_encoder_min": cross, f"{field}_min": other}
+            for cross in cross_thresholds for other in _sample_thresholds(values[field])
+        ]))
+    raw_pairs = [
+        (distance, rank_score)
+        for distance in _sample_thresholds(values["vector_distance"])
+        for rank_score in _sample_thresholds(values["fts5_rank_score"])
+    ]
+    rule_specs.append(("dual_raw_cross_encoder", [
+        {"vector_distance_max": distance, "fts5_rank_score_max": rank_score, "cross_encoder_min": cross}
+        for distance, rank_score in raw_pairs for cross in cross_thresholds
+    ]))
+
+    results: list[dict[str, Any]] = []
+    gates = dataset["gates"]
+    for signal, thresholds in rule_specs:
+        points = []
+        for params in thresholds:
+            metrics = evaluate_policy(cases, rows, signal, params)["metrics"]
+            points.append({"threshold": params, **metrics, "feasible": passes_gates(metrics, gates)})
+        feasible = [point for point in points if point["feasible"]]
+        results.append({
+            "signal": signal,
+            "thresholds_evaluated": len(points),
+            "feasible_threshold_count": len(feasible),
+            "best_feasible": max(feasible, key=lambda p: (p["positive_recall_at_k"], p["accepted_precision"], -p["negative_false_positive_rate"]), default=None),
+            "best_recall_tradeoff": max(points, key=lambda p: (p["positive_recall_at_k"], p["exact_identifier_recall"], -p["negative_false_positive_rate"], p["accepted_precision"]), default=None),
+        })
+    return results
+
+
 def summarize(
     dataset: dict[str, Any],
     calibration_case_results: list[dict[str, Any]],
@@ -588,7 +674,12 @@ def summarize(
         raise ValueError("calibration result set is incomplete")
     calibration_rows = [calibration_by_id[case["case_id"]] for case in calibration_cases]
     calibration_raw = evaluate_policy(calibration_cases, calibration_rows)["metrics"]
-    signals = [*SIGNALS, *RAW_SIGNALS] if dataset["schema_version"] == SCHEMA_C84 else SIGNALS
+    if dataset["schema_version"] == SCHEMA_C84:
+        signals = [*SIGNALS, *RAW_SIGNALS]
+    elif dataset["schema_version"] == SCHEMA_C85:
+        signals = [*SIGNALS, *RAW_SIGNALS, *CROSS_ENCODER_SIGNALS]
+    else:
+        signals = list(SIGNALS)
     sweeps = [calibrate_signal(dataset, calibration_cases, calibration_rows, signal) for signal in signals]
     if dataset["schema_version"] == SCHEMA_C83:
         joint_sweeps = calibrate_joint_signals(dataset, calibration_cases, calibration_rows)
@@ -596,6 +687,12 @@ def summarize(
         joint_sweeps = (
             calibrate_joint_signals(dataset, calibration_cases, calibration_rows)
             + calibrate_raw_joint_signals(dataset, calibration_cases, calibration_rows)
+        )
+    elif dataset["schema_version"] == SCHEMA_C85:
+        joint_sweeps = (
+            calibrate_joint_signals(dataset, calibration_cases, calibration_rows)
+            + calibrate_raw_joint_signals(dataset, calibration_cases, calibration_rows)
+            + calibrate_cross_encoder_joint_signals(dataset, calibration_cases, calibration_rows)
         )
     else:
         joint_sweeps = []
@@ -645,6 +742,7 @@ def summarize(
     modality_ranks_numeric = bool(candidate_rows) and all(row.get("modality_ranks_numeric", False) for row in candidate_rows)
     raw_modality_scores_available = bool(candidate_rows) and all(row.get("raw_modality_scores_available", False) for row in candidate_rows)
     raw_modality_scores_numeric = bool(candidate_rows) and all(row.get("raw_modality_scores_numeric", False) for row in candidate_rows)
+    cross_encoder_scores_numeric = bool(candidate_rows) and all(row.get("cross_encoder_scores_numeric", False) for row in candidate_rows)
     source_counts = {"vector_only": 0, "fts5_only": 0, "both": 0, "neither": 0}
     if modality_evidence_available:
         for candidate in returned_candidates:
@@ -653,11 +751,12 @@ def summarize(
             key = "both" if vector_hit and fts5_hit else "vector_only" if vector_hit else "fts5_only" if fts5_hit else "neither"
             source_counts[key] += 1
     status = "PASS" if selected and holdout_evaluated and holdout_pass and all_numeric and fixture_ids_mapped else "FAIL"
-    protocol = (
-        "calibration-only selection; holdout queried only after a feasible policy exists"
-        if dataset["schema_version"] == SCHEMA_C84
-        else "calibration-only univariate and joint threshold selection; holdout queried only after selection"
-    )
+    if dataset["schema_version"] == SCHEMA_C85:
+        protocol = "local cross-encoder calibration on C8.4's unopened holdout; holdout queried only after a feasible calibration policy"
+    elif dataset["schema_version"] == SCHEMA_C84:
+        protocol = "calibration-only selection; holdout queried only after a feasible policy exists"
+    else:
+        protocol = "calibration-only univariate and joint threshold selection; holdout queried only after selection"
     latencies = sorted(row["latency_ms"] for row in observed_results)
     p95_index = max(0, math.ceil(0.95 * len(latencies)) - 1) if latencies else 0
     return {
@@ -678,6 +777,7 @@ def summarize(
         "modality_ranks_numeric": modality_ranks_numeric,
         "raw_modality_scores_available": raw_modality_scores_available,
         "raw_modality_scores_numeric": raw_modality_scores_numeric,
+        "cross_encoder_scores_numeric": cross_encoder_scores_numeric,
         "source_counts": source_counts,
         "latency_median_ms": round(statistics.median(latencies), 2) if latencies else 0.0,
         "latency_p95_ms": round(latencies[p95_index], 2) if latencies else 0.0,
@@ -783,8 +883,18 @@ def run_e2e(container: str, image: str, fixture_path: Path) -> dict[str, Any]:
         raise RuntimeError("pulled image digest does not match the pinned image")
     if docker(["inspect", container], timeout=15, check=False).returncode == 0:
         raise RuntimeError("container name already exists; refusing to replace it")
-    stage = {SCHEMA: "c81", SCHEMA_C83: "c83", SCHEMA_C84: "c84"}[dataset["schema_version"]]
+    stage = {SCHEMA: "c81", SCHEMA_C83: "c83", SCHEMA_C84: "c84", SCHEMA_C85: "c85"}[dataset["schema_version"]]
     db_path = f"/scratch/{stage}-abstention.db"
+    container_env = [
+        "--env", "MEMORY_EMBEDDER=local",
+        "--env", "NYAWA_EMBED_MODEL_DIR=/opt/nyawa/model",
+        "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp",
+    ]
+    if dataset["schema_version"] == SCHEMA_C85:
+        container_env.extend([
+            "--env", "NYAWA_ENABLE_CROSS_ENCODER=1",
+            "--env", "NYAWA_RERANKER_MODEL_DIR=/opt/nyawa/model/reranker",
+        ])
     try:
         docker([
             "run", "--detach", "--name", container,
@@ -794,9 +904,7 @@ def run_e2e(container: str, image: str, fixture_path: Path) -> dict[str, Any]:
             "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m",
             "--memory=4g", "--memory-swap=4g", "--cpus=2", "--pids-limit=128",
             "--restart=no", "--cap-drop=ALL", "--security-opt=no-new-privileges:true",
-            "--env", "MEMORY_EMBEDDER=local",
-            "--env", "NYAWA_EMBED_MODEL_DIR=/opt/nyawa/model",
-            "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp",
+            *container_env,
             image, "serve", db_path,
         ], timeout=60)
         verify_container(container, image)
@@ -1203,6 +1311,68 @@ class C81CalibrationTests(unittest.TestCase):
         self.assertTrue(report["raw_modality_scores_available"])
         self.assertTrue(report["raw_modality_scores_numeric"])
 
+    def test_c85_rekeys_only_the_unopened_c84_fixture_for_cross_encoder(self) -> None:
+        c84, c85 = build_c84_dataset(), build_c85_dataset()
+        validate_dataset(c85)
+        self.assertEqual(c85["schema_version"], SCHEMA_C85)
+        self.assertTrue(c85["gates"]["require_cross_encoder_scores"])
+        self.assertEqual(len(c85["records"]), 90)
+        self.assertEqual(len(c85["cases"]), 120)
+        self.assertTrue(all(record["namespace"].startswith("c85-synthetic-") for record in c85["records"]))
+        self.assertTrue(all("Synthetic C8.5 fixture." in record["content"] for record in c85["records"]))
+        self.assertTrue(all("C84" not in case["case_id"] for case in c85["cases"]))
+        self.assertEqual(
+            sum(case["split"] == "holdout" for case in c84["cases"]),
+            sum(case["split"] == "holdout" for case in c85["cases"]),
+        )
+
+    def test_c85_cross_encoder_policy_requires_numeric_scores_and_can_gate_holdout(self) -> None:
+        dataset = build_c85_dataset()
+        calibration_rows, holdout_rows = [], []
+        for case in dataset["cases"]:
+            score = 3.0 if case["answerable"] else -3.0
+            candidate = {
+                "fixture_id": f"C85_{case['case_id']}", "rank": 1,
+                "score": 0.8, "rrf_score": 0.7, "vector_rank": 1, "fts5_rank": 1,
+                "vector_distance": 0.2, "fts5_rank_score": -0.4,
+                "cross_encoder_score": score, "cross_encoder_score_numeric": True,
+                "modality_evidence_present": True, "raw_modality_score_present": True,
+                "raw_modality_scores_numeric": True, "both_modalities": True,
+                "exact_identifier_match": case["category"] == "exact_identifier",
+                "lexical_coverage": 0.8 if case["answerable"] else 0.2,
+                "type": "fact", "relevant": case["answerable"], "forbidden_markers_found": [],
+            }
+            row = {
+                "case_id": case["case_id"], "scores_numeric": True,
+                "modality_ranks_numeric": True, "modality_evidence_present": True,
+                "raw_modality_scores_available": True, "raw_modality_scores_numeric": True,
+                "cross_encoder_scores_numeric": True, "result_count": 1, "candidates": [candidate],
+                "final_margin": 0.1, "rrf_margin": 0.1, "lexical_margin": 0.1,
+                "vector_distance_margin": 0.1, "fts5_rank_score_margin": 0.1,
+                "cross_encoder_margin": 6.0, "latency_ms": 1.0,
+                "candidate_chars": 10, "estimated_candidate_tokens": 3,
+                "fixture_ids_mapped": True,
+            }
+            (calibration_rows if case["split"] == "calibration" else holdout_rows).append(row)
+        report = summarize(dataset, calibration_rows, holdout_rows)
+        self.assertIsNotNone(report["selected_policy"])
+        self.assertTrue(report["holdout_evaluated"])
+        self.assertTrue(report["holdout_gates_pass"])
+        self.assertTrue(report["cross_encoder_scores_numeric"])
+
+    def test_c85_cross_encoder_gate_fails_closed_when_missing(self) -> None:
+        gates = {
+            "positive_recall_at_k_min": 0.9, "exact_identifier_recall_min": 1.0,
+            "negative_false_positive_rate_max": 0.05, "namespace_leaks_max": 0,
+            "forbidden_marker_leaks_max": 0, "require_cross_encoder_scores": True,
+        }
+        metrics = {
+            "positive_recall_at_k": 1.0, "exact_identifier_recall": 1.0,
+            "negative_false_positive_rate": 0.0, "namespace_leaks": 0,
+            "forbidden_marker_leaks": 0, "cross_encoder_scores_numeric": False,
+        }
+        self.assertFalse(passes_gates(metrics, gates))
+
     def test_frozen_holdout_passes_only_after_calibration_selected_rule(self) -> None:
         dataset = build_dataset()
         rows = []
@@ -1272,7 +1442,7 @@ def main() -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
         summary = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary:
-            stage = {SCHEMA: "C8.1", SCHEMA_C83: "C8.3", SCHEMA_C84: "C8.4"}[report["schema_version"]]
+            stage = {SCHEMA: "C8.1", SCHEMA_C83: "C8.3", SCHEMA_C84: "C8.4", SCHEMA_C85: "C8.5"}[report["schema_version"]]
             with open(summary, "a", encoding="utf-8") as stream:
                 stream.write(f"## {stage} Abstention Calibration\n\n```json\n")
                 stream.write(json.dumps(report, indent=2, sort_keys=True))

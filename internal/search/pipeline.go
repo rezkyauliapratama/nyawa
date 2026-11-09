@@ -17,14 +17,19 @@ import (
 )
 
 type Pipeline struct {
-	store      StoreReader
-	embedder   *embedder.PriorityChain
-	rrf        *RRF
-	post       *PostProcessor
-	cache      *Cache
-	resultPool *pool.ResultPool
-	slicePool  *pool.ResultSlicePool
-	queryPool  sync.Pool
+	store              StoreReader
+	embedder           *embedder.PriorityChain
+	rrf                *RRF
+	post               *PostProcessor
+	cache              *Cache
+	resultPool         *pool.ResultPool
+	slicePool          *pool.ResultSlicePool
+	queryPool          sync.Pool
+	confidenceScorer   CandidateConfidenceScorer
+}
+
+type CandidateConfidenceScorer interface {
+	Rerank(query string, candidates []string) ([]float64, error)
 }
 
 type StoreReader interface {
@@ -48,6 +53,10 @@ type ModalityScoreReader interface {
 }
 
 func NewPipeline(store StoreReader, emb *embedder.PriorityChain, cfg types.SearchConfig) *Pipeline {
+	return NewPipelineWithConfidenceScorer(store, emb, cfg, nil)
+}
+
+func NewPipelineWithConfidenceScorer(store StoreReader, emb *embedder.PriorityChain, cfg types.SearchConfig, scorer CandidateConfidenceScorer) *Pipeline {
 	rp := pool.NewResultPool(64)
 	w := WeightsFromConfig(cfg)
 	return &Pipeline{
@@ -56,6 +65,7 @@ func NewPipeline(store StoreReader, emb *embedder.PriorityChain, cfg types.Searc
 		post: NewPostProcessorWithWeights(w, rp),
 		cache: NewCache(256, 5*time.Minute),
 		resultPool: rp, slicePool: pool.NewResultSlicePool(),
+		confidenceScorer: scorer,
 	}
 }
 
@@ -164,6 +174,30 @@ func (p *Pipeline) Search(q types.StoreQuery) ([]*types.MemoryResult, error) {
 	results = p.applyFilters(q, results)
 	if len(results) > limit {
 		results = results[:limit]
+	}
+
+	if p.confidenceScorer != nil && len(results) > 0 {
+		candidates := make([]string, len(results))
+		for i, result := range results {
+			candidates[i] = result.Content
+		}
+		scores, err := p.confidenceScorer.Rerank(q.QueryText, candidates)
+		if err != nil {
+			p.ReleaseResults(results)
+			return nil, fmt.Errorf("cross-encoder confidence scoring: %w", err)
+		}
+		if len(scores) != len(results) {
+			p.ReleaseResults(results)
+			return nil, fmt.Errorf("cross-encoder returned %d scores for %d candidates", len(scores), len(results))
+		}
+		for i, score := range scores {
+			if math.IsNaN(score) || math.IsInf(score, 0) {
+				p.ReleaseResults(results)
+				return nil, fmt.Errorf("cross-encoder returned non-finite score for candidate %d", i)
+			}
+			value := score
+			results[i].CrossEncoderScore = &value
+		}
 	}
 
 	p.cache.Set(cacheKey, cloneResults(results))
