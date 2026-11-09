@@ -61,7 +61,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      HF_HOME: ${{ runner.temp }}/hf-cache
       HF_HUB_DISABLE_TELEMETRY: "1"
       HF_HUB_DISABLE_PROGRESS_BARS: "1"
       TOKENIZERS_PARALLELISM: "false"
@@ -85,6 +84,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Generate calibration fixture and run Qwen-only pilot
+        env:
+          HF_HOME: ${{ runner.temp }}/hf-cache
         run: |
           FIXTURE="$RUNNER_TEMP/c86-qwen-calibration-fixtures.json"
           python3 scripts/c86_fixture_generator.py --output "$FIXTURE"

@@ -23,7 +23,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      HF_HOME: ${{ runner.temp }}/hf-cache
       HF_HUB_DISABLE_TELEMETRY: "1"
       HF_HUB_DISABLE_PROGRESS_BARS: "1"
       TOKENIZERS_PARALLELISM: "false"
@@ -69,6 +68,8 @@ jobs:
         run: python3 scripts/c81_abstention_calibration.py --mode preflight
 
       - name: Run local Qwen3 C8.6 pilot
+        env:
+          HF_HOME: ${{ runner.temp }}/hf-cache
         run: |
           MODE=calibration-only
           if [[ "$QWEN_EVALUATE_HOLDOUT" == "true" ]]; then MODE=e2e; fi
