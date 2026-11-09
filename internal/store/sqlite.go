@@ -520,11 +520,28 @@ func (s *Store) filterActiveIDs(ids []string, tq TimeQuery) ([]string, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var filtered []string
+	active := make(map[string]struct{}, len(ids))
 	for rows.Next() {
 		var id string
-		rows.Scan(&id)
-		filtered = append(filtered, id)
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		active[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(active) == 0 {
+		return nil, nil
+	}
+	// SQL's result order for `id IN (...)` is unspecified and commonly follows
+	// the primary-key index, not the input order. Preserve the HNSW distance
+	// order so downstream RRF ranks reflect actual vector relevance.
+	filtered := make([]string, 0, len(active))
+	for _, id := range ids {
+		if _, ok := active[id]; ok {
+			filtered = append(filtered, id)
+		}
 	}
 	return filtered, nil
 }
