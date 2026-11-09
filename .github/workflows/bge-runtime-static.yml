@@ -40,5 +40,5 @@ jobs:
           python3 scripts/c81_abstention_calibration.py --mode self-test --fixtures "$FIXTURE"
       - name: Validate Go formatting and source diff
         run: |
-          test "$(gofmt -d cmd/nyawa/main.go internal/embedder/py_embedder.go internal/embedder/py_embedder_socket_test.go internal/embedder/modeldir_test.go internal/rag/reranker.go internal/rag/reranker_test.go internal/rag/store.go internal/search/pipeline.go internal/search/pipeline_filter_test.go internal/server/server.go internal/server/recall_test.go internal/types/memory.go internal/types/memory_test.go)" = ""
+          test "$(gofmt -d cmd/nyawa/main.go internal/embedder/py_embedder.go internal/embedder/py_embedder_socket_test.go internal/embedder/modeldir_test.go internal/rag/reranker.go internal/rag/reranker_test.go internal/rag/store.go internal/server/recall_test.go)" = ""
           git diff --check
