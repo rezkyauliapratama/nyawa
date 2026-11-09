@@ -12,7 +12,9 @@ SCHEMA = "c8.1.abstention-calibration.v1"
 SCHEMA_C83 = "c8.3.abstention-calibration.v1"
 SCHEMA_C84 = "c8.4.abstention-calibration.v1"
 SCHEMA_C85 = "c8.5.local-cross-encoder-calibration.v1"
+SCHEMA_C86 = "c8.6.identifier-guard-calibration.v1"
 SPLITS = ("calibration", "holdout")
+C86_NEGATIVE_SUBTYPES = ("near_identifier", "hard_semantic", "hard_lexical", "scope_confusion", "out_of_domain", "missing_attribute")
 SECRET_SHAPED = re.compile(r"[A-Za-z0-9/+=]{40}")
 POSITIVE_CATEGORIES = (
     "exact_identifier",
@@ -324,13 +326,16 @@ def validate_dataset(dataset: dict[str, Any]) -> None:
         stage, namespace_prefix = "C8.4", "c84-synthetic-"
     elif schema == SCHEMA_C85:
         stage, namespace_prefix = "C8.5", "c85-synthetic-"
+    elif schema == SCHEMA_C86:
+        stage, namespace_prefix = "C8.6", "c86-synthetic-"
     else:
         raise ValueError("unsupported abstention calibration fixture schema")
     records, cases = dataset.get("records"), dataset.get("cases")
     if not isinstance(records, list) or not isinstance(cases, list):
         raise ValueError("records and cases must be lists")
-    if len(records) != 90 or len(cases) != 120:
-        raise ValueError(f"expected 90 records and 120 cases; got {len(records)} and {len(cases)}")
+    expected_records, expected_cases = (164, 300) if schema == SCHEMA_C86 else (90, 120)
+    if len(records) != expected_records or len(cases) != expected_cases:
+        raise ValueError(f"expected {expected_records} records and {expected_cases} cases; got {len(records)} and {len(cases)}")
     record_ids = [record.get("fixture_id", "") for record in records]
     case_ids = [case.get("case_id", "") for case in cases]
     if not all(record_ids) or len(set(record_ids)) != len(record_ids):
@@ -344,6 +349,8 @@ def validate_dataset(dataset: dict[str, Any]) -> None:
     all_content: list[str] = []
     for record in records:
         namespace, content = record.get("namespace", ""), record.get("content", "")
+        if schema == SCHEMA_C86 and (record.get("split") not in SPLITS or f"-{record['split']}-" not in namespace):
+            raise ValueError(f"C8.6 record {record.get('fixture_id')} lacks split isolation")
         if not namespace.startswith(namespace_prefix):
             raise ValueError(f"non-synthetic namespace: {namespace!r}")
         if not isinstance(content, str) or f"Synthetic {stage} fixture." not in content:
@@ -373,35 +380,58 @@ def validate_dataset(dataset: dict[str, Any]) -> None:
             raise ValueError(f"answerable label disagrees with markers for {case['case_id']}")
         if not isinstance(case.get("query"), str) or not case["query"].strip():
             raise ValueError(f"empty query: {case['case_id']}")
-        namespace_content = "\n".join(by_namespace.get(case.get("namespace", ""), []))
+        if schema == SCHEMA_C86:
+            namespace_content = "\n".join(
+                record["content"] for record in records
+                if record.get("split") == split and record.get("namespace") == case.get("namespace")
+            )
+        else:
+            namespace_content = "\n".join(by_namespace.get(case.get("namespace", ""), []))
         for marker in relevant:
             if marker not in namespace_content:
                 raise ValueError(f"relevant marker {marker!r} not in scoped corpus for {case['case_id']}")
         for marker in forbidden:
             if not any(marker in content for content in all_content):
                 raise ValueError(f"forbidden marker {marker!r} missing from corpus")
-    if sum(bool(case["answerable"]) for case in cases) != 60:
-        raise ValueError("expected exactly 60 answerable cases")
-    if sum(not case["answerable"] for case in cases) != 60:
-        raise ValueError("expected exactly 60 unanswerable cases")
+    expected_positive_total, expected_negative_total = (100, 200) if schema == SCHEMA_C86 else (60, 60)
+    if sum(bool(case["answerable"]) for case in cases) != expected_positive_total:
+        raise ValueError(f"expected exactly {expected_positive_total} answerable cases")
+    if sum(not case["answerable"] for case in cases) != expected_negative_total:
+        raise ValueError(f"expected exactly {expected_negative_total} unanswerable cases")
     for split in SPLITS:
         split_cases = [case for case in cases if case["split"] == split]
-        if sum(case["answerable"] for case in split_cases) != 30 or sum(not case["answerable"] for case in split_cases) != 30:
-            raise ValueError(f"split {split} must contain 30 answerable and 30 unanswerable cases")
-        expected_counts = {
-            "exact_identifier": 10,
-            "semantic_paraphrase": 5,
-            "bilingual_paraphrase": 5,
-            "namespace_isolation": 5,
-            "active_vs_retired": 5,
-            "negative_query": 30,
-        }
+        expected_positive, expected_negative = (50, 100) if schema == SCHEMA_C86 else (30, 30)
+        if sum(case["answerable"] for case in split_cases) != expected_positive or sum(not case["answerable"] for case in split_cases) != expected_negative:
+            raise ValueError(f"split {split} must contain {expected_positive} answerable and {expected_negative} unanswerable cases")
+        if schema == SCHEMA_C86:
+            expected_counts = {
+                "exact_identifier": 20,
+                "semantic_paraphrase": 10,
+                "bilingual_paraphrase": 8,
+                "namespace_isolation": 6,
+                "active_vs_retired": 6,
+                "negative_query": 100,
+            }
+            negative_subtypes = C86_NEGATIVE_SUBTYPES
+            negative_subtype_count = {"near_identifier": 30, "hard_semantic": 20, "hard_lexical": 20, "scope_confusion": 10, "out_of_domain": 10, "missing_attribute": 10}
+        else:
+            expected_counts = {
+                "exact_identifier": 10,
+                "semantic_paraphrase": 5,
+                "bilingual_paraphrase": 5,
+                "namespace_isolation": 5,
+                "active_vs_retired": 5,
+                "negative_query": 30,
+            }
+            negative_subtypes = NEGATIVE_SUBTYPES
+            negative_subtype_count = {subtype: 6 for subtype in NEGATIVE_SUBTYPES}
         for category, expected in expected_counts.items():
             if counts.get((split, category), 0) != expected:
                 raise ValueError(f"split {split} requires {expected} {category} cases")
-        for subtype in NEGATIVE_SUBTYPES:
-            if subtype_counts.get((split, subtype), 0) != 6:
-                raise ValueError(f"split {split} requires six {subtype} negatives")
+        for subtype in negative_subtypes:
+            expected = negative_subtype_count[subtype]
+            if subtype_counts.get((split, subtype), 0) != expected:
+                raise ValueError(f"split {split} requires {expected} {subtype} negatives")
     if dataset.get("k") != 5:
         raise ValueError("C8.1 K must remain 5")
 

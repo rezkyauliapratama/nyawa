@@ -1,0 +1,74 @@
+name: C8.6 Identifier-Aware Abstention Calibration
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: c86-identifier-guard-calibration
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  C86_IMAGE: ghcr.io/rezkyauliapratama/nyawa/bge-runtime@sha256:57fb872aca5dd9bf24547d33d920787fb6fef73a8f6e63087f8e785fc27c2fea
+  C86_CONTAINER: nyawa-c86-eval-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  calibration:
+    name: Fresh C8.6 identifier-aware calibration and gated holdout
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate fresh C8.6 fixture and validate evaluator
+        run: |
+          FIXTURE="$RUNNER_TEMP/c86-abstention-fixtures.json"
+          python3 -m py_compile \
+            scripts/c81_fixture_generator.py \
+            scripts/c83_fixture_generator.py \
+            scripts/c84_fixture_generator.py \
+            scripts/c85_fixture_generator.py \
+            scripts/c86_fixture_generator.py \
+            scripts/c81_abstention_calibration.py
+          python3 scripts/c86_fixture_generator.py --output "$FIXTURE"
+          python3 scripts/c81_abstention_calibration.py --mode self-test --fixtures "$FIXTURE"
+
+      - name: Check runner capacity before any container starts
+        run: python3 scripts/c81_abstention_calibration.py --mode preflight
+
+      - name: Authenticate to GHCR for package read
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull pinned small-model runtime and run C8.6
+        run: |
+          python3 scripts/c81_abstention_calibration.py \
+            --mode e2e \
+            --image "$C86_IMAGE" \
+            --container "$C86_CONTAINER" \
+            --fixtures "$RUNNER_TEMP/c86-abstention-fixtures.json"
+
+      - name: Final cleanup verification
+        if: always()
+        run: |
+          if docker inspect "$C86_CONTAINER" >/dev/null 2>&1; then
+            image="$(docker inspect --format '{{.Config.Image}}' "$C86_CONTAINER")"
+            owned="$(docker inspect --format '{{index .Config.Labels \"org.nyawa.abstention-calibration\"}}' "$C86_CONTAINER")"
+            if [[ "$image" != "$C86_IMAGE" || "$owned" != "true" ]]; then
+              echo "::error::refusing to remove a container not created by this C8.6 run"
+              exit 1
+            fi
+            docker rm --force "$C86_CONTAINER" >/dev/null
+          fi
+          if docker inspect "$C86_CONTAINER" >/dev/null 2>&1; then
+            echo "::error::disposable C8.6 container remains after cleanup"
+            exit 1
+          fi
+          echo "Disposable C8.6 container absent after cleanup."
