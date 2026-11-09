@@ -33,7 +33,11 @@ IMAGE_C84 = (
     "ghcr.io/rezkyauliapratama/nyawa/bge-runtime@"
     "sha256:bcbc858b5df17d734858eb5db7c1faa521a327576d8070e97bc248653eff5246"
 )
-APPROVED_IMAGES = {SCHEMA: IMAGE_C81, SCHEMA_C83: IMAGE_C83, SCHEMA_C84: IMAGE_C84}
+IMAGE_C85 = (
+    "ghcr.io/rezkyauliapratama/nyawa/bge-runtime@"
+    "sha256:57fb872aca5dd9bf24547d33d920787fb6fef73a8f6e63087f8e785fc27c2fea"
+)
+APPROVED_IMAGES = {SCHEMA: IMAGE_C81, SCHEMA_C83: IMAGE_C83, SCHEMA_C84: IMAGE_C84, SCHEMA_C85: IMAGE_C85}
 IMAGE = IMAGE_C81
 LABEL_KEY = "org.nyawa.abstention-calibration"
 MEMORY_LIMIT = 4 * 1024**3
@@ -881,6 +885,13 @@ def run_e2e(container: str, image: str, fixture_path: Path) -> dict[str, Any]:
     image_info = json.loads(docker(["image", "inspect", image]).stdout)[0]
     if image not in image_info.get("RepoDigests", []):
         raise RuntimeError("pulled image digest does not match the pinned image")
+    if dataset["schema_version"] == SCHEMA_C85:
+        labels = image_info.get("Config", {}).get("Labels") or {}
+        if labels.get("io.nyawa.cross-encoder.enabled") != "true":
+            raise RuntimeError("pinned C8.5 image does not declare the local cross-encoder enabled")
+        expected_model = "Horizon-Labs/multilingual-reranker-small@23139fec6f1f448cdf89a5ac2d2c6bf5e8c7b398"
+        if labels.get("io.nyawa.cross-encoder.model") != expected_model:
+            raise RuntimeError("pinned C8.5 image model label does not match the approved model revision")
     if docker(["inspect", container], timeout=15, check=False).returncode == 0:
         raise RuntimeError("container name already exists; refusing to replace it")
     stage = {SCHEMA: "c81", SCHEMA_C83: "c83", SCHEMA_C84: "c84", SCHEMA_C85: "c85"}[dataset["schema_version"]]
@@ -1310,6 +1321,13 @@ class C81CalibrationTests(unittest.TestCase):
         self.assertTrue(report["holdout_gates_pass"])
         self.assertTrue(report["raw_modality_scores_available"])
         self.assertTrue(report["raw_modality_scores_numeric"])
+
+    def test_c85_runtime_image_pin_is_immutable(self) -> None:
+        self.assertEqual(
+            IMAGE_C85,
+            "ghcr.io/rezkyauliapratama/nyawa/bge-runtime@sha256:57fb872aca5dd9bf24547d33d920787fb6fef73a8f6e63087f8e785fc27c2fea",
+        )
+        self.assertEqual(APPROVED_IMAGES[SCHEMA_C85], IMAGE_C85)
 
     def test_c85_rekeys_only_the_unopened_c84_fixture_for_cross_encoder(self) -> None:
         c84, c85 = build_c84_dataset(), build_c85_dataset()

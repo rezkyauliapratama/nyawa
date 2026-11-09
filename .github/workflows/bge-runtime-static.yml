@@ -19,6 +19,7 @@ on:
       - ".dockerignore"
       - ".github/workflows/bge-runtime-static.yml"
       - ".github/workflows/bge-runtime-publish.yml"
+      - ".github/workflows/c85-abstention-calibration.yml"
       - ".github/workflows/go-test.yml"
 
 permissions:
