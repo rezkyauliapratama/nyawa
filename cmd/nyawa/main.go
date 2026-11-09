@@ -213,7 +213,11 @@ func cmdRecall() {
 	defer emb.StopAll()
 	s := getStore(os.Args[2], emb)
 	defer s.Close()
-	p := search.NewPipeline(s, emb, types.DefaultConfig().Search)
+	p, stopScorer, err := newSearchPipeline(s, emb, types.DefaultConfig().Search)
+	if err != nil {
+		log.Fatalf("initialize recall confidence scorer: %v", err)
+	}
+	defer stopScorer()
 
 	q := types.StoreQuery{QueryText: os.Args[3], Limit: 10, Namespace: ns}
 	if !atTime.IsZero() {
@@ -461,6 +465,18 @@ func readStdin() []byte {
 	return buf
 }
 
+func newSearchPipeline(st search.StoreReader, emb *embedder.PriorityChain, cfg types.SearchConfig) (*search.Pipeline, func(), error) {
+	if !rag.LocalCrossEncoderEnabled() {
+		return search.NewPipeline(st, emb, cfg), func() {}, nil
+	}
+	scorer := rag.NewPythonCrossEncoder()
+	if !scorer.Available() {
+		scorer.Stop()
+		return nil, func() {}, fmt.Errorf("local cross-encoder was enabled but did not become ready")
+	}
+	return search.NewPipelineWithConfidenceScorer(st, emb, cfg, scorer), scorer.Stop, nil
+}
+
 func cmdServe() {
 	if len(os.Args) < 3 {
 		log.Fatal("usage: nyawa serve <db>")
@@ -493,7 +509,11 @@ func cmdServe() {
 	hc := embedder.NewHealthCheckRunner(emb, 60*time.Second)
 	hc.Start()
 	defer hc.Stop()
-	p := search.NewPipeline(st, emb, types.DefaultConfig().Search)
+	p, stopScorer, err := newSearchPipeline(st, emb, types.DefaultConfig().Search)
+	if err != nil {
+		log.Fatalf("initialize recall confidence scorer: %v", err)
+	}
+	defer stopScorer()
 	rs := rag.NewRAGStore(st.GetDB(), st.GetHNSW(), st.GetHNSWPath(), emb)
 	srv := server.New(st, p, emb, rs, server.DefaultServerConfig())
 	log.Printf("Server — db=%s embedder=%s dream=%v", os.Args[2], emb.Current(), engine.Running())
@@ -510,7 +530,11 @@ func cmdMCP() {
 	defer emb.StopAll()
 	st := getStore(os.Args[2], emb)
 	log.Printf("MCP — db=%s embedder=%s", os.Args[2], emb.Current())
-	p := search.NewPipeline(st, emb, types.DefaultConfig().Search)
+	p, stopScorer, err := newSearchPipeline(st, emb, types.DefaultConfig().Search)
+	if err != nil {
+		log.Fatalf("initialize recall confidence scorer: %v", err)
+	}
+	defer stopScorer()
 	rs := rag.NewRAGStore(st.GetDB(), st.GetHNSW(), st.GetHNSWPath(), emb)
 	if err := mcp.NewServer(st, p, rs).Run(); err != nil {
 		log.Fatalf("mcp: %v", err)

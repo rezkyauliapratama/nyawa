@@ -32,6 +32,13 @@ type PythonCrossEncoder struct {
 	ready  bool
 }
 
+const LocalCrossEncoderName = "Horizon-Labs/multilingual-reranker-small"
+
+func LocalCrossEncoderEnabled() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("NYAWA_ENABLE_CROSS_ENCODER")))
+	return value == "1" || value == "true" || value == "yes"
+}
+
 func NewPythonCrossEncoder() *PythonCrossEncoder {
 	pe := &PythonCrossEncoder{}
 	script := findRerankerScript()
@@ -39,8 +46,19 @@ func NewPythonCrossEncoder() *PythonCrossEncoder {
 		log.Printf("reranker: script not found")
 		return pe
 	}
+	modelDir := strings.TrimSpace(os.Getenv("NYAWA_RERANKER_MODEL_DIR"))
+	if modelDir == "" {
+		modelDir = "/opt/nyawa/model/reranker"
+	}
 	pe.cmd = exec.Command(findPythonPath(), script)
-	pe.cmd.Env = append(os.Environ(), "NYAWA_RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L6-v2")
+	env := os.Environ()
+	filtered := env[:0]
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, "NYAWA_RERANKER_MODEL_DIR=") {
+			filtered = append(filtered, entry)
+		}
+	}
+	pe.cmd.Env = append(filtered, "NYAWA_RERANKER_MODEL_DIR="+modelDir)
 	stdin, _ := pe.cmd.StdinPipe()
 	stdout, _ := pe.cmd.StdoutPipe()
 	stderr, _ := pe.cmd.StderrPipe()
@@ -114,7 +132,7 @@ func (r *PythonCrossEncoder) Rerank(query string, candidates []string) ([]float6
 }
 
 func (r *PythonCrossEncoder) Available() bool { return r.ready }
-func (r *PythonCrossEncoder) Name() string    { return "cross-encoder/ms-marco-MiniLM-L6-v2" }
+func (r *PythonCrossEncoder) Name() string    { return LocalCrossEncoderName }
 
 func (r *PythonCrossEncoder) Stop() {
 	if r.cmd != nil && r.cmd.Process != nil {

@@ -7,10 +7,15 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Immutable image tag, for example bge-v1.2.4"
+        description: "Immutable image tag, for example bge-v1.2.4-r5"
         required: true
         default: "bge-v1.2.4"
         type: string
+      include_reranker:
+        description: "Include the pinned local multilingual cross-encoder for synthetic calibration"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -71,6 +76,23 @@ jobs:
           curl --fail --location --retry 3 --output runtime/model/model.onnx "${MODEL_URL}"
           echo "${MODEL_SHA256}  runtime/model/model.onnx" | sha256sum --check --strict
 
+      - name: Download and verify local multilingual reranker
+        if: ${{ inputs.include_reranker == true }}
+        env:
+          RERANKER_REVISION: 23139fec6f1f448cdf89a5ac2d2c6bf5e8c7b398
+          RERANKER_MODEL_SHA256: f913154682468bfe92d6a7e02ed4e994e548c112fddc74452b573b17c949046e
+          RERANKER_TOKENIZER_SHA256: 7925f638b5444897efe3b4608eed56c1652f0ed39c2662c8302de1bc264c6088
+        run: |
+          set -euo pipefail
+          model_dir=runtime/model/reranker
+          mkdir -p "${model_dir}"
+          curl --fail --location --retry 3 --output "${model_dir}/model_quantized.onnx" \
+            "https://huggingface.co/Horizon-Labs/multilingual-reranker-small/resolve/${RERANKER_REVISION}/onnx/model_quantized.onnx"
+          curl --fail --location --retry 3 --output "${model_dir}/tokenizer.json" \
+            "https://huggingface.co/Horizon-Labs/multilingual-reranker-small/resolve/${RERANKER_REVISION}/tokenizer.json"
+          echo "${RERANKER_MODEL_SHA256}  ${model_dir}/model_quantized.onnx" | sha256sum --check --strict
+          echo "${RERANKER_TOKENIZER_SHA256}  ${model_dir}/tokenizer.json" | sha256sum --check --strict
+
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -85,6 +107,8 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.version.outputs.release_version }}
             org.opencontainers.image.revision=${{ github.sha }}
+            io.nyawa.cross-encoder.enabled=${{ inputs.include_reranker || false }}
+            io.nyawa.cross-encoder.model=Horizon-Labs/multilingual-reranker-small@23139fec6f1f448cdf89a5ac2d2c6bf5e8c7b398
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -94,6 +118,7 @@ jobs:
           push: true
           build-args: |
             RELEASE_VERSION=${{ steps.version.outputs.release_version }}
+            INCLUDE_RERANKER=${{ inputs.include_reranker || false }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=bge-runtime

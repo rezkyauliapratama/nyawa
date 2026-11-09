@@ -6,11 +6,20 @@ on:
     paths:
       - "runtime/**"
       - "internal/embedder/**"
+      - "internal/rag/**"
+      - "internal/search/**"
+      - "internal/server/**"
+      - "internal/types/**"
+      - "cmd/nyawa/main.go"
       - "scripts/validate-bge-runtime.py"
       - "scripts/test-bge-handshake.py"
+      - "scripts/test-reranker-handshake.py"
+      - "scripts/c81_abstention_calibration.py"
+      - "scripts/c85_fixture_generator.py"
       - ".dockerignore"
       - ".github/workflows/bge-runtime-static.yml"
       - ".github/workflows/bge-runtime-publish.yml"
+      - ".github/workflows/go-test.yml"
 
 permissions:
   contents: read
@@ -22,10 +31,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate Python syntax, runtime contract, and JSONL handshake
         run: |
-          python3 -m py_compile internal/embedder/bge_server.py scripts/validate-bge-runtime.py scripts/test-bge-handshake.py
+          python3 -m py_compile internal/embedder/bge_server.py internal/rag/reranker.py scripts/validate-bge-runtime.py scripts/test-bge-handshake.py scripts/test-reranker-handshake.py scripts/c81_fixture_generator.py scripts/c84_fixture_generator.py scripts/c85_fixture_generator.py scripts/c81_abstention_calibration.py
           python3 scripts/validate-bge-runtime.py
           python3 scripts/test-bge-handshake.py
+          python3 scripts/test-reranker-handshake.py
+          FIXTURE="$RUNNER_TEMP/c85-fixtures.json"
+          python3 scripts/c85_fixture_generator.py --output "$FIXTURE"
+          python3 scripts/c81_abstention_calibration.py --mode self-test --fixtures "$FIXTURE"
       - name: Validate Go formatting and source diff
         run: |
-          test "$(gofmt -d internal/embedder/py_embedder.go internal/embedder/py_embedder_socket_test.go internal/embedder/modeldir_test.go)" = ""
+          test "$(gofmt -d cmd/nyawa/main.go internal/embedder/py_embedder.go internal/embedder/py_embedder_socket_test.go internal/embedder/modeldir_test.go internal/rag/reranker.go internal/rag/reranker_test.go internal/rag/store.go internal/server/recall_test.go)" = ""
           git diff --check

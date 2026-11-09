@@ -220,13 +220,16 @@ type RAGResult struct {
 }
 
 // Query performs a RAG search with default reranker.
-// Priority: Jina API → Python CrossEncoder → Noop (vector score only)
+// Priority: Jina API → opt-in local Python CrossEncoder → Noop (vector score only)
 func (r *RAGStore) Query(query string, topK int, collectionName string) ([]RAGResult, error) {
 	var reranker Reranker = &NoopReranker{}
 	if jina := NewOpenAIReranker(); jina.Available() {
 		reranker = jina
-	} else if ce := NewPythonCrossEncoder(); ce.Available() {
-		reranker = ce
+	} else if LocalCrossEncoderEnabled() {
+		if ce := NewPythonCrossEncoder(); ce.Available() {
+			defer ce.Stop()
+			reranker = ce
+		}
 	}
 	return r.QueryWithRerank(query, topK, collectionName, reranker)
 }

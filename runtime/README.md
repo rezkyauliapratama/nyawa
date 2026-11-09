@@ -25,6 +25,12 @@ startup.
   memverifikasi checksum sebelum build. `tokenizer.json` tetap berada di repo.
 - `NYAWA_EMBED_MODEL_DIR` menunjuk ke `/opt/nyawa/model` di dalam image.
 
+## Local cross-encoder confidence (opt-in)
+
+The optional `Horizon-Labs/multilingual-reranker-small` ONNX model is packaged only when the publish workflow is dispatched with `include_reranker=true`. The build pins revision `23139fec6f1f448cdf89a5ac2d2c6bf5e8c7b398` and verifies the SHA-256 of `onnx/model_quantized.onnx` (`f913154682468bfe92d6a7e02ed4e994e548c112fddc74452b573b17c949046e`) and `tokenizer.json` (`7925f638b5444897efe3b4608eed56c1652f0ed39c2662c8302de1bc264c6088`). The upstream model is Apache-2.0 and supports 40+ languages.
+
+`NYAWA_ENABLE_CROSS_ENCODER` defaults off. When explicitly enabled, the local ONNX scorer returns a candidate confidence logit as additive recall telemetry; it does not reorder results, modify RRF, or call a provider. Inference is offline and limited to the final recall candidates. Runtime requirements remain the existing hash-pinned `numpy`, `onnxruntime`, and `tokenizers` packages.
+
 ## Validasi code-only
 
 ```bash

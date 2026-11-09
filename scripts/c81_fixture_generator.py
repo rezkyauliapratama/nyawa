@@ -11,6 +11,7 @@ from typing import Any
 SCHEMA = "c8.1.abstention-calibration.v1"
 SCHEMA_C83 = "c8.3.abstention-calibration.v1"
 SCHEMA_C84 = "c8.4.abstention-calibration.v1"
+SCHEMA_C85 = "c8.5.local-cross-encoder-calibration.v1"
 SPLITS = ("calibration", "holdout")
 SECRET_SHAPED = re.compile(r"[A-Za-z0-9/+=]{40}")
 POSITIVE_CATEGORIES = (
@@ -321,6 +322,8 @@ def validate_dataset(dataset: dict[str, Any]) -> None:
         stage, namespace_prefix = "C8.3", "c83-synthetic-"
     elif schema == SCHEMA_C84:
         stage, namespace_prefix = "C8.4", "c84-synthetic-"
+    elif schema == SCHEMA_C85:
+        stage, namespace_prefix = "C8.5", "c85-synthetic-"
     else:
         raise ValueError("unsupported abstention calibration fixture schema")
     records, cases = dataset.get("records"), dataset.get("cases")

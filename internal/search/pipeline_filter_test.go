@@ -1,6 +1,7 @@
 package search
 
 import (
+	"errors"
 	"math"
 	"testing"
 	"time"
@@ -70,6 +71,19 @@ func (f *scoredFakeStore) FTS5SearchHits(query string, topK int, namespace strin
 
 func (f *scoredFakeStore) VectorSearchHits(queryVector []float32, topK int, namespace string) ([]store.VectorHit, error) {
 	return f.vectorHits, nil
+}
+
+type fakeConfidenceScorer struct {
+	scores     []float64
+	err        error
+	query      string
+	candidates []string
+}
+
+func (f *fakeConfidenceScorer) Rerank(query string, candidates []string) ([]float64, error) {
+	f.query = query
+	f.candidates = append([]string(nil), candidates...)
+	return f.scores, f.err
 }
 
 func newFilterPipeline() *Pipeline {
@@ -157,6 +171,52 @@ func TestScoredModalityTelemetryDoesNotChangeRRFResults(t *testing.T) {
 	}
 	if got := scoredByID["memC"].FTS5RankScore; got == nil || *got != 0 {
 		t.Fatalf("zero FTS5 rank score should be present, got %v", got)
+	}
+}
+
+func TestCrossEncoderScoreIsAdditiveAndDoesNotReorder(t *testing.T) {
+	now := time.Now()
+	st := &fakeStore{
+		fts: []string{"memA", "memB", "memC"}, vector: []string{"memA"},
+		mems: map[string]*types.Memory{
+			"memA": {ID: "memA", Content: "answer", Type: types.TypeDecision, Namespace: "hermes", CreatedAt: now},
+			"memB": {ID: "memB", Content: "nearby", Type: types.TypeNote, Namespace: "hermes", CreatedAt: now},
+			"memC": {ID: "memC", Content: "noise", Type: types.TypeFact, Namespace: "hermes", CreatedAt: now},
+		},
+	}
+	cfg := types.SearchConfig{RRFK: 60, RecencyWeight: 0.05, ImportanceWeight: 0.10}
+	baselinePipeline := NewPipeline(st, embedder.NewPriorityChain(fakeEmbedder{}), cfg)
+	query := types.StoreQuery{QueryText: "synthetic query", Namespace: "hermes", Limit: 10}
+	baseline, err := baselinePipeline.Search(query)
+	if err != nil { t.Fatalf("baseline search: %v", err) }
+	defer baselinePipeline.ReleaseResults(baseline)
+
+	scorer := &fakeConfidenceScorer{scores: []float64{-20, 100, 0}}
+	pipeline := NewPipelineWithConfidenceScorer(st, embedder.NewPriorityChain(fakeEmbedder{}), cfg, scorer)
+	got, err := pipeline.Search(query)
+	if err != nil { t.Fatalf("scored search: %v", err) }
+	defer pipeline.ReleaseResults(got)
+	if !equalIDs(idsOf(got), idsOf(baseline)...) {
+		t.Fatalf("cross-encoder telemetry changed ranking: got=%v want=%v", idsOf(got), idsOf(baseline))
+	}
+	if scorer.query != query.QueryText || len(scorer.candidates) != len(got) {
+		t.Fatalf("scorer input query/candidate count mismatch: query=%q candidates=%v", scorer.query, scorer.candidates)
+	}
+	for i, result := range got {
+		if result.CrossEncoderScore == nil || *result.CrossEncoderScore != scorer.scores[i] {
+			t.Fatalf("candidate %s confidence score = %v, want %g", result.ID, result.CrossEncoderScore, scorer.scores[i])
+		}
+		if result.RRFScore != baseline[i].RRFScore || math.Abs(result.Score-baseline[i].Score) > 1e-6 {
+			t.Fatalf("cross-encoder telemetry changed ranking score for %s", result.ID)
+		}
+	}
+}
+
+func TestCrossEncoderFailureFailsClosed(t *testing.T) {
+	pipeline := NewPipelineWithConfidenceScorer(newFilterPipeline().store, embedder.NewPriorityChain(fakeEmbedder{}), types.SearchConfig{RRFK: 60}, &fakeConfidenceScorer{err: errors.New("model unavailable")})
+	results, err := pipeline.Search(types.StoreQuery{QueryText: "q", Namespace: "hermes", Limit: 5})
+	if err == nil || results != nil {
+		t.Fatalf("expected scoring error and no results; results=%v err=%v", results, err)
 	}
 }
 

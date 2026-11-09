@@ -19,6 +19,10 @@ import (
 // match the same FTS5 query, backed by a pipeline without an embedder (FTS5
 // only), so the recall filters can be exercised end to end over HTTP.
 func newRecallHTTPServer(t *testing.T) *Server {
+	return newRecallHTTPServerWithScorer(t, nil)
+}
+
+func newRecallHTTPServerWithScorer(t *testing.T, scorer search.CandidateConfidenceScorer) *Server {
 	t.Helper()
 	st, err := store.NewStore(filepath.Join(t.TempDir(), "http-recall-filters.db"), nil)
 	if err != nil {
@@ -37,8 +41,46 @@ func newRecallHTTPServer(t *testing.T) *Server {
 		}
 	}
 
-	p := search.NewPipeline(st, embedder.NewPriorityChain(), types.SearchConfig{RRFK: 60, RecencyWeight: 0.05, ImportanceWeight: 0.10})
+	p := search.NewPipelineWithConfidenceScorer(st, embedder.NewPriorityChain(), types.SearchConfig{RRFK: 60, RecencyWeight: 0.05, ImportanceWeight: 0.10}, scorer)
 	return &Server{store: st, pipeline: p}
+}
+
+type recallConfidenceScorer struct{}
+
+func (recallConfidenceScorer) Rerank(query string, candidates []string) ([]float64, error) {
+	scores := make([]float64, len(candidates))
+	for i := range scores {
+		scores[i] = 0.25 + float64(i)/10
+	}
+	return scores, nil
+}
+
+func TestHandleRecallExposesCrossEncoderScore(t *testing.T) {
+	srv := newRecallHTTPServerWithScorer(t, recallConfidenceScorer{})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/recall", strings.NewReader(`{"query":"alpha project planning","namespace":"hermes","limit":3}`))
+	srv.handleRecall(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /v1/recall = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Results []struct {
+			ID                string   `json:"ID"`
+			CrossEncoderScore *float64 `json:"CrossEncoderScore"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	if len(payload.Results) == 0 {
+		t.Fatal("expected recall results")
+	}
+	for i, result := range payload.Results {
+		want := 0.25 + float64(i)/10
+		if result.CrossEncoderScore == nil || math.Abs(*result.CrossEncoderScore-want) > 1e-9 {
+			t.Errorf("result %d cross-encoder score = %v, want %g", i, result.CrossEncoderScore, want)
+		}
+	}
 }
 
 func postRecall(t *testing.T, srv *Server, body string) (int, []string) {
