@@ -1,0 +1,101 @@
+name: C8.6 Qwen3 Answerability Calibration Pilot
+
+on:
+  pull_request:
+    paths:
+      - "scripts/c81_abstention_calibration.py"
+      - "scripts/c81_fixture_generator.py"
+      - "scripts/c83_fixture_generator.py"
+      - "scripts/c84_fixture_generator.py"
+      - "scripts/c85_fixture_generator.py"
+      - "scripts/c86_fixture_generator.py"
+      - "scripts/c86_qwen_answerability.py"
+      - "scripts/requirements-c86-qwen-ci.txt"
+      - "tests/fixtures/c86-abstention-calibration-fixtures.json"
+      - "docs/c8.6-qwen-answerability-pilot.md"
+      - ".github/workflows/c86-qwen-answerability-pilot.yml"
+      - ".github/workflows/bge-runtime-static.yml"
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: c86-qwen-answerability-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  calibration:
+    name: C8.6 Qwen-only calibration with gated holdout
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      HF_HOME: ${{ runner.temp }}/hf-cache
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HUB_DISABLE_PROGRESS_BARS: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      C86_IMAGE: ghcr.io/rezkyauliapratama/nyawa/bge-runtime@sha256:57fb872aca5dd9bf24547d33d920787fb6fef73a8f6e63087f8e785fc27c2fea
+      C86_CONTAINER: nyawa-c86-qwen-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: scripts/requirements-c86-qwen-ci.txt
+
+      - name: Install pinned CI-only Qwen dependencies
+        run: python -m pip install --disable-pip-version-check --extra-index-url https://download.pytorch.org/whl/cpu -r scripts/requirements-c86-qwen-ci.txt
+
+      - name: Authenticate to GHCR for the pinned runtime image
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate code and fake-scorer guards
+        run: |
+          python3 -m py_compile \
+            scripts/c81_fixture_generator.py \
+            scripts/c83_fixture_generator.py \
+            scripts/c84_fixture_generator.py \
+            scripts/c85_fixture_generator.py \
+            scripts/c86_fixture_generator.py \
+            scripts/c81_abstention_calibration.py \
+            scripts/c86_qwen_answerability.py
+          python3 scripts/c86_fixture_generator.py --output "$RUNNER_TEMP/c86-qwen-fixtures.json"
+          python3 scripts/c81_abstention_calibration.py --mode self-test --fixtures "$RUNNER_TEMP/c86-qwen-fixtures.json"
+          python3 scripts/c86_qwen_answerability.py --mode self-test
+
+      - name: Check runner capacity before starting the local runtime
+        run: python3 scripts/c81_abstention_calibration.py --mode preflight
+
+      - name: Run local Qwen3 C8.6 pilot
+        run: |
+          python3 scripts/c86_qwen_answerability.py \
+            --mode e2e \
+            --image "$C86_IMAGE" \
+            --container "$C86_CONTAINER" \
+            --fixtures "$RUNNER_TEMP/c86-qwen-fixtures.json"
+
+      - name: Final disposable runtime cleanup verification
+        if: always()
+        run: |
+          if docker inspect "$C86_CONTAINER" >/dev/null 2>&1; then
+            image="$(docker inspect --format '{{.Config.Image}}' "$C86_CONTAINER")"
+            owned="$(docker inspect --format '{{index .Config.Labels \"org.nyawa.abstention-calibration\"}}' "$C86_CONTAINER")"
+            if [[ "$image" != "$C86_IMAGE" || "$owned" != "true" ]]; then
+              echo "::error::refusing to remove a container not created by this C8.6 Qwen run"
+              exit 1
+            fi
+            docker rm --force "$C86_CONTAINER" >/dev/null
+          fi
+          if docker inspect "$C86_CONTAINER" >/dev/null 2>&1; then
+            echo "::error::disposable C8.6 Qwen container remains after cleanup"
+            exit 1
+          fi
+          echo "Disposable C8.6 Qwen container absent after cleanup."

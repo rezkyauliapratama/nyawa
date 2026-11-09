@@ -152,6 +152,7 @@ def score_case(
     latency_ms: float,
     k: int,
     memory_to_fixture: dict[str, str],
+    candidate_scorer: Any | None = None,
 ) -> dict[str, Any]:
     relevant = case["relevant_markers"]
     forbidden = case["forbidden_markers"]
@@ -212,6 +213,17 @@ def score_case(
         }
         candidates.append(candidate)
         chars += len(content)
+    if candidate_scorer is not None:
+        qwen_scores = candidate_scorer(case["query"], [_content(item) for item in items[:k]])
+        if len(qwen_scores) != len(candidates):
+            raise ValueError("candidate scorer returned a score count that does not match candidates")
+        for candidate, value in zip(candidates, qwen_scores):
+            candidate["qwen_answerability_score"] = float(value) if _numeric(value) else None
+            candidate["qwen_answerability_score_numeric"] = _numeric(value)
+    else:
+        for candidate in candidates:
+            candidate["qwen_answerability_score"] = None
+            candidate["qwen_answerability_score_numeric"] = False
     relevant_candidates = [candidate for candidate in candidates if candidate["relevant"]]
     first_relevant_rank = relevant_candidates[0]["rank"] if relevant_candidates else None
     forbidden_hits = [marker for candidate in candidates for marker in candidate["forbidden_markers_found"]]
@@ -238,6 +250,7 @@ def score_case(
         "raw_modality_scores_available": bool(scored_candidates) and all(candidate["raw_modality_score_present"] for candidate in scored_candidates),
         "raw_modality_scores_numeric": bool(scored_candidates) and all(candidate["raw_modality_scores_numeric"] for candidate in scored_candidates),
         "cross_encoder_scores_numeric": bool(candidates) and all(candidate["cross_encoder_score_numeric"] for candidate in candidates),
+        "qwen_answerability_scores_numeric": bool(candidates) and all(candidate["qwen_answerability_score_numeric"] for candidate in candidates),
         "fixture_ids_mapped": all(candidate["fixture_id"] != "unknown-fixture" for candidate in candidates),
         "latency_ms": round(float(latency_ms), 2),
         "candidate_chars": chars,
@@ -272,16 +285,23 @@ def evaluate_policy(
     for case in cases:
         row = by_id[case["case_id"]]
         candidates = row["candidates"]
-        if signal == "identifier_guard_cross_encoder":
+        if signal in ("identifier_guard_cross_encoder", "qwen_identifier_guard"):
             accepted = []
+            score_field = "qwen_answerability_score" if signal == "qwen_identifier_guard" else "cross_encoder_score"
             query_ids = _structured_identifiers(case.get("query", ""))
             for candidate in candidates:
-                score = candidate.get("cross_encoder_score")
+                score = candidate.get(score_field)
                 if threshold is None or isinstance(threshold, dict) or not _numeric(score) or score < threshold:
                     continue
                 if query_ids and not candidate.get("exact_identifier_match", False):
                     continue
                 accepted.append(candidate)
+        elif signal == "qwen_answerability_score":
+            accepted = [
+                candidate for candidate in candidates
+                if threshold is not None and not isinstance(threshold, dict)
+                and _numeric(candidate.get(signal)) and candidate[signal] >= threshold
+            ]
         elif signal == "dual_raw_cross_encoder":
             accepted = []
             if isinstance(threshold, dict):
@@ -386,6 +406,9 @@ def evaluate_policy(
     raw_modality_scores_available = bool(rows_with_candidates) and all(row.get("raw_modality_scores_available", False) for row in rows_with_candidates)
     raw_modality_scores_numeric = bool(rows_with_candidates) and all(row.get("raw_modality_scores_numeric", False) for row in rows_with_candidates)
     cross_encoder_scores_numeric = bool(rows_with_candidates) and all(row.get("cross_encoder_scores_numeric", False) for row in rows_with_candidates)
+    qwen_answerability_scores_numeric = bool(rows_with_candidates) and all(row.get("qwen_answerability_scores_numeric", False) for row in rows_with_candidates)
+    numeric_score_and_rrf_fields = bool(cases) and all(by_id[case["case_id"]].get("scores_numeric", False) for case in cases)
+    fixture_ids_mapped = all(by_id[case["case_id"]].get("fixture_ids_mapped", True) for case in cases)
     metrics = {
         "positive_queries": len(positives),
         "negative_queries": len(negatives),
@@ -406,6 +429,9 @@ def evaluate_policy(
         "raw_modality_scores_available": raw_modality_scores_available,
         "raw_modality_scores_numeric": raw_modality_scores_numeric,
         "cross_encoder_scores_numeric": cross_encoder_scores_numeric,
+        "qwen_answerability_scores_numeric": qwen_answerability_scores_numeric,
+        "numeric_score_and_rrf_fields": numeric_score_and_rrf_fields,
+        "fixture_ids_mapped": fixture_ids_mapped,
     }
     return {"metrics": metrics, "accepted_case_rows": accepted_case_rows}
 
@@ -435,6 +461,8 @@ def passes_gates(metrics: dict[str, Any], gates: dict[str, Any]) -> bool:
 def threshold_values(rows: list[dict[str, Any]], signal: str) -> list[float]:
     if signal == "identifier_guard_cross_encoder":
         signal = "cross_encoder_score"
+    if signal == "qwen_identifier_guard":
+        signal = "qwen_answerability_score"
     if signal == "both_modalities":
         return [1.0] if any(row.get("modality_evidence_present") for row in rows) else []
     if signal == "exact_identifier_match":
@@ -466,12 +494,20 @@ def calibrate_signal(
     cases: list[dict[str, Any]],
     rows: list[dict[str, Any]],
     signal: str,
+    require_qwen_scores: bool = False,
 ) -> dict[str, Any]:
     gates = dataset["gates"]
     points = []
     for threshold in threshold_values(rows, signal):
         metrics = evaluate_policy(cases, rows, signal, threshold)["metrics"]
-        point = {"threshold": threshold, **metrics, "feasible": passes_gates(metrics, gates)}
+        feasible = passes_gates(metrics, gates) and (
+            not require_qwen_scores or (
+                metrics.get("qwen_answerability_scores_numeric", False)
+                and metrics.get("numeric_score_and_rrf_fields", False)
+                and metrics.get("fixture_ids_mapped", False)
+            )
+        )
+        point = {"threshold": threshold, **metrics, "feasible": feasible}
         points.append(point)
     feasible = [point for point in points if point["feasible"]]
     best = max(
@@ -693,6 +729,7 @@ def summarize(
     dataset: dict[str, Any],
     calibration_case_results: list[dict[str, Any]],
     holdout_case_results: list[dict[str, Any]] | None = None,
+    qwen_only: bool = False,
 ) -> dict[str, Any]:
     cases = dataset["cases"]
     gates = dataset["gates"]
@@ -708,8 +745,15 @@ def summarize(
         signals = [*SIGNALS, *RAW_SIGNALS, *CROSS_ENCODER_SIGNALS]
     else:
         signals = list(SIGNALS)
-    sweeps = [calibrate_signal(dataset, calibration_cases, calibration_rows, signal) for signal in signals]
-    if dataset["schema_version"] == SCHEMA_C83:
+    if qwen_only:
+        sweeps = [
+            calibrate_signal(dataset, calibration_cases, calibration_rows, "qwen_identifier_guard", require_qwen_scores=True)
+        ]
+    else:
+        sweeps = [calibrate_signal(dataset, calibration_cases, calibration_rows, signal) for signal in signals]
+    if qwen_only:
+        joint_sweeps = []
+    elif dataset["schema_version"] == SCHEMA_C83:
         joint_sweeps = calibrate_joint_signals(dataset, calibration_cases, calibration_rows)
     elif dataset["schema_version"] == SCHEMA_C84:
         joint_sweeps = (
@@ -765,7 +809,9 @@ def summarize(
         holdout_policy_metrics = evaluate_policy(
             holdout_cases, holdout_rows, selected["signal"], selected["threshold"]
         )["metrics"]
-        holdout_pass = passes_gates(holdout_policy_metrics, gates)
+        holdout_pass = passes_gates(holdout_policy_metrics, gates) and (
+            not qwen_only or holdout_policy_metrics.get("qwen_answerability_scores_numeric", False)
+        )
         holdout_evaluated = True
         observed_results.extend(holdout_case_results)
 
@@ -778,6 +824,7 @@ def summarize(
     raw_modality_scores_available = bool(candidate_rows) and all(row.get("raw_modality_scores_available", False) for row in candidate_rows)
     raw_modality_scores_numeric = bool(candidate_rows) and all(row.get("raw_modality_scores_numeric", False) for row in candidate_rows)
     cross_encoder_scores_numeric = bool(candidate_rows) and all(row.get("cross_encoder_scores_numeric", False) for row in candidate_rows)
+    qwen_answerability_scores_numeric = bool(candidate_rows) and all(row.get("qwen_answerability_scores_numeric", False) for row in candidate_rows)
     source_counts = {"vector_only": 0, "fts5_only": 0, "both": 0, "neither": 0}
     if modality_evidence_available:
         for candidate in returned_candidates:
@@ -785,7 +832,10 @@ def summarize(
             fts5_hit = candidate["fts5_rank"] > 0
             key = "both" if vector_hit and fts5_hit else "vector_only" if vector_hit else "fts5_only" if fts5_hit else "neither"
             source_counts[key] += 1
-    status = "PASS" if selected and holdout_evaluated and holdout_pass and all_numeric and fixture_ids_mapped else "FAIL"
+    status = "PASS" if (
+        selected and holdout_evaluated and holdout_pass and all_numeric and fixture_ids_mapped
+        and (not qwen_only or qwen_answerability_scores_numeric)
+    ) else "FAIL"
     if dataset["schema_version"] == SCHEMA_C85:
         protocol = "local cross-encoder calibration on C8.4's unopened holdout; holdout queried only after a feasible calibration policy"
     elif dataset["schema_version"] == SCHEMA_C86:
@@ -815,6 +865,7 @@ def summarize(
         "raw_modality_scores_available": raw_modality_scores_available,
         "raw_modality_scores_numeric": raw_modality_scores_numeric,
         "cross_encoder_scores_numeric": cross_encoder_scores_numeric,
+        "qwen_answerability_scores_numeric": qwen_answerability_scores_numeric,
         "source_counts": source_counts,
         "latency_median_ms": round(statistics.median(latencies), 2) if latencies else 0.0,
         "latency_p95_ms": round(latencies[p95_index], 2) if latencies else 0.0,
@@ -830,18 +881,29 @@ def summarize(
 def run_calibration_phases(
     dataset: dict[str, Any],
     retrieve_case: Any,
+    qwen_only: bool = False,
+    before_holdout: Any | None = None,
 ) -> dict[str, Any]:
-    """Query holdout only after calibration selects a policy that passes its gates."""
+    """Query holdout only after the selected calibration policy passes its gates."""
     calibration_cases = [case for case in dataset["cases"] if case["split"] == "calibration"]
     calibration_results = [retrieve_case(case) for case in calibration_cases]
-    calibration_report = summarize(dataset, calibration_results)
+    calibration_report = summarize(dataset, calibration_results, qwen_only=qwen_only)
     selected = calibration_report["selected_policy"]
     if selected is None:
         return calibration_report
+    if qwen_only and (
+        selected.get("signal") != "qwen_identifier_guard"
+        or not selected.get("feasible", False)
+        or not selected.get("qwen_answerability_scores_numeric", False)
+        or not passes_gates(selected, dataset["gates"])
+    ):
+        raise RuntimeError("refusing holdout access without a feasible numeric Qwen-only policy")
 
+    if before_holdout is not None:
+        before_holdout()
     holdout_cases = [case for case in dataset["cases"] if case["split"] == "holdout"]
     holdout_results = [retrieve_case(case) for case in holdout_cases]
-    final_report = summarize(dataset, calibration_results, holdout_results)
+    final_report = summarize(dataset, calibration_results, holdout_results, qwen_only=qwen_only)
     if final_report["selected_policy"] != selected:
         raise RuntimeError("calibration-selected policy changed after holdout evaluation")
     return final_report
@@ -908,12 +970,22 @@ def cleanup(container: str, image: str) -> None:
         raise RuntimeError("calibration cleanup readback failed: container still exists")
 
 
-def run_e2e(container: str, image: str, fixture_path: Path) -> dict[str, Any]:
+def run_e2e(
+    container: str,
+    image: str,
+    fixture_path: Path,
+    candidate_scorer: Any | None = None,
+    qwen_only: bool = False,
+    preflight_passed: bool = False,
+) -> dict[str, Any]:
     dataset = load_dataset(fixture_path)
+    if qwen_only and (dataset["schema_version"] != SCHEMA_C86 or candidate_scorer is None):
+        raise ValueError("Qwen-only calibration requires C8.6 fixtures and a local candidate scorer")
     expected_image = APPROVED_IMAGES.get(dataset["schema_version"])
     if expected_image is None or image != expected_image:
         raise RuntimeError("no matching immutable image digest is approved for this fixture schema")
-    preflight()
+    if not preflight_passed:
+        preflight()
     docker(["pull", image], timeout=300)
     image_info = json.loads(docker(["image", "inspect", image]).stdout)[0]
     if image not in image_info.get("RepoDigests", []):
@@ -977,21 +1049,42 @@ def run_e2e(container: str, image: str, fixture_path: Path) -> dict[str, Any]:
             raise RuntimeError(f"unexpected Nyawa identity: {root_body}")
 
         inserted: dict[str, str] = {}
-        for record in dataset["records"]:
-            response = inside_http(container, "POST", "/v1/memories", {
-                "content": record["content"], "namespace": record["namespace"], "type": record["type"]
-            })
-            if response["status"] != 201 or not response["body"].get("id"):
-                raise RuntimeError(f"synthetic insert failed for {record['fixture_id']}: HTTP {response['status']}")
-            inserted[record["fixture_id"]] = str(response["body"]["id"])
-        reverse_ids = {memory_id: fixture_id for fixture_id, memory_id in inserted.items()}
-        stats = inside_http(container, "GET", "/v1/stats")
-        if stats["status"] != 200:
-            raise RuntimeError(f"stats returned HTTP {stats['status']}")
-        store_stats = stats["body"].get("store", stats["body"])
-        vector_indexed = int(store_stats.get("vector_indexed", 0))
-        if vector_indexed < len(dataset["records"]):
-            raise RuntimeError(f"not all synthetic records were vector-indexed: {store_stats}")
+        reverse_ids: dict[str, str] = {}
+
+        def insert_records(records: list[dict[str, Any]]) -> None:
+            for record in records:
+                response = inside_http(container, "POST", "/v1/memories", {
+                    "content": record["content"], "namespace": record["namespace"], "type": record["type"]
+                })
+                if response["status"] != 201 or not response["body"].get("id"):
+                    raise RuntimeError(f"synthetic insert failed for {record['fixture_id']}: HTTP {response['status']}")
+                memory_id = str(response["body"]["id"])
+                inserted[record["fixture_id"]] = memory_id
+                reverse_ids[memory_id] = record["fixture_id"]
+
+        def vector_index_count() -> tuple[int, dict[str, Any]]:
+            stats_response = inside_http(container, "GET", "/v1/stats")
+            if stats_response["status"] != 200:
+                raise RuntimeError(f"stats returned HTTP {stats_response['status']}")
+            store_stats = stats_response["body"].get("store", stats_response["body"])
+            return int(store_stats.get("vector_indexed", 0)), store_stats
+
+        initial_records = [
+            record for record in dataset["records"]
+            if not qwen_only or record["split"] == "calibration"
+        ]
+        insert_records(initial_records)
+        vector_indexed, store_stats = vector_index_count()
+        if vector_indexed < len(inserted):
+            raise RuntimeError(f"not all inserted synthetic records were vector-indexed: {store_stats}")
+
+        def insert_holdout_records() -> None:
+            nonlocal vector_indexed
+            holdout_records = [record for record in dataset["records"] if record["split"] == "holdout"]
+            insert_records(holdout_records)
+            vector_indexed, stats = vector_index_count()
+            if vector_indexed < len(inserted):
+                raise RuntimeError(f"not all synthetic records were vector-indexed: {stats}")
 
         def retrieve_case(case: dict[str, Any]) -> dict[str, Any]:
             start = time.monotonic()
@@ -1008,9 +1101,12 @@ def run_e2e(container: str, image: str, fixture_path: Path) -> dict[str, Any]:
             items = response["body"].get("results", [])
             if not isinstance(items, list):
                 raise RuntimeError(f"recall results malformed for {case['case_id']}")
-            return score_case(case, items, elapsed, int(dataset["k"]), reverse_ids)
+            return score_case(case, items, elapsed, int(dataset["k"]), reverse_ids, candidate_scorer)
 
-        report = run_calibration_phases(dataset, retrieve_case)
+        report = run_calibration_phases(
+            dataset, retrieve_case, qwen_only=qwen_only,
+            before_holdout=insert_holdout_records if qwen_only else None,
+        )
         report.update({
             "image": image,
             "runtime_version": root_body["version"],
@@ -1505,16 +1601,18 @@ class C81CalibrationTests(unittest.TestCase):
             {"case_id": "N-NL", "query": "Who approved the orbital warranty?", "answerable": False, "category": "negative_query"},
         ]
         rows = [
-            {"case_id": "P-ID", "candidates": [{"cross_encoder_score": 2.0, "exact_identifier_match": True, "relevant": True, "forbidden_markers_found": []}]},
-            {"case_id": "P-NL", "candidates": [{"cross_encoder_score": 2.0, "exact_identifier_match": False, "relevant": True, "forbidden_markers_found": []}]},
-            {"case_id": "N-ID", "candidates": [{"cross_encoder_score": 3.0, "exact_identifier_match": False, "relevant": False, "forbidden_markers_found": []}]},
-            {"case_id": "N-NL", "candidates": [{"cross_encoder_score": 3.0, "exact_identifier_match": False, "relevant": False, "forbidden_markers_found": []}]},
+            {"case_id": "P-ID", "candidates": [{"cross_encoder_score": 2.0, "qwen_answerability_score": 2.0, "exact_identifier_match": True, "relevant": True, "forbidden_markers_found": []}]},
+            {"case_id": "P-NL", "candidates": [{"cross_encoder_score": 2.0, "qwen_answerability_score": 2.0, "exact_identifier_match": False, "relevant": True, "forbidden_markers_found": []}]},
+            {"case_id": "N-ID", "candidates": [{"cross_encoder_score": 3.0, "qwen_answerability_score": 3.0, "exact_identifier_match": False, "relevant": False, "forbidden_markers_found": []}]},
+            {"case_id": "N-NL", "candidates": [{"cross_encoder_score": 3.0, "qwen_answerability_score": 3.0, "exact_identifier_match": False, "relevant": False, "forbidden_markers_found": []}]},
         ]
-        accepted = dict((case["case_id"], items) for case, items in evaluate_policy(cases, rows, "identifier_guard_cross_encoder", 1.5)["accepted_case_rows"])
-        self.assertEqual(len(accepted["P-ID"]), 1)
-        self.assertEqual(len(accepted["P-NL"]), 1)
-        self.assertEqual(len(accepted["N-ID"]), 0)
-        self.assertEqual(len(accepted["N-NL"]), 1)
+        for signal in ("identifier_guard_cross_encoder", "qwen_identifier_guard"):
+            with self.subTest(signal=signal):
+                accepted = dict((case["case_id"], items) for case, items in evaluate_policy(cases, rows, signal, 1.5)["accepted_case_rows"])
+                self.assertEqual(len(accepted["P-ID"]), 1)
+                self.assertEqual(len(accepted["P-NL"]), 1)
+                self.assertEqual(len(accepted["N-ID"]), 0)
+                self.assertEqual(len(accepted["N-NL"]), 1)
 
     def test_c85_cross_encoder_gate_fails_closed_when_missing(self) -> None:
         gates = {
@@ -1528,6 +1626,174 @@ class C81CalibrationTests(unittest.TestCase):
             "forbidden_marker_leaks": 0, "cross_encoder_scores_numeric": False,
         }
         self.assertFalse(passes_gates(metrics, gates))
+
+    def test_qwen_score_callback_is_numeric_and_preserves_raw_evidence(self) -> None:
+        case = {
+            "case_id": "Q86", "category": "exact_identifier", "split": "calibration",
+            "answerable": True, "namespace": "c86-synthetic-main",
+            "query": "Find ERR-2026-1001", "relevant_markers": ["GOLD"],
+            "forbidden_markers": [],
+        }
+        received: list[tuple[str, list[str]]] = []
+
+        def fake_scorer(query: str, documents: list[str]) -> list[float]:
+            received.append((query, documents))
+            return [1.75]
+
+        row = score_case(case, [{
+            "ID": "m1", "Content": "GOLD exact reference ERR-2026-1001",
+            "Score": 0.8, "RRFScore": 0.7, "VectorRank": 1, "FTS5Rank": 1,
+            "VectorDistance": 0.1, "FTS5RankScore": -0.4,
+            "CrossEncoderScore": 0.5,
+        }], 1.0, 5, {"m1": "F1"}, fake_scorer)
+        self.assertEqual(received, [(case["query"], ["GOLD exact reference ERR-2026-1001"])])
+        self.assertEqual(row["candidates"][0]["qwen_answerability_score"], 1.75)
+        self.assertTrue(row["qwen_answerability_scores_numeric"])
+        self.assertTrue(row["raw_modality_scores_numeric"])
+        self.assertTrue(row["candidates"][0]["exact_identifier_match"])
+        self.assertNotIn("content", row["candidates"][0])
+
+    def test_qwen_infeasible_calibration_does_not_insert_or_query_holdout(self) -> None:
+        dataset = build_c86_dataset()
+        events: list[str] = []
+        calibration_rows: list[dict[str, Any]] = []
+
+        def retrieve(case: dict[str, Any]) -> dict[str, Any]:
+            events.append(case["split"])
+            positive = bool(case["answerable"])
+            cross_score = 2.0 if positive else -2.0
+            candidate = {
+                "score": 0.8, "rrf_score": 0.7, "cross_encoder_score": cross_score,
+                "cross_encoder_score_numeric": True,
+                "qwen_answerability_score": None,
+                "qwen_answerability_score_numeric": False,
+                "vector_rank": 1, "fts5_rank": 1, "vector_distance": 0.1,
+                "fts5_rank_score": -0.4, "modality_evidence_present": True,
+                "raw_modality_score_present": True, "raw_modality_scores_numeric": True,
+                "exact_identifier_match": positive and case["category"] == "exact_identifier",
+                "relevant": positive, "forbidden_markers_found": [],
+            }
+            row = {
+                "case_id": case["case_id"], "scores_numeric": True,
+                "modality_evidence_present": True, "modality_ranks_numeric": True,
+                "raw_modality_scores_available": True, "raw_modality_scores_numeric": True,
+                "cross_encoder_scores_numeric": True, "qwen_answerability_scores_numeric": False,
+                "fixture_ids_mapped": True, "result_count": 1, "candidates": [candidate],
+                "latency_ms": 1.0, "candidate_chars": 24, "estimated_candidate_tokens": 6,
+            }
+            if case["split"] == "calibration":
+                calibration_rows.append(row)
+            return row
+
+        def before_holdout() -> None:
+            events.append("holdout-insert")
+
+        calibration_cases = [case for case in dataset["cases"] if case["split"] == "calibration"]
+        legacy_only = None
+        report = run_calibration_phases(
+            dataset, retrieve, qwen_only=True, before_holdout=before_holdout,
+        )
+        legacy_only = calibrate_signal(dataset, calibration_cases, calibration_rows, "cross_encoder_score")
+        self.assertIsNotNone(legacy_only["best_feasible"])
+        self.assertIsNone(report["selected_policy"])
+        self.assertFalse(report["holdout_evaluated"])
+        self.assertEqual(events, ["calibration"] * 150)
+        self.assertNotIn("holdout-insert", events)
+        self.assertFalse(report["qwen_answerability_scores_numeric"])
+
+    def test_qwen_feasible_policy_inserts_then_queries_holdout_once(self) -> None:
+        dataset = build_c86_dataset()
+        events: list[str] = []
+
+        def retrieve(case: dict[str, Any]) -> dict[str, Any]:
+            events.append(case["split"])
+            positive = bool(case["answerable"])
+            candidate = {
+                "score": 0.8, "rrf_score": 0.7, "cross_encoder_score": 0.5,
+                "cross_encoder_score_numeric": True,
+                "qwen_answerability_score": 2.0 if positive else -2.0,
+                "qwen_answerability_score_numeric": True,
+                "vector_rank": 1, "fts5_rank": 1, "vector_distance": 0.1,
+                "fts5_rank_score": -0.4, "modality_evidence_present": True,
+                "raw_modality_score_present": True, "raw_modality_scores_numeric": True,
+                "exact_identifier_match": positive and case["category"] == "exact_identifier",
+                "relevant": positive, "forbidden_markers_found": [],
+            }
+            return {
+                "case_id": case["case_id"], "scores_numeric": True,
+                "modality_evidence_present": True, "modality_ranks_numeric": True,
+                "raw_modality_scores_available": True, "raw_modality_scores_numeric": True,
+                "cross_encoder_scores_numeric": True, "qwen_answerability_scores_numeric": True,
+                "fixture_ids_mapped": True, "result_count": 1, "candidates": [candidate],
+                "final_margin": 0.1, "rrf_margin": 0.1, "lexical_margin": 0.1,
+                "vector_distance_margin": 0.1, "fts5_rank_score_margin": 0.1,
+                "cross_encoder_margin": 0.1, "latency_ms": 1.0,
+                "candidate_chars": 24, "estimated_candidate_tokens": 6,
+            }
+
+        def before_holdout() -> None:
+            events.append("holdout-insert")
+
+        report = run_calibration_phases(
+            dataset, retrieve, qwen_only=True, before_holdout=before_holdout,
+        )
+        self.assertIsNotNone(report["selected_policy"])
+        self.assertEqual(report["selected_policy"]["signal"], "qwen_identifier_guard")
+        self.assertEqual([sweep["signal"] for sweep in report["threshold_sweeps"]], ["qwen_identifier_guard"])
+        self.assertEqual(events[150], "holdout-insert")
+        self.assertEqual(events[:150], ["calibration"] * 150)
+        self.assertEqual(events[151:], ["holdout"] * 150)
+        self.assertTrue(report["holdout_evaluated"])
+        self.assertTrue(report["holdout_gates_pass"])
+        self.assertTrue(report["qwen_answerability_scores_numeric"])
+
+    def test_qwen_nonnumeric_holdout_fails_closed_after_single_gated_query(self) -> None:
+        dataset = build_c86_dataset()
+        events: list[str] = []
+
+        def retrieve(case: dict[str, Any]) -> dict[str, Any]:
+            events.append(case["split"])
+            positive = bool(case["answerable"])
+            qwen_score = (2.0 if positive else -2.0) if case["split"] == "calibration" else None
+            exact = positive and case["category"] == "exact_identifier"
+            candidate = {
+                "score": 0.8, "rrf_score": 0.7, "cross_encoder_score": 0.5,
+                "cross_encoder_score_numeric": True,
+                "qwen_answerability_score": qwen_score,
+                "qwen_answerability_score_numeric": _numeric(qwen_score),
+                "vector_rank": 1, "fts5_rank": 1, "vector_distance": 0.1,
+                "fts5_rank_score": -0.4, "modality_evidence_present": True,
+                "raw_modality_score_present": True, "raw_modality_scores_numeric": True,
+                "exact_identifier_match": exact, "relevant": positive,
+                "forbidden_markers_found": [],
+            }
+            return {
+                "case_id": case["case_id"], "scores_numeric": True,
+                "modality_evidence_present": True, "modality_ranks_numeric": True,
+                "raw_modality_scores_available": True, "raw_modality_scores_numeric": True,
+                "cross_encoder_scores_numeric": True,
+                "qwen_answerability_scores_numeric": qwen_score is not None,
+                "fixture_ids_mapped": True, "result_count": 1, "candidates": [candidate],
+                "final_margin": 0.1, "rrf_margin": 0.1, "lexical_margin": 0.1,
+                "vector_distance_margin": 0.1, "fts5_rank_score_margin": 0.1,
+                "cross_encoder_margin": 0.1, "latency_ms": 1.0,
+                "candidate_chars": 24, "estimated_candidate_tokens": 6,
+            }
+
+        def before_holdout() -> None:
+            events.append("holdout-insert")
+
+        report = run_calibration_phases(
+            dataset, retrieve, qwen_only=True, before_holdout=before_holdout,
+        )
+        self.assertEqual(report["selected_policy"]["signal"], "qwen_identifier_guard")
+        self.assertTrue(report["holdout_evaluated"])
+        self.assertFalse(report["holdout_gates_pass"])
+        self.assertEqual(report["status"], "FAIL")
+        self.assertFalse(report["qwen_answerability_scores_numeric"])
+        self.assertEqual(events[:150], ["calibration"] * 150)
+        self.assertEqual(events[150], "holdout-insert")
+        self.assertEqual(events[151:], ["holdout"] * 150)
 
     def test_frozen_holdout_passes_only_after_calibration_selected_rule(self) -> None:
         dataset = build_dataset()
@@ -1608,7 +1874,8 @@ def main() -> int:
                     "numeric_score_and_rrf_fields", "fixture_ids_mapped",
                     "modality_evidence_available", "modality_ranks_numeric",
                     "raw_modality_scores_available", "raw_modality_scores_numeric",
-                    "cross_encoder_scores_numeric", "source_counts", "latency_median_ms",
+                    "cross_encoder_scores_numeric", "qwen_answerability_scores_numeric",
+                    "source_counts", "latency_median_ms",
                     "latency_p95_ms", "candidate_chars_total", "estimated_candidate_tokens_total",
                     "queries_run", "synthetic_records_inserted", "vector_indexed", "result_limit_k",
                 )

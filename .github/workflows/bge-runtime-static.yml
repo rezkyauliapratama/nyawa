@@ -17,7 +17,11 @@ on:
       - "scripts/c81_abstention_calibration.py"
       - "scripts/c85_fixture_generator.py"
       - "scripts/c86_fixture_generator.py"
+      - "scripts/c86_qwen_answerability.py"
+      - "scripts/requirements-c86-qwen-ci.txt"
+      - "docs/c8.6-qwen-answerability-pilot.md"
       - ".github/workflows/c86-abstention-calibration.yml"
+      - ".github/workflows/c86-qwen-answerability-pilot.yml"
       - ".dockerignore"
       - ".github/workflows/bge-runtime-static.yml"
       - ".github/workflows/bge-runtime-publish.yml"
@@ -34,7 +38,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate Python syntax, runtime contract, and JSONL handshake
         run: |
-          python3 -m py_compile internal/embedder/bge_server.py internal/rag/reranker.py scripts/validate-bge-runtime.py scripts/test-bge-handshake.py scripts/test-reranker-handshake.py scripts/c81_fixture_generator.py scripts/c84_fixture_generator.py scripts/c85_fixture_generator.py scripts/c86_fixture_generator.py scripts/c81_abstention_calibration.py
+          python3 -m py_compile internal/embedder/bge_server.py internal/rag/reranker.py scripts/validate-bge-runtime.py scripts/test-bge-handshake.py scripts/test-reranker-handshake.py scripts/c81_fixture_generator.py scripts/c84_fixture_generator.py scripts/c85_fixture_generator.py scripts/c86_fixture_generator.py scripts/c81_abstention_calibration.py scripts/c86_qwen_answerability.py
           python3 scripts/validate-bge-runtime.py
           python3 scripts/test-bge-handshake.py
           python3 scripts/test-reranker-handshake.py
@@ -44,6 +48,7 @@ jobs:
           C86_FIXTURE="$RUNNER_TEMP/c86-fixtures.json"
           python3 scripts/c86_fixture_generator.py --output "$C86_FIXTURE"
           python3 scripts/c81_abstention_calibration.py --mode self-test --fixtures "$C86_FIXTURE"
+          python3 scripts/c86_qwen_answerability.py --mode self-test
       - name: Validate Go formatting and source diff
         run: |
           test "$(gofmt -d cmd/nyawa/main.go internal/embedder/py_embedder.go internal/embedder/py_embedder_socket_test.go internal/embedder/modeldir_test.go internal/rag/reranker.go internal/rag/reranker_test.go internal/rag/store.go internal/server/recall_test.go)" = ""
