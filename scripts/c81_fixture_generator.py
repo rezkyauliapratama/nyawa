@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = "c8.1.abstention-calibration.v1"
+SCHEMA_C83 = "c8.3.abstention-calibration.v1"
 SPLITS = ("calibration", "holdout")
 SECRET_SHAPED = re.compile(r"[A-Za-z0-9/+=]{40}")
 POSITIVE_CATEGORIES = (
@@ -312,8 +313,13 @@ def build_dataset() -> dict[str, Any]:
 
 
 def validate_dataset(dataset: dict[str, Any]) -> None:
-    if dataset.get("schema_version") != SCHEMA:
-        raise ValueError("unsupported C8.1 fixture schema")
+    schema = dataset.get("schema_version")
+    if schema == SCHEMA:
+        stage, namespace_prefix = "C8.1", "c8-synthetic-"
+    elif schema == SCHEMA_C83:
+        stage, namespace_prefix = "C8.3", "c83-synthetic-"
+    else:
+        raise ValueError("unsupported abstention calibration fixture schema")
     records, cases = dataset.get("records"), dataset.get("cases")
     if not isinstance(records, list) or not isinstance(cases, list):
         raise ValueError("records and cases must be lists")
@@ -332,9 +338,9 @@ def validate_dataset(dataset: dict[str, Any]) -> None:
     all_content: list[str] = []
     for record in records:
         namespace, content = record.get("namespace", ""), record.get("content", "")
-        if not namespace.startswith("c8-synthetic-"):
+        if not namespace.startswith(namespace_prefix):
             raise ValueError(f"non-synthetic namespace: {namespace!r}")
-        if not isinstance(content, str) or "Synthetic C8.1 fixture." not in content:
+        if not isinstance(content, str) or f"Synthetic {stage} fixture." not in content:
             raise ValueError(f"record {record['fixture_id']} is not synthetic")
         if SECRET_SHAPED.search(content):
             raise ValueError(f"record {record['fixture_id']} resembles a blocked secret-shaped string")

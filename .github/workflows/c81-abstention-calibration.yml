@@ -54,7 +54,7 @@ jobs:
         run: |
           if docker inspect "$C81_CONTAINER" >/dev/null 2>&1; then
             image="$(docker inspect --format '{{.Config.Image}}' "$C81_CONTAINER")"
-            owned="$(docker inspect --format '{{index .Config.Labels \"org.nyawa.c81-abstention-calibration\"}}' "$C81_CONTAINER")"
+            owned="$(docker inspect --format '{{index .Config.Labels \"org.nyawa.abstention-calibration\"}}' "$C81_CONTAINER")"
             if [[ "$image" != "$C81_IMAGE" || "$owned" != "true" ]]; then
               echo "::error::refusing to remove a container not created by this C8.1 run"
               exit 1
