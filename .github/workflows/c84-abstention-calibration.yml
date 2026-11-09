@@ -1,0 +1,68 @@
+name: C8.4 Raw Modality Abstention Calibration
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: c84-abstention-calibration
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  C84_IMAGE: ghcr.io/rezkyauliapratama/nyawa/bge-runtime@sha256:bcbc858b5df17d734858eb5db7c1faa521a327576d8070e97bc248653eff5246
+  C84_CONTAINER: nyawa-c84-eval-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  calibration:
+    name: Synthetic C8.4 raw-score fresh-holdout calibration
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate fresh C8.4 fixture and validate evaluator
+        run: |
+          FIXTURE="$RUNNER_TEMP/c84-abstention-fixtures.json"
+          python3 -m py_compile scripts/c81_fixture_generator.py scripts/c83_fixture_generator.py scripts/c84_fixture_generator.py scripts/c81_abstention_calibration.py
+          python3 scripts/c84_fixture_generator.py --output "$FIXTURE"
+          python3 scripts/c81_abstention_calibration.py --mode self-test --fixtures "$FIXTURE"
+
+      - name: Check runner capacity before any container starts
+        run: python3 scripts/c81_abstention_calibration.py --mode preflight
+
+      - name: Authenticate to GHCR for package read
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull pinned C8.4 runtime and run synthetic calibration
+        run: |
+          python3 scripts/c81_abstention_calibration.py \
+            --mode e2e \
+            --image "$C84_IMAGE" \
+            --container "$C84_CONTAINER" \
+            --fixtures "$RUNNER_TEMP/c84-abstention-fixtures.json"
+
+      - name: Final cleanup verification
+        if: always()
+        run: |
+          if docker inspect "$C84_CONTAINER" >/dev/null 2>&1; then
+            image="$(docker inspect --format '{{.Config.Image}}' "$C84_CONTAINER")"
+            owned="$(docker inspect --format '{{index .Config.Labels \"org.nyawa.abstention-calibration\"}}' "$C84_CONTAINER")"
+            if [[ "$image" != "$C84_IMAGE" || "$owned" != "true" ]]; then
+              echo "::error::refusing to remove a container not created by this C8.4 run"
+              exit 1
+            fi
+            docker rm --force "$C84_CONTAINER" >/dev/null
+          fi
+          if docker inspect "$C84_CONTAINER" >/dev/null 2>&1; then
+            echo "::error::disposable C8.4 container remains after cleanup"
+            exit 1
+          fi
+          echo "Disposable C8.4 container absent after cleanup."

@@ -28,6 +28,11 @@ IMAGE_C83 = (
     "ghcr.io/rezkyauliapratama/nyawa/bge-runtime@"
     "sha256:70b2935609973314d85f587f71f75cb44bd9f0a587a85f9d0457fbd988593495"
 )
+IMAGE_C84 = (
+    "ghcr.io/rezkyauliapratama/nyawa/bge-runtime@"
+    "sha256:bcbc858b5df17d734858eb5db7c1faa521a327576d8070e97bc248653eff5246"
+)
+APPROVED_IMAGES = {SCHEMA: IMAGE_C81, SCHEMA_C83: IMAGE_C83, SCHEMA_C84: IMAGE_C84}
 IMAGE = IMAGE_C81
 LABEL_KEY = "org.nyawa.abstention-calibration"
 MEMORY_LIMIT = 4 * 1024**3
@@ -768,8 +773,7 @@ def cleanup(container: str, image: str) -> None:
 
 def run_e2e(container: str, image: str, fixture_path: Path) -> dict[str, Any]:
     dataset = load_dataset(fixture_path)
-    approved_images = {SCHEMA: IMAGE_C81, SCHEMA_C83: IMAGE_C83}
-    expected_image = approved_images.get(dataset["schema_version"])
+    expected_image = APPROVED_IMAGES.get(dataset["schema_version"])
     if expected_image is None or image != expected_image:
         raise RuntimeError("no matching immutable image digest is approved for this fixture schema")
     preflight()
@@ -779,7 +783,8 @@ def run_e2e(container: str, image: str, fixture_path: Path) -> dict[str, Any]:
         raise RuntimeError("pulled image digest does not match the pinned image")
     if docker(["inspect", container], timeout=15, check=False).returncode == 0:
         raise RuntimeError("container name already exists; refusing to replace it")
-    db_path = f"/scratch/{'c83' if dataset['schema_version'] == SCHEMA_C83 else 'c81'}-abstention.db"
+    stage = {SCHEMA: "c81", SCHEMA_C83: "c83", SCHEMA_C84: "c84"}[dataset["schema_version"]]
+    db_path = f"/scratch/{stage}-abstention.db"
     try:
         docker([
             "run", "--detach", "--name", container,
@@ -899,6 +904,13 @@ class C81CalibrationTests(unittest.TestCase):
         self.assertTrue(c81_markers.isdisjoint(c83_markers))
         for split in ("calibration", "holdout"):
             self.assertEqual(sum(case["split"] == split for case in c83["cases"]), 60)
+
+    def test_c84_runtime_image_pin_is_immutable(self) -> None:
+        self.assertEqual(
+            IMAGE_C84,
+            "ghcr.io/rezkyauliapratama/nyawa/bge-runtime@sha256:bcbc858b5df17d734858eb5db7c1faa521a327576d8070e97bc248653eff5246",
+        )
+        self.assertEqual(APPROVED_IMAGES[SCHEMA_C84], IMAGE_C84)
 
     def test_c84_corpus_is_fresh_and_split_disjoint(self) -> None:
         old_corpora = [build_dataset(), build_c83_dataset()]
