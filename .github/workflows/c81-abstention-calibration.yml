@@ -12,7 +12,7 @@ permissions:
   packages: read
 
 env:
-  C81_IMAGE: ghcr.io/rezkyauliapratama/nyawa/bge-runtime@sha256:61da25caf922c0925f4fd8e3af1d811f6fc9d3a9df21beb44138c7300d47efb6
+  C81_IMAGE: ghcr.io/rezkyauliapratama/nyawa/bge-runtime@sha256:1f79ea37a0ff0168c227fc4d682ac5d0a2caa570873fe29e54fb2734eaaee365
   C81_CONTAINER: nyawa-c81-eval-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:

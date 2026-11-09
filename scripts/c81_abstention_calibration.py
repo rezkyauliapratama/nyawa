@@ -20,7 +20,7 @@ from c81_fixture_generator import SCHEMA, build_dataset, validate_dataset
 
 IMAGE = (
     "ghcr.io/rezkyauliapratama/nyawa/bge-runtime@"
-    "sha256:61da25caf922c0925f4fd8e3af1d811f6fc9d3a9df21beb44138c7300d47efb6"
+    "sha256:1f79ea37a0ff0168c227fc4d682ac5d0a2caa570873fe29e54fb2734eaaee365"
 )
 LABEL_KEY = "org.nyawa.c81-abstention-calibration"
 MEMORY_LIMIT = 4 * 1024**3
