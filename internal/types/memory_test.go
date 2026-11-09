@@ -26,12 +26,13 @@ func TestSearchConfig(t *testing.T) {
 func TestMemoryResultReset(t *testing.T) {
 	r := &types.MemoryResult{
 		Memory: types.Memory{ID: "test", Content: "content", Type: types.TypeNote, Importance: 0.5, EdgeCount: 3, Vector: []float32{1, 2, 3}},
-		Score: 0.9, RRFScore: 0.5, Rank: 1,
+		Score: 0.9, RRFScore: 0.5, Rank: 1, VectorRank: 2, FTS5Rank: 3,
 	}
 	r.Reset()
 	if r.ID != "" { t.Error("expected empty ID after reset") }
 	if r.Content != "" { t.Error("expected empty content after reset") }
 	if r.Score != 0 { t.Error("expected zero score after reset") }
+	if r.VectorRank != 0 || r.FTS5Rank != 0 { t.Errorf("expected zero modality ranks after reset, got vector=%d fts5=%d", r.VectorRank, r.FTS5Rank) }
 	if len(r.Vector) != 0 { t.Error("expected empty vector after reset") }
 }
 

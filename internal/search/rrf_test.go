@@ -25,6 +25,38 @@ func TestRRFFusion(t *testing.T) {
 	}
 }
 
+func TestPostProcessorNormalizesMissingModalityRanks(t *testing.T) {
+	pp := NewPostProcessor(0.05, 0.10, pool.NewResultPool(4))
+	memories := map[string]*types.Memory{
+		"vector-only": &types.Memory{ID: "vector-only", Content: "vector hit", Type: types.TypeNote},
+		"fts-only":    &types.Memory{ID: "fts-only", Content: "keyword hit", Type: types.TypeNote},
+		"both":        &types.Memory{ID: "both", Content: "both hits", Type: types.TypeNote},
+	}
+	fused := NewRRF(5).FuseWeighted(
+		[]string{"vector-only", "both"},
+		[]string{"fts-only", "both"},
+		1, 3,
+	)
+	results := pp.Process(fused, memories, 1000)
+	got := make(map[string]types.MemoryResult, len(results))
+	for _, result := range results {
+		got[result.ID] = *result
+	}
+	for id, want := range map[string][2]int{
+		"vector-only": {1, 0},
+		"fts-only":    {0, 1},
+		"both":        {2, 2},
+	} {
+		result, ok := got[id]
+		if !ok {
+			t.Fatalf("missing %s result", id)
+		}
+		if result.VectorRank != want[0] || result.FTS5Rank != want[1] {
+			t.Errorf("%s modality ranks = (%d,%d), want (%d,%d)", id, result.VectorRank, result.FTS5Rank, want[0], want[1])
+		}
+	}
+}
+
 func TestCosineSimilarity(t *testing.T) {
 	a := []float32{1, 0, 0}; b := []float32{0, 1, 0}; c := []float32{0.5, 0.5, 0}
 	if score := cosineSimilarity(a, b); score > 0.01 { t.Errorf("orthogonal vectors should have ~0 similarity, got %.4f", score) }
@@ -40,6 +72,7 @@ func TestPostProcessor(t *testing.T) {
 	results := pp.Process(fused, memories, 1000)
 	if len(results) != 1 { t.Fatalf("expected 1 result, got %d", len(results)) }
 	if r := results[0]; r.Score <= 0 { t.Errorf("expected positive score, got %.4f", r.Score) }
+	if r := results[0]; r.VectorRank != 1 || r.FTS5Rank != 5 { t.Errorf("expected modality ranks vector=1 fts5=5, got vector=%d fts5=%d", r.VectorRank, r.FTS5Rank) }
 }
 
 // The nearest vector hit must outrank a distractor retrieved far down the list

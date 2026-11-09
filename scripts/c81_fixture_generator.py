@@ -304,6 +304,7 @@ def build_dataset() -> dict[str, Any]:
             "namespace_leaks_max": 0,
             "forbidden_marker_leaks_max": 0,
             "require_numeric_score_and_rrf": True,
+            "require_modality_evidence": True,
         },
     }
     validate_dataset(dataset)
