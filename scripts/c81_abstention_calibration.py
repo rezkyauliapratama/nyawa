@@ -16,13 +16,19 @@ import unittest
 from pathlib import Path
 from typing import Any, TypeGuard
 
-from c81_fixture_generator import SCHEMA, build_dataset, validate_dataset
+from c81_fixture_generator import SCHEMA, SCHEMA_C83, build_dataset, validate_dataset
+from c83_fixture_generator import build_dataset as build_c83_dataset
 
-IMAGE = (
+IMAGE_C81 = (
     "ghcr.io/rezkyauliapratama/nyawa/bge-runtime@"
     "sha256:1f79ea37a0ff0168c227fc4d682ac5d0a2caa570873fe29e54fb2734eaaee365"
 )
-LABEL_KEY = "org.nyawa.c81-abstention-calibration"
+IMAGE_C83 = (
+    "ghcr.io/rezkyauliapratama/nyawa/bge-runtime@"
+    "sha256:70b2935609973314d85f587f71f75cb44bd9f0a587a85f9d0457fbd988593495"
+)
+IMAGE = IMAGE_C81
+LABEL_KEY = "org.nyawa.abstention-calibration"
 MEMORY_LIMIT = 4 * 1024**3
 MIN_AVAILABLE_MEMORY = 5 * 1024**3
 FIXTURE_DEFAULT = Path(__file__).resolve().parents[1] / "tests/fixtures/c81-abstention-calibration-fixtures.json"
@@ -31,9 +37,9 @@ SIGNALS = (
     "vector_rank", "fts5_rank", "both_modalities", "exact_identifier_match",
 )
 LEXICAL_STOPWORDS = frozenset(
-    "a an and are as at be by for from has have how in is it of on or the to was what when where which who why with did does do this that these those find give tell me fictional synthetic fixture marker c8 c81 synth id dan yang apa berapa untuk dari pada ini itu adalah sebagai dengan bagaimana siapa kapan dimana mengapa antrean kebijakan mode berapa sebuah sebuahnya".split()
+    "a an and are as at be by for from has have how in is it of on or the to was what when where which who why with did does do this that these those find give tell me fictional synthetic fixture marker c8 c81 c83 synth id dan yang apa berapa untuk dari pada ini itu adalah sebagai dengan bagaimana siapa kapan dimana mengapa antrean kebijakan mode berapa sebuah sebuahnya".split()
 )
-SYNTHETIC_ID = re.compile(r"SYNTH-C81-ID-[0-9]{4}", re.IGNORECASE)
+SYNTHETIC_ID = re.compile(r"SYNTH-C(?:81|83)-ID-[0-9]{4}", re.IGNORECASE)
 
 HTTP_HELPER = r"""
 import json, sys, urllib.error, urllib.request
@@ -188,7 +194,7 @@ def evaluate_policy(
     cases: list[dict[str, Any]],
     rows: list[dict[str, Any]],
     signal: str | None = None,
-    threshold: float | None = None,
+    threshold: float | dict[str, float] | None = None,
 ) -> dict[str, Any]:
     by_id = {row["case_id"]: row for row in rows}
     positives = [case for case in cases if case["answerable"]]
@@ -203,19 +209,34 @@ def evaluate_policy(
     for case in cases:
         row = by_id[case["case_id"]]
         candidates = row["candidates"]
-        if signal in ("final_margin", "rrf_margin", "lexical_margin"):
+        if signal in ("dual_rank", "dual_rank_score", "dual_rank_rrf", "dual_rank_lexical"):
+            accepted = []
+            if isinstance(threshold, dict):
+                for candidate in candidates:
+                    vector_rank, fts5_rank = candidate.get("vector_rank"), candidate.get("fts5_rank")
+                    if not (_numeric(vector_rank) and _numeric(fts5_rank)):
+                        continue
+                    if vector_rank <= 0 or fts5_rank <= 0 or vector_rank > threshold["vector_max"] or fts5_rank > threshold["fts5_max"]:
+                        continue
+                    field = {"dual_rank_score": "score", "dual_rank_rrf": "rrf_score", "dual_rank_lexical": "lexical_coverage"}.get(signal)
+                    if field is not None:
+                        value, minimum = candidate.get(field), threshold.get(f"{field}_min")
+                        if minimum is None or not _numeric(value) or value < minimum:
+                            continue
+                    accepted.append(candidate)
+        elif signal in ("final_margin", "rrf_margin", "lexical_margin"):
             margin = row.get(signal)
-            accepted = candidates if threshold is not None and _numeric(margin) and margin >= threshold else []
+            accepted = candidates if threshold is not None and not isinstance(threshold, dict) and _numeric(margin) and margin >= threshold else []
         elif signal == "both_modalities":
             accepted = [candidate for candidate in candidates if _both_modalities_present(candidate)]
         elif signal == "exact_identifier_match":
             accepted = [candidate for candidate in candidates if candidate.get("exact_identifier_match", False)]
         elif signal in ("vector_rank", "fts5_rank"):
-            accepted = [candidate for candidate in candidates if _rank_within(candidate, signal, threshold)]
+            accepted = [candidate for candidate in candidates if not isinstance(threshold, dict) and _rank_within(candidate, signal, threshold)]
         elif signal is not None:
             accepted = [
                 candidate for candidate in candidates
-                if threshold is not None and _numeric(candidate.get(signal)) and candidate[signal] >= threshold
+                if threshold is not None and not isinstance(threshold, dict) and _numeric(candidate.get(signal)) and candidate[signal] >= threshold
             ]
         else:
             accepted = candidates
@@ -350,6 +371,86 @@ def calibrate_signal(
     }
 
 
+def _sample_thresholds(values: set[float], limit: int = 10) -> list[float]:
+    ordered = sorted(values)
+    if len(ordered) <= limit:
+        return ordered
+    indexes = {round(i * (len(ordered) - 1) / (limit - 1)) for i in range(limit)}
+    return [ordered[i] for i in sorted(indexes)]
+
+
+def calibrate_joint_signals(
+    dataset: dict[str, Any],
+    cases: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Sweep two-source rank gates and their score/lexical conjunctions on calibration only."""
+    value_sets: dict[str, set[float]] = {
+        "vector_rank": set(), "fts5_rank": set(), "score": set(),
+        "rrf_score": set(), "lexical_coverage": set(),
+    }
+    for row in rows:
+        for candidate in row["candidates"]:
+            for field, values in value_sets.items():
+                value = candidate.get(field)
+                if not _numeric(value) or (field in ("vector_rank", "fts5_rank") and value <= 0):
+                    continue
+                values.add(float(value))
+
+    vector_values = value_sets["vector_rank"]
+    fts_values = value_sets["fts5_rank"]
+    score_values = value_sets["score"]
+    rrf_values = value_sets["rrf_score"]
+    lexical_values = value_sets["lexical_coverage"]
+    rank_pairs = [(v, f) for v in _sample_thresholds(vector_values) for f in _sample_thresholds(fts_values)]
+    rule_specs: list[tuple[str, list[tuple[dict[str, float], str | None]]]] = []
+    base_params = [{"vector_max": v, "fts5_max": f} for v, f in rank_pairs]
+    rule_specs.append(("dual_rank", [(params, None) for params in base_params]))
+    for signal, field, values in (
+        ("dual_rank_score", "score", score_values),
+        ("dual_rank_rrf", "rrf_score", rrf_values),
+        ("dual_rank_lexical", "lexical_coverage", lexical_values),
+    ):
+        sampled = _sample_thresholds(values)
+        rule_specs.append((signal, [({**params, f"{field}_min": threshold}, field) for params in base_params for threshold in sampled]))
+
+    results: list[dict[str, Any]] = []
+    gates = dataset["gates"]
+    for signal, specs in rule_specs:
+        feasible: list[dict[str, Any]] = []
+        points: list[dict[str, Any]] = []
+        for params, _ in specs:
+            metrics = evaluate_policy(cases, rows, signal, params)["metrics"]
+            point = {"threshold": params, **metrics, "feasible": passes_gates(metrics, gates)}
+            points.append(point)
+            if point["feasible"]:
+                feasible.append(point)
+        best = max(
+            feasible,
+            key=lambda point: (
+                point["positive_recall_at_k"], point["accepted_precision"],
+                -point["negative_false_positive_rate"],
+            ),
+            default=None,
+        )
+        best_any = max(
+            points,
+            key=lambda point: (
+                point["positive_recall_at_k"], point["exact_identifier_recall"],
+                -point["negative_false_positive_rate"], point["accepted_precision"],
+            ),
+            default=None,
+        )
+        results.append({
+            "signal": signal,
+            "thresholds_evaluated": len(points),
+            "feasible_threshold_count": len(feasible),
+            "best_feasible": best,
+            "best_recall_tradeoff": best_any,
+        })
+    return results
+
+
 def summarize(dataset: dict[str, Any], case_results: list[dict[str, Any]]) -> dict[str, Any]:
     cases = dataset["cases"]
     gates = dataset["gates"]
@@ -361,10 +462,18 @@ def summarize(dataset: dict[str, Any], case_results: list[dict[str, Any]]) -> di
     calibration_raw = evaluate_policy(calibration_cases, calibration_rows)["metrics"]
     holdout_raw = evaluate_policy(holdout_cases, holdout_rows)["metrics"]
     sweeps = [calibrate_signal(dataset, calibration_cases, calibration_rows, signal) for signal in SIGNALS]
+    joint_sweeps = (
+        calibrate_joint_signals(dataset, calibration_cases, calibration_rows)
+        if dataset["schema_version"] == SCHEMA_C83 else []
+    )
     feasible_candidates = [
         {"signal": sweep["signal"], **sweep["best_feasible"]}
         for sweep in sweeps if sweep["best_feasible"] is not None
     ]
+    feasible_candidates.extend(
+        {"signal": sweep["signal"], **sweep["best_feasible"]}
+        for sweep in joint_sweeps if sweep["best_feasible"] is not None
+    )
     selected = max(
         feasible_candidates,
         key=lambda point: (
@@ -396,18 +505,24 @@ def summarize(dataset: dict[str, Any], case_results: list[dict[str, Any]]) -> di
             key = "both" if vector_hit and fts5_hit else "vector_only" if vector_hit else "fts5_only" if fts5_hit else "neither"
             source_counts[key] += 1
     status = "PASS" if selected and holdout_pass and all_numeric and fixture_ids_mapped else "FAIL"
+    protocol = (
+        "calibration-only univariate and joint threshold selection; frozen holdout evaluation"
+        if dataset["schema_version"] == SCHEMA_C83
+        else "calibration-only threshold selection, frozen holdout evaluation"
+    )
     latencies = sorted(row["latency_ms"] for row in case_results)
     p95_index = max(0, math.ceil(0.95 * len(latencies)) - 1) if latencies else 0
     return {
         "status": status,
-        "schema_version": SCHEMA,
-        "protocol": "calibration-only threshold selection, frozen holdout evaluation",
+        "schema_version": dataset["schema_version"],
+        "protocol": protocol,
         "gates": gates,
         "raw_retrieval": {
             "calibration": calibration_raw,
             "holdout": holdout_raw,
         },
         "threshold_sweeps": sweeps,
+        "joint_threshold_sweeps": joint_sweeps,
         "selected_policy": selected,
         "holdout_policy_metrics": holdout_policy_metrics,
         "holdout_gates_pass": holdout_pass,
@@ -464,15 +579,15 @@ def verify_container(container: str, image: str) -> None:
     host = inspected["HostConfig"]
     labels = inspected.get("Config", {}).get("Labels") or {}
     if inspected["Config"].get("Image") != image or labels.get(LABEL_KEY) != "true":
-        raise RuntimeError("C8.1 container image/ownership mismatch")
+        raise RuntimeError("abstention calibration container image/ownership mismatch")
     if host.get("NetworkMode") != "none" or not host.get("ReadonlyRootfs"):
-        raise RuntimeError("C8.1 container is not network=none/read-only")
+        raise RuntimeError("calibration container is not network=none/read-only")
     if host.get("PortBindings") or host.get("Binds") or host.get("Mounts"):
-        raise RuntimeError("C8.1 container unexpectedly has a port or host/volume mount")
+        raise RuntimeError("calibration container unexpectedly has a port or host/volume mount")
     if host.get("Memory") != MEMORY_LIMIT or host.get("MemorySwap") != MEMORY_LIMIT or host.get("PidsLimit") != 128:
-        raise RuntimeError("C8.1 container resource limits do not match the declared bounds")
+        raise RuntimeError("calibration container resource limits do not match the declared bounds")
     if any(mount.get("Type") != "tmpfs" for mount in inspected.get("Mounts", [])):
-        raise RuntimeError("C8.1 container has a non-tmpfs mount")
+        raise RuntimeError("calibration container has a non-tmpfs mount")
 
 
 def cleanup(container: str, image: str) -> None:
@@ -482,16 +597,17 @@ def cleanup(container: str, image: str) -> None:
     inspected = json.loads(result.stdout)[0]
     labels = inspected.get("Config", {}).get("Labels") or {}
     if labels.get(LABEL_KEY) != "true" or inspected["Config"].get("Image") != image:
-        raise RuntimeError("refusing to remove a container not created by this C8.1 run")
+        raise RuntimeError("refusing to remove a container not created by this calibration run")
     docker(["rm", "--force", container], timeout=30)
     if docker(["inspect", container], timeout=15, check=False).returncode == 0:
-        raise RuntimeError("C8.1 cleanup readback failed: container still exists")
+        raise RuntimeError("calibration cleanup readback failed: container still exists")
 
 
 def run_e2e(container: str, image: str, fixture_path: Path) -> dict[str, Any]:
-    if image != IMAGE:
-        raise RuntimeError("image must equal the approved immutable BGE r1 digest")
     dataset = load_dataset(fixture_path)
+    expected_image = IMAGE_C83 if dataset["schema_version"] == SCHEMA_C83 else IMAGE_C81
+    if image != expected_image:
+        raise RuntimeError("image must equal the immutable digest approved for this fixture schema")
     preflight()
     docker(["pull", image], timeout=300)
     image_info = json.loads(docker(["image", "inspect", image]).stdout)[0]
@@ -499,6 +615,7 @@ def run_e2e(container: str, image: str, fixture_path: Path) -> dict[str, Any]:
         raise RuntimeError("pulled image digest does not match the pinned image")
     if docker(["inspect", container], timeout=15, check=False).returncode == 0:
         raise RuntimeError("container name already exists; refusing to replace it")
+    db_path = f"/scratch/{'c83' if dataset['schema_version'] == SCHEMA_C83 else 'c81'}-abstention.db"
     try:
         docker([
             "run", "--detach", "--name", container,
@@ -511,7 +628,7 @@ def run_e2e(container: str, image: str, fixture_path: Path) -> dict[str, Any]:
             "--env", "MEMORY_EMBEDDER=local",
             "--env", "NYAWA_EMBED_MODEL_DIR=/opt/nyawa/model",
             "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp",
-            image, "serve", "/scratch/c81-abstention.db",
+            image, "serve", db_path,
         ], timeout=60)
         verify_container(container, image)
         deadline = time.monotonic() + 180
@@ -553,7 +670,7 @@ def run_e2e(container: str, image: str, fixture_path: Path) -> dict[str, Any]:
         store_stats = stats["body"].get("store", stats["body"])
         vector_indexed = int(store_stats.get("vector_indexed", 0))
         if vector_indexed < len(dataset["records"]):
-            raise RuntimeError(f"not all C8.1 synthetic records were vector-indexed: {store_stats}")
+            raise RuntimeError(f"not all synthetic records were vector-indexed: {store_stats}")
 
         per_case = []
         for case in dataset["cases"]:
@@ -602,6 +719,23 @@ class C81CalibrationTests(unittest.TestCase):
         holdout_markers = {marker for case in dataset["cases"] if case["split"] == "holdout" for marker in case["relevant_markers"]}
         self.assertTrue(calibration_markers.isdisjoint(holdout_markers))
 
+    def test_c83_corpus_is_fresh_and_split_disjoint(self) -> None:
+        c81 = build_dataset()
+        c83 = build_c83_dataset()
+        validate_dataset(c83)
+        self.assertEqual(c83["schema_version"], SCHEMA_C83)
+        self.assertEqual(len(c83["records"]), 90)
+        self.assertEqual(len(c83["cases"]), 120)
+        c81_queries = {case["query"] for case in c81["cases"]}
+        c83_queries = {case["query"] for case in c83["cases"]}
+        self.assertTrue(c81_queries.isdisjoint(c83_queries))
+        marker_pattern = re.compile(r"Marker ([A-Z0-9_]+)")
+        c81_markers = {marker for record in c81["records"] for marker in marker_pattern.findall(record["content"])}
+        c83_markers = {marker for record in c83["records"] for marker in marker_pattern.findall(record["content"])}
+        self.assertTrue(c81_markers.isdisjoint(c83_markers))
+        for split in ("calibration", "holdout"):
+            self.assertEqual(sum(case["split"] == split for case in c83["cases"]), 60)
+
     def test_score_case_records_both_score_signals_without_content(self) -> None:
         case = {"case_id": "Q", "category": "exact_identifier", "split": "calibration", "answerable": True, "namespace": "c8-synthetic-main", "query": "Find exact identifier SYNTH-C81-ID-0001", "relevant_markers": ["GOLD"], "forbidden_markers": []}
         result = score_case(case, [{"ID": "m1", "Content": "Synthetic C8.1 record GOLD SYNTH-C81-ID-0001", "Score": 0.9, "RRFScore": 0.6, "Rank": 1, "VectorRank": 2, "FTS5Rank": 1}], 12, 5, {"m1": "F01"})
@@ -614,6 +748,9 @@ class C81CalibrationTests(unittest.TestCase):
         self.assertEqual((candidate["vector_rank"], candidate["fts5_rank"]), (2, 1))
         self.assertTrue(candidate["both_modalities"])
         self.assertTrue(candidate["exact_identifier_match"])
+        c83_case = {**case, "query": "Retrieve exact identifier SYNTH-C83-ID-0001"}
+        c83_result = score_case(c83_case, [{"ID": "m3", "Content": "GOLD SYNTH-C83-ID-0001", "Score": 0.8, "RRFScore": 0.5, "VectorRank": 1, "FTS5Rank": 2}], 5, 5, {"m3": "F03"})
+        self.assertTrue(c83_result["candidates"][0]["exact_identifier_match"])
         self.assertGreater(candidate["lexical_coverage"], 0.0)
         self.assertNotIn("content", candidate)
         self.assertTrue(result["scores_numeric"])
@@ -637,6 +774,31 @@ class C81CalibrationTests(unittest.TestCase):
         result = evaluate_policy(cases, rows, "both_modalities", 1.0)["metrics"]
         self.assertEqual(result["positive_recall_at_k"], 1.0)
         self.assertEqual(result["negative_false_positive_rate"], 0.0)
+
+    def test_joint_rank_threshold_abstains_on_single_source_candidate(self) -> None:
+        dataset = {"gates": {
+            "positive_recall_at_k_min": 0.9,
+            "exact_identifier_recall_min": 1.0,
+            "negative_false_positive_rate_max": 0.05,
+            "namespace_leaks_max": 0,
+            "forbidden_marker_leaks_max": 0,
+            "require_modality_evidence": True,
+        }}
+        cases = [
+            {"case_id": "P", "answerable": True, "category": "exact_identifier"},
+            {"case_id": "N", "answerable": False, "category": "negative_query"},
+        ]
+        rows = [
+            {"case_id": "P", "result_count": 1, "scores_numeric": True, "modality_evidence_present": True, "modality_ranks_numeric": True,
+             "candidates": [{"score": 0.9, "rrf_score": 0.8, "vector_rank": 1, "fts5_rank": 2, "lexical_coverage": 1.0, "relevant": True, "forbidden_markers_found": []}]},
+            {"case_id": "N", "result_count": 1, "scores_numeric": True, "modality_evidence_present": True, "modality_ranks_numeric": True,
+             "candidates": [{"score": 0.9, "rrf_score": 0.8, "vector_rank": 1, "fts5_rank": 0, "lexical_coverage": 0.0, "relevant": False, "forbidden_markers_found": []}]},
+        ]
+        joint = calibrate_joint_signals(dataset, cases, rows)
+        dual_rank = next(policy for policy in joint if policy["signal"] == "dual_rank")
+        self.assertEqual(dual_rank["feasible_threshold_count"], 1)
+        self.assertEqual(dual_rank["best_feasible"]["positive_recall_at_k"], 1.0)
+        self.assertEqual(dual_rank["best_feasible"]["negative_false_positive_rate"], 0.0)
 
     def test_modality_evidence_gate_fails_closed_when_fields_are_missing(self) -> None:
         gates = {
@@ -688,6 +850,56 @@ class C81CalibrationTests(unittest.TestCase):
         self.assertIsNotNone(selected["best_feasible"])
         self.assertEqual(selected["best_feasible"]["threshold"], 0.8)
 
+    def test_c83_summary_selects_calibration_joint_rule_and_evaluates_holdout(self) -> None:
+        dataset = build_c83_dataset()
+        rows = []
+        for case in dataset["cases"]:
+            candidates = []
+            if case["answerable"]:
+                candidates = [{
+                    "fixture_id": f"TARGET_{case['case_id']}", "rank": 1, "score": 0.9,
+                    "rrf_score": 0.8, "temporal_boost": 0.0, "importance_boost": 0.0,
+                    "vector_rank": 1, "fts5_rank": 1, "modality_evidence_present": True,
+                    "both_modalities": True, "exact_identifier_match": True, "lexical_coverage": 0.8,
+                    "type": "fact", "relevant": True, "forbidden_markers_found": [],
+                }]
+            else:
+                candidates = [{
+                    "fixture_id": f"NOISE_{case['case_id']}", "rank": 1, "score": 0.9,
+                    "rrf_score": 0.8, "temporal_boost": 0.0, "importance_boost": 0.0,
+                    "vector_rank": 1, "fts5_rank": 0, "modality_evidence_present": True,
+                    "both_modalities": False, "exact_identifier_match": False, "lexical_coverage": 0.2,
+                    "type": "fact", "relevant": False, "forbidden_markers_found": [],
+                }]
+            rows.append({
+                "case_id": case["case_id"], "scores_numeric": True,
+                "modality_ranks_numeric": True, "modality_evidence_present": True,
+                "result_count": 1, "candidates": candidates,
+                "final_margin": 0.9, "rrf_margin": 0.8, "lexical_margin": 0.6,
+                "latency_ms": 1.0, "candidate_chars": 10, "estimated_candidate_tokens": 3,
+                "fixture_ids_mapped": True,
+            })
+        report = summarize(dataset, rows)
+        self.assertEqual(report["schema_version"], SCHEMA_C83)
+        self.assertTrue(report["joint_threshold_sweeps"])
+        self.assertEqual(report["status"], "PASS")
+        self.assertTrue(report["holdout_gates_pass"])
+        self.assertIsNotNone(report["selected_policy"])
+        mutated_rows = [
+            {**row, "candidates": [{**candidate} for candidate in row["candidates"]]}
+            for row in rows
+        ]
+        case_splits = {case["case_id"]: case["split"] for case in dataset["cases"]}
+        for row in mutated_rows:
+            if case_splits[row["case_id"]] == "holdout":
+                for candidate in row["candidates"]:
+                    candidate["vector_rank"] = 50
+                    candidate["fts5_rank"] = 50
+                    candidate["score"] = 0.01
+        after_holdout_mutation = summarize(dataset, mutated_rows)
+        self.assertEqual(report["joint_threshold_sweeps"], after_holdout_mutation["joint_threshold_sweeps"])
+        self.assertEqual(report["selected_policy"], after_holdout_mutation["selected_policy"])
+
     def test_frozen_holdout_passes_only_after_calibration_selected_rule(self) -> None:
         dataset = build_dataset()
         rows = []
@@ -733,7 +945,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("preflight", "self-test", "e2e"), required=True)
     parser.add_argument("--image", default=IMAGE)
-    parser.add_argument("--container", default="nyawa-c81-abstention-calibration")
+    parser.add_argument("--container", default="nyawa-abstention-calibration")
     parser.add_argument("--fixtures", type=Path, default=FIXTURE_DEFAULT)
     args = parser.parse_args()
     if args.mode == "preflight":
@@ -744,7 +956,7 @@ def main() -> int:
             dataset = load_dataset(args.fixtures) if args.fixtures.exists() else build_dataset()
             print(json.dumps({"fixture_validation": "PASS", "records": len(dataset["records"]), "cases": len(dataset["cases"])}))
         except Exception as error:
-            print(f"C8.1 fixture validation FAILED: {error}", file=sys.stderr)
+            print(f"synthetic fixture validation FAILED: {error}", file=sys.stderr)
             return 1
         suite = unittest.defaultTestLoader.loadTestsFromTestCase(C81CalibrationTests)
         return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
@@ -753,13 +965,14 @@ def main() -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
         summary = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary:
+            stage = "C8.3" if report["schema_version"] == SCHEMA_C83 else "C8.1"
             with open(summary, "a", encoding="utf-8") as stream:
-                stream.write("## C8.1 Abstention Calibration\n\n```json\n")
+                stream.write(f"## {stage} Abstention Calibration\n\n```json\n")
                 stream.write(json.dumps(report, indent=2, sort_keys=True))
                 stream.write("\n```\n\nSynthetic-only; calibration selects policy, holdout remains frozen. No provider/Hermes call or context injection.\n")
         return 0 if report["status"] == "PASS" else 1
     except Exception as error:
-        print(f"C8.1 evaluation FAILED: {error}", file=sys.stderr)
+        print(f"abstention evaluation FAILED: {error}", file=sys.stderr)
         return 1
 
 
