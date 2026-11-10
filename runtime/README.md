@@ -3,8 +3,8 @@
 Runtime ini memakai satu proses Nyawa dan satu child `bge_server.py`. Child
 memuat model BGE ONNX sekali, membaca JSONL dari `stdin`, menulis JSONL ke
 `stdout`, dan hanya mengirim marker `READY dim=...` ke `stderr`. Tidak ada Unix
-socket, host virtualenv, probe Python palsu, atau model yang diambil saat
-startup.
+socket, pencarian virtualenv host secara implisit, probe Python palsu, atau model
+yang diambil saat startup.
 
 ## Kontrak provenance dan artefak
 
@@ -24,6 +24,14 @@ startup.
   sebagai asset release `bge-model-v1.2.4`; workflow publish mengunduh dan
   memverifikasi checksum sebelum build. `tokenizer.json` tetap berada di repo.
 - `NYAWA_EMBED_MODEL_DIR` menunjuk ke `/opt/nyawa/model` di dalam image.
+- Secara default, Nyawa tetap mencoba interpreter image dalam urutan
+  `/usr/local/bin/python3`, `/usr/bin/python3`, lalu `python3` dari `PATH`.
+  `NYAWA_EMBED_PYTHON` adalah override opt-in untuk kebutuhan runtime khusus:
+  nilainya harus berupa path absolut ke executable Python yang dapat mengimpor
+  `numpy` dan `onnxruntime`. Nyawa menjalankan probe import tanpa shell sebelum
+  memakai interpreter tersebut. Nilai override yang relatif, kosong, tidak
+  executable, atau gagal mengimpor dependensi membuat startup gagal; tidak ada
+  fallback ke kandidat default bila override sudah disetel.
 
 ## Local cross-encoder confidence (opt-in)
 

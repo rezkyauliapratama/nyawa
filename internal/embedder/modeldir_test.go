@@ -66,13 +66,111 @@ func TestResolveModelDirFallsBackToFirstWhenNoneExist(t *testing.T) {
 	}
 }
 
-// The durable image must probe the interpreter installed in the image before
-// generic PATH lookup; it must not depend on a host or persistent-volume venv.
+// With no explicit override, the durable image probes its bundled interpreter
+// candidates before relying on generic PATH lookup.
 func TestPythonCandidatesPreferImageInterpreter(t *testing.T) {
-	if len(embedPythonCandidates) == 0 {
-		t.Fatal("no python candidates configured")
+	want := []string{"/usr/local/bin/python3", "/usr/bin/python3", "python3"}
+	if len(embedPythonCandidates) != len(want) {
+		t.Fatalf("python candidates = %v, want %v", embedPythonCandidates, want)
 	}
-	if got, want := embedPythonCandidates[0], "/usr/local/bin/python3"; got != want {
-		t.Errorf("first python candidate = %q, want %q", got, want)
+	for i := range want {
+		if embedPythonCandidates[i] != want[i] {
+			t.Errorf("python candidate %d = %q, want %q", i, embedPythonCandidates[i], want[i])
+		}
+	}
+}
+
+func TestResolvePythonPathAcceptsVerifiedAbsoluteOverride(t *testing.T) {
+	const configuredPath = "/custom/python3"
+	probed := []string{}
+	path, err := resolvePythonPath(
+		func(key string) (string, bool) { return configuredPath, key == "NYAWA_EMBED_PYTHON" },
+		[]string{"/image/python3"},
+		func(candidate string) error {
+			probed = append(probed, candidate)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("resolvePythonPath() error = %v", err)
+	}
+	if path != configuredPath {
+		t.Errorf("path = %q, want %q", path, configuredPath)
+	}
+	if len(probed) != 1 || probed[0] != configuredPath {
+		t.Errorf("probed = %v, want only %q", probed, configuredPath)
+	}
+}
+
+func TestResolvePythonPathRejectsInvalidOverrideWithoutFallback(t *testing.T) {
+	for _, configuredPath := range []string{"python3", ""} {
+		t.Run("path="+configuredPath, func(t *testing.T) {
+			probed := false
+			path, err := resolvePythonPath(
+				func(string) (string, bool) { return configuredPath, true },
+				[]string{"/image/python3"},
+				func(string) error { probed = true; return nil },
+			)
+			if err == nil {
+				t.Fatal("resolvePythonPath() error = nil, want invalid-override error")
+			}
+			if path != "" {
+				t.Errorf("path = %q, want empty", path)
+			}
+			if probed {
+				t.Error("invalid relative override must not be probed or fall back")
+			}
+		})
+	}
+}
+
+func TestResolvePythonPathProbeFailureDoesNotFallback(t *testing.T) {
+	probed := []string{}
+	path, err := resolvePythonPath(
+		func(string) (string, bool) { return "/custom/python3", true },
+		[]string{"/image/python3"},
+		func(candidate string) error {
+			probed = append(probed, candidate)
+			return os.ErrPermission
+		},
+	)
+	if err == nil {
+		t.Fatal("resolvePythonPath() error = nil, want probe error")
+	}
+	if path != "" {
+		t.Errorf("path = %q, want empty", path)
+	}
+	if len(probed) != 1 || probed[0] != "/custom/python3" {
+		t.Errorf("probed = %v, want only explicit override", probed)
+	}
+}
+
+func TestResolvePythonPathUsesDefaultCandidatesWhenUnset(t *testing.T) {
+	probed := []string{}
+	path, err := resolvePythonPath(
+		func(string) (string, bool) { return "", false },
+		[]string{"/usr/local/bin/python3", "/usr/bin/python3", "python3"},
+		func(candidate string) error {
+			probed = append(probed, candidate)
+			if candidate == "/usr/bin/python3" {
+				return nil
+			}
+			return os.ErrNotExist
+		},
+	)
+	if err != nil {
+		t.Fatalf("resolvePythonPath() error = %v", err)
+	}
+	if path != "/usr/bin/python3" {
+		t.Errorf("path = %q, want /usr/bin/python3", path)
+	}
+	wantProbed := []string{"/usr/local/bin/python3", "/usr/bin/python3"}
+	if len(probed) != len(wantProbed) {
+		t.Fatalf("probed = %v, want %v", probed, wantProbed)
+	}
+	for i := range wantProbed {
+		if probed[i] != wantProbed[i] {
+			t.Errorf("probe %d = %q, want %q", i, probed[i], wantProbed[i])
+		}
 	}
 }

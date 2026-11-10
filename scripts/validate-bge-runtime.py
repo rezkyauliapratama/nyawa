@@ -92,8 +92,13 @@ def main() -> None:
 
     for forbidden in ("socket", "AF_UNIX", "threading", "serve_mode", "NYAWA_EMBED_PYTHON"):
         assert forbidden not in server, f"alternate transport remains: {forbidden}"
-    for forbidden in ("net.Dial", "socketPathFor", "NYAWA_EMBED_PYTHON", "/opt/data/bge-venv", "/opt/hermes/.venv"):
+    for forbidden in ("net.Dial", "socketPathFor", "/opt/data/bge-venv", "/opt/hermes/.venv"):
         assert forbidden not in embedder, f"host dependency remains: {forbidden}"
+    assert 'lookup("NYAWA_EMBED_PYTHON")' in embedder
+    assert "filepath.IsAbs(path)" in embedder
+    assert 'exec.Command(path, "-c", "import onnxruntime, numpy; print(\'ok\')")' in embedder
+    assert "NYAWA_EMBED_PYTHON must be an absolute executable path" in embedder
+    assert "NYAWA_EMBED_PYTHON failed the onnxruntime+numpy import probe" in embedder
     assert server.count("for line in sys.stdin") == 1
     assert embedder.count("exec.Command(pythonPath, scriptPath)") == 1
     assert "READY dim=" in server
