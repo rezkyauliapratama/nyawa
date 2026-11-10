@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -26,17 +27,18 @@ func NewPythonEmbedder(modelPath string) *PythonEmbedder {
 	return &PythonEmbedder{modelPath: modelPath, dim: 384}
 }
 
-// Start owns exactly one BGE server subprocess and connects it through private
-// stdin/stdout pipes. The runtime image supplies both the interpreter and the
-// model, so startup has no host venv, socket, or second-process discovery path.
+// Start owns one BGE server subprocess per embedder instance and connects it
+// through private stdin/stdout pipes. The runtime image supplies the default
+// interpreter and model; NYAWA_EMBED_PYTHON is an explicit, import-checked
+// operator override. Runtime transport remains socket-free.
 func (p *PythonEmbedder) Start() error {
 	scriptPath := findScriptPath()
 	if scriptPath == "" {
 		return fmt.Errorf("bge_server.py not found")
 	}
-	pythonPath := findPythonPath()
-	if pythonPath == "" {
-		return fmt.Errorf("no python with onnxruntime+numpy")
+	pythonPath, err := findPythonPath()
+	if err != nil {
+		return err
 	}
 	return p.startLegacy(scriptPath, pythonPath)
 }
@@ -181,20 +183,56 @@ func findScriptPath() string {
 }
 
 // embedPythonCandidates are the interpreters shipped with or explicitly
-// installed in the runtime image. A host or persistent-volume venv is never
-// consulted by the durable runtime.
+// installed in the runtime image. They retain the default discovery order when
+// NYAWA_EMBED_PYTHON is unset; a configured override is always authoritative.
 var embedPythonCandidates = []string{
 	"/usr/local/bin/python3",
 	"/usr/bin/python3",
 	"python3",
 }
 
-func findPythonPath() string {
-	for _, c := range embedPythonCandidates {
-		cmd := exec.Command(c, "-c", "import onnxruntime, numpy; print('ok')")
-		if out, err := cmd.Output(); err == nil && strings.TrimSpace(string(out)) == "ok" {
-			return c
+func findPythonPath() (string, error) {
+	path, err := resolvePythonPath(os.LookupEnv, embedPythonCandidates, probePython)
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
+		return "", fmt.Errorf("no python with onnxruntime+numpy")
+	}
+	return path, nil
+}
+
+// resolvePythonPath treats a configured path as authoritative: it must be
+// absolute and pass the same import probe as the image-provided candidates.
+// A bad explicit setting fails closed rather than silently selecting another
+// interpreter. The probe uses exec directly, never a shell.
+func resolvePythonPath(lookup func(string) (string, bool), candidates []string, probe func(string) error) (string, error) {
+	if path, configured := lookup("NYAWA_EMBED_PYTHON"); configured {
+		if !filepath.IsAbs(path) {
+			return "", fmt.Errorf("NYAWA_EMBED_PYTHON must be an absolute executable path")
+		}
+		if err := probe(path); err != nil {
+			return "", fmt.Errorf("NYAWA_EMBED_PYTHON failed the onnxruntime+numpy import probe: %w", err)
+		}
+		return path, nil
+	}
+
+	for _, candidate := range candidates {
+		if err := probe(candidate); err == nil {
+			return candidate, nil
 		}
 	}
-	return ""
+	return "", nil
+}
+
+func probePython(path string) error {
+	cmd := exec.Command(path, "-c", "import onnxruntime, numpy; print('ok')")
+	out, err := cmd.Output()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(out)) != "ok" {
+		return fmt.Errorf("unexpected probe output")
+	}
+	return nil
 }

@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// This is intentionally a static contract test. The durable image owns one
-// private stdin/stdout child; it must not regress to a shared socket or a host
-// probe that can race another Nyawa process.
+// This is intentionally a static contract test. The image owns one private
+// stdin/stdout child per embedder instance. An explicit interpreter path is
+// opt-in and import-checked; runtime transport must remain socket-free.
 func TestEmbeddedRuntimeHasSingleProcessContract(t *testing.T) {
 	data, err := os.ReadFile("bge_server.py")
 	if err != nil {
@@ -29,8 +29,13 @@ func TestEmbeddedRuntimeHasSingleProcessContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	goText := string(goSource)
-	if strings.Contains(goText, "net.Dial") || strings.Contains(goText, "socketPathFor") || strings.Contains(goText, "NYAWA_EMBED_PYTHON") {
-		t.Fatal("py_embedder.go must not use socket or host Python override paths")
+	for _, forbidden := range []string{"net.Dial", "socketPathFor", "/opt/data/bge-venv", "/opt/hermes/.venv"} {
+		if strings.Contains(goText, forbidden) {
+			t.Fatalf("py_embedder.go contains forbidden alternate transport or hard-coded host path %q", forbidden)
+		}
+	}
+	if !strings.Contains(goText, `lookup("NYAWA_EMBED_PYTHON")`) || !strings.Contains(goText, "filepath.IsAbs(path)") {
+		t.Fatal("py_embedder.go must validate the explicit interpreter override as an absolute path")
 	}
 	if strings.Count(goText, "exec.Command(pythonPath, scriptPath)") != 1 {
 		t.Fatal("exactly one Python child launch is required")
