@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -272,7 +273,8 @@ func (r *RAGStore) QueryWithRerank(query string, topK int, collectionName string
 			}
 			for i := 0; i < len(results); i++ {
 				for j := i + 1; j < len(results); j++ {
-					if results[j].Score > results[i].Score {
+					if (results[j].exactMatch && !results[i].exactMatch) ||
+						(results[j].exactMatch == results[i].exactMatch && results[j].Score > results[i].Score) {
 						results[i], results[j] = results[j], results[i]
 					}
 				}
@@ -287,67 +289,86 @@ func (r *RAGStore) QueryWithRerank(query string, topK int, collectionName string
 }
 
 func (r *RAGStore) queryInternal(query string, topK int, collectionName string) ([]RAGResult, error) {
+	if r.initErr != nil {
+		return nil, fmt.Errorf("RAG index unavailable: %w", r.initErr)
+	}
 	if r.embedder == nil || !r.embedder.Available() {
-		return nil, fmt.Errorf("embedder not available")
+		return nil, ErrRAGEmbedderUnavailable
 	}
 	if topK <= 0 {
 		topK = 5
 	}
-
-	vec, err := r.embedder.Embed(query)
+	vec, err := embedRAGQuery(r.embedder, query)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
-
-	results, err := r.hnsw.SearchChecked(vec, topK*3)
+	hnsw, err := r.refreshHNSW()
 	if err != nil {
-		return nil, fmt.Errorf("hnsw search: %w", err)
+		return nil, err
 	}
-	if len(results) == 0 {
-		return nil, nil
+	indexSize := hnsw.Size()
+	vectorByID := make(map[string]retrievalCandidate)
+	searchK := topK * 3
+	if searchK < topK || searchK > indexSize {
+		searchK = indexSize
 	}
+	for searchK > 0 {
+		vectorResults, err := hnsw.SearchCheckedStable(vec, searchK)
+		if err != nil {
+			return nil, fmt.Errorf("hnsw search: %w", err)
+		}
+		for _, match := range vectorResults {
+			if !strings.HasPrefix(match.ID, "rag_chk_") {
+				continue
+			}
+			var candidate retrievalCandidate
+			var indexed int
+			err := r.db.QueryRow(`SELECT c.content,c.chunk_index,d.filename,c.vector_indexed
+				FROM rag_chunks c JOIN rag_documents d ON d.id=c.document_id
+				JOIN rag_collections col ON col.id=d.collection_id
+				WHERE c.id=? AND (?='' OR col.name=?)`, match.ID, collectionName, collectionName).Scan(
+				&candidate.result.Content, &candidate.result.ChunkIdx, &candidate.result.Document, &indexed)
+			if err != nil || indexed != 1 {
+				continue
+			}
+			candidate.result.ChunkID = match.ID
+			candidate.result.Score = 1 / (1 + match.Distance)
+			vectorByID[match.ID] = candidate
+		}
+		if len(vectorByID) >= topK || searchK >= indexSize {
+			break
+		}
+		nextSearchK := searchK * 2
+		if nextSearchK <= searchK || nextSearchK > indexSize {
+			nextSearchK = indexSize
+		}
+		searchK = nextSearchK
+	}
+	vectorCandidates := make([]retrievalCandidate, 0, len(vectorByID))
+	for _, candidate := range vectorByID {
+		vectorCandidates = append(vectorCandidates, candidate)
+	}
+	// The HNSW implementation does not define order for equal distances. Make
+	// RRF ranks reproducible before fusion, including across map iteration.
+	sortRAGVectorCandidates(vectorCandidates)
+	lexicalCandidates, err := r.lexicalCandidates(query, collectionName, topK*3)
+	if err != nil {
+		return nil, err
+	}
+	results := fuseRAGCandidates(vectorCandidates, lexicalCandidates)
+	if len(results) > topK {
+		results = results[:topK]
+	}
+	return results, nil
+}
 
-	var ragResults []RAGResult
-	for _, res := range results {
-		if !strings.HasPrefix(res.ID, "rag_chk_") {
-			continue
+func sortRAGVectorCandidates(candidates []retrievalCandidate) {
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].result.Score != candidates[j].result.Score {
+			return candidates[i].result.Score > candidates[j].result.Score
 		}
-		var content string
-		var docID string
-		var chunkIdx int
-		if err := r.db.QueryRow(`SELECT content, document_id, chunk_index FROM rag_chunks WHERE id=?`, res.ID).Scan(&content, &docID, &chunkIdx); err != nil {
-			continue
-		}
-		if collectionName != "" {
-			var colID int
-			r.db.QueryRow(`SELECT collection_id FROM rag_documents WHERE id=?`, docID).Scan(&colID)
-			if colID == 0 {
-				continue
-			}
-			var colName string
-			r.db.QueryRow(`SELECT name FROM rag_collections WHERE id=?`, colID).Scan(&colName)
-			if colName != collectionName {
-				continue
-			}
-		}
-		var filename string
-		r.db.QueryRow(`SELECT filename FROM rag_documents WHERE id=?`, docID).Scan(&filename)
-		ragResults = append(ragResults, RAGResult{
-			ChunkID: res.ID, Content: content, Score: 1.0 / (1.0 + res.Distance),
-			Document: filename, ChunkIdx: chunkIdx,
-		})
-	}
-	for i := 0; i < len(ragResults); i++ {
-		for j := i + 1; j < len(ragResults); j++ {
-			if ragResults[j].Score > ragResults[i].Score {
-				ragResults[i], ragResults[j] = ragResults[j], ragResults[i]
-			}
-		}
-	}
-	if len(ragResults) > topK {
-		ragResults = ragResults[:topK]
-	}
-	return ragResults, nil
+		return candidates[i].result.ChunkID < candidates[j].result.ChunkID
+	})
 }
 
 func findRerankerScript() string {

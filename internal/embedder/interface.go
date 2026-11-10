@@ -1,14 +1,58 @@
 package embedder
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 )
 
 var (
 	ErrNoEmbedder                 = errors.New("no embedder available")
 	ErrEmbeddingDimensionMismatch = errors.New("embedding dimension mismatch")
 )
+
+// LocalModelFingerprint identifies the local model artifacts that define the
+// embedding space. Both files are required and must be regular, non-empty files;
+// missing or ambiguous artifacts fail closed instead of falling back to a
+// directory name.
+func LocalModelFingerprint(modelDir string) (string, error) {
+	if modelDir == "" {
+		return "", fmt.Errorf("local model directory is required")
+	}
+
+	hash := sha256.New()
+	for _, name := range []string{"model.onnx", "tokenizer.json"} {
+		path := filepath.Join(modelDir, name)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return "", fmt.Errorf("inspect local model artifact %s: %w", name, err)
+		}
+		if !info.Mode().IsRegular() || info.Size() <= 0 {
+			return "", fmt.Errorf("local model artifact %s must be a non-empty regular file", name)
+		}
+
+		file, err := os.Open(path)
+		if err != nil {
+			return "", fmt.Errorf("open local model artifact %s: %w", name, err)
+		}
+		if _, err := io.WriteString(hash, name+string([]byte{0})); err != nil {
+			file.Close()
+			return "", fmt.Errorf("hash local model artifact %s: %w", name, err)
+		}
+		if _, err := io.Copy(hash, file); err != nil {
+			file.Close()
+			return "", fmt.Errorf("hash local model artifact %s: %w", name, err)
+		}
+		if err := file.Close(); err != nil {
+			return "", fmt.Errorf("close local model artifact %s: %w", name, err)
+		}
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+}
 
 type Embedder interface {
 	Embed(text string) ([]float32, error)
@@ -35,6 +79,33 @@ func (pc *PriorityChain) Embed(text string) ([]float32, error) {
 		}
 	}
 	return pc.tryFallback(text)
+}
+
+// EmbedQuery and EmbedPassage preserve task-aware APIs through a priority
+// chain. Embedders without retrieval task support (for example local BGE) use
+// their ordinary Embed method.
+func (pc *PriorityChain) EmbedQuery(text string) ([]float32, error) {
+	return pc.embedTask(text, true)
+}
+
+func (pc *PriorityChain) EmbedPassage(text string) ([]float32, error) {
+	return pc.embedTask(text, false)
+}
+
+func (pc *PriorityChain) embedTask(text string, query bool) ([]float32, error) {
+	if pc.current == nil || !pc.current.Available() {
+		return pc.Embed(text)
+	}
+	if taskEmbedder, ok := pc.current.(interface {
+		EmbedQuery(string) ([]float32, error)
+		EmbedPassage(string) ([]float32, error)
+	}); ok {
+		if query {
+			return taskEmbedder.EmbedQuery(text)
+		}
+		return taskEmbedder.EmbedPassage(text)
+	}
+	return pc.Embed(text)
 }
 
 func (pc *PriorityChain) tryFallback(text string) ([]float32, error) {

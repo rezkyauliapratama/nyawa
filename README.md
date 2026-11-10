@@ -205,34 +205,59 @@ This runs all 7 maintenance phases immediately (instead of waiting for the hourl
 
 ## Embedder Setup
 
-Nyawa's semantic search needs **embeddings**. Memory embedding has an explicit
-mode, so an API environment variable cannot accidentally replace an existing
-local index:
+Nyawa's semantic search needs **embeddings**. Memory and document RAG have
+independent selectors and independent vector indexes; changing one cannot silently
+change the vector space of the other.
 
-| `MEMORY_EMBEDDER` | Selection | Default vector width |
-|-------------------|-----------|----------------------|
-| unset / `local` (default) | local BGE/ONNX, then Ollama if BGE is unavailable | BGE: 384; Ollama: model-dependent (currently 768) |
-| `api` | only the OpenAI-compatible embedder | `EMBEDDING_DIMS` (1024 if unset) |
+| Selector | Mode | Vector width / index |
+|----------|------|----------------------|
+| `MEMORY_EMBEDDER` | unset / `local` (default): BGE/ONNX, then the existing Ollama fallback | Memory `<db>.hnsw`; BGE: 384; Ollama: model-dependent (currently 768) |
+| `MEMORY_EMBEDDER` | `api`: OpenAI-compatible embedder only | Memory `<db>.hnsw`; `EMBEDDING_DIMS` (1024 if unset); existing indexes must match |
+| `RAG_EMBEDDER` | unset / `local` (default): BGE/ONNX only | Separate RAG `<db>.rag.hnsw`; BGE: 384 |
+| `RAG_EMBEDDER` | `api`: OpenAI-compatible embedder only | Separate RAG `<db>.rag.hnsw`; `EMBEDDING_DIMS` (1024 if unset) |
 
-`bge` remains accepted as an alias for `local`. Any other value is rejected at
-startup. API mode requires `EMBEDDING_API_KEY`, a valid absolute HTTP(S)
+`bge` remains accepted as an alias for `local`; unknown values are rejected.
+API mode requires `EMBEDDING_API_KEY`, a valid absolute HTTP(S)
 `EMBEDDING_BASE_URL`, and a positive integer `EMBEDDING_DIMS`; it does **not**
-fall back to BGE or Ollama after an API error.
+fall back to a different model/vector space after an API error. The RAG HNSW
+stores a profile manifest (provider, model, endpoint without credentials,
+dimensions, and query/passage task profile). `RAG_EMBEDDING_TASK_MODE` accepts
+`auto` (default; tasks only for `api.jina.ai` + `jina-embeddings-v3`), `none`
+(taskless), or `jina-v3` (explicit opt-in for a compatible proxy/custom endpoint).
+Enabled RAG requests use `retrieval.query` for queries and `retrieval.passage`
+for ingested chunks; generic OpenAI-compatible providers remain taskless by
+default. Invalid modes disable RAG configuration. The profile records tasks only
+when sent, and a profile mismatch fails closed. Changing a RAG model or task
+profile requires a new/rebuilt RAG index; it does not touch the memory HNSW. RAG
+HNSW uses bounded reciprocal neighbor updates: every layer adjacency stays within
+its configured `Mmax`, with deterministic distance/ID tie-breaking and no
+synthetic layer-0 ring. Legacy experimental RAG graphs are normalized once and
+marked with a graph-format version. RAG retrieval combines the dedicated HNSW
+candidates with a parameterized, quoted FTS5 lexical query and exact chunk-ID
+lookup using deterministic reciprocal-rank fusion; memory search remains
+unchanged. Existing RAG chunks
+are marked `vector_indexed=0` by the additive schema migration and excluded from
+vector retrieval until a separately reviewed backfill/re-ingest workflow indexes
+them. This change does not automatically rebuild or backfill existing RAG data.
 
 Copy [`.env.example`](.env.example) into your deployment configuration (do not
 commit a real `.env`), or set the variables in the process manager:
 
 ```bash
-# Backward-compatible default; this keeps an existing BGE/384 index usable.
+# Preserve the existing memory BGE/384 index.
 export MEMORY_EMBEDDER=local
 
-# Explicit API mode, for a new or fully rebuilt index only.
-export MEMORY_EMBEDDER=api
+# Select API embeddings for the independent RAG/1024 index.
+export RAG_EMBEDDER=api
 export EMBEDDING_API_KEY="from-your-secret-manager"
 export EMBEDDING_BASE_URL=https://api.jina.ai/v1
 export EMBEDDING_MODEL=jina-embeddings-v3
 export EMBEDDING_DIMS=1024
 ```
+
+Do not set `MEMORY_EMBEDDER=api` to enable API embeddings for RAG. That selector
+applies to the memory index; switching it requires a separately rebuilt memory
+HNSW.
 
 ### HNSW compatibility guard
 

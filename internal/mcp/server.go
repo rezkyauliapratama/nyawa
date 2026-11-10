@@ -509,10 +509,15 @@ func (s *Server) handleRAGIngestFile(id any, raw json.RawMessage) {
 	type ingestResult struct {
 		ID, Filename, Collection, SourceType string
 		ChunkCount                           int
+		VectorIndexedCount                   int
 		Status                               string
 	}
+	status := "ingested"
+	if doc.VectorIndexedCount != doc.ChunkCount {
+		status = "stored_unindexed"
+	}
 	s.writeToolResult(id, ingestResult{ID: doc.ID, Filename: doc.Filename, Collection: args.Collection,
-		ChunkCount: doc.ChunkCount, SourceType: doc.SourceType, Status: "ingested"})
+		ChunkCount: doc.ChunkCount, VectorIndexedCount: doc.VectorIndexedCount, SourceType: doc.SourceType, Status: status})
 }
 
 // TopK is the canonical schema property (top_k); TopKLegacy keeps the

@@ -1,9 +1,12 @@
 package embedder
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -49,6 +52,98 @@ func TestNewOpenAIEmbedderFromEnvValidatesConfig(t *testing.T) {
 	}
 }
 
+func TestOpenAIEmbedderUsesFakeHTTPProvider(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/embeddings" {
+			t.Errorf("request = %s %s, want POST /embeddings", r.Method, r.URL.Path)
+		}
+		if got, want := r.Header.Get("Authorization"), "Bearer fake-test-key"; got != want {
+			t.Errorf("authorization header = %q, want fake test credential", got)
+		}
+		var request openAIEmbedRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		if request.Model != "fake-model" || len(request.Input) != 1 || request.Input[0] != "synthetic text" || request.Dimensions != 4 {
+			t.Errorf("unexpected fake request: %+v", request)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"embedding":[0.1,0.2,0.3,0.4]}]}`))
+	}))
+	defer server.Close()
+
+	emb := newOpenAIEmbedder("fake-test-key", server.URL, "fake-model", 4)
+	emb.client = server.Client()
+	vector, err := emb.Embed("synthetic text")
+	if err != nil {
+		t.Fatalf("Embed() error = %v", err)
+	}
+	if len(vector) != 4 || vector[0] != 0.1 || vector[3] != 0.4 {
+		t.Fatalf("Embed() vector = %v, want four fake dimensions", vector)
+	}
+}
+
+func TestOpenAIEmbedderUsesRetrievalQueryAndPassageTasks(t *testing.T) {
+	seen := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request openAIEmbedRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		if request.Model != "jina-embeddings-v3" || request.Dimensions != 4 || len(request.Input) != 1 {
+			t.Errorf("unexpected task request: %+v", request)
+		}
+		seen <- request.Task
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"embedding":[0.1,0.2,0.3,0.4]}]}`))
+	}))
+	defer server.Close()
+
+	emb := newOpenAIEmbedder("fake-test-key", server.URL, "jina-embeddings-v3", 4)
+	emb.client = server.Client()
+	emb.EnableRetrievalTasks(true)
+	for _, call := range []func(string) ([]float32, error){emb.EmbedPassage, emb.EmbedQuery} {
+		vector, err := call("offline synthetic test")
+		if err != nil || len(vector) != 4 {
+			t.Fatalf("task embedding = %v, %v; want four-dimension vector", vector, err)
+		}
+	}
+	got := map[string]int{}
+	for i := 0; i < 2; i++ {
+		got[<-seen]++
+	}
+	if got[TaskRetrievalPassage] != 1 || got[TaskRetrievalQuery] != 1 {
+		t.Fatalf("provider tasks = %+v, want retrieval.passage and retrieval.query", got)
+	}
+}
+
+func TestOpenAIEmbedderTasklessMethodsOmitTask(t *testing.T) {
+	requests := make(chan map[string]json.RawMessage, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		requests <- request
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"embedding":[0.1,0.2,0.3,0.4]}]}`))
+	}))
+	defer server.Close()
+
+	emb := newOpenAIEmbedder("fake-test-key", server.URL, "generic-model", 4)
+	emb.client = server.Client()
+	for _, call := range []func(string) ([]float32, error){emb.Embed, emb.EmbedQuery, emb.EmbedPassage} {
+		if _, err := call("offline synthetic test"); err != nil {
+			t.Fatalf("taskless embedding call: %v", err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		if request := <-requests; request["task"] != nil {
+			t.Errorf("taskless request contains task field: %s", request["task"])
+		}
+	}
+}
+
 func TestOpenAIEmbedderRejectsUnexpectedResponseDimension(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got, want := r.URL.Path, "/embeddings"; got != want {
@@ -63,5 +158,48 @@ func TestOpenAIEmbedderRejectsUnexpectedResponseDimension(t *testing.T) {
 	emb.client = server.Client()
 	if _, err := emb.Embed("test"); !errors.Is(err, ErrEmbeddingDimensionMismatch) {
 		t.Fatalf("Embed() error = %v, want ErrEmbeddingDimensionMismatch", err)
+	}
+}
+
+func TestLocalModelFingerprintDistinguishesSameBasenameArtifacts(t *testing.T) {
+	root := t.TempDir()
+	modelA := filepath.Join(root, "first", "shared-model")
+	modelB := filepath.Join(root, "second", "shared-model")
+	for dir, contents := range map[string]map[string]string{
+		modelA: {"model.onnx": "synthetic model A", "tokenizer.json": `{"vocab":"A"}`},
+		modelB: {"model.onnx": "synthetic model B", "tokenizer.json": `{"vocab":"B"}`},
+	} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for name, content := range contents {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if filepath.Base(modelA) != filepath.Base(modelB) {
+		t.Fatal("test fixture model basenames differ")
+	}
+	fingerprintA, err := LocalModelFingerprint(modelA)
+	if err != nil {
+		t.Fatalf("fingerprint model A: %v", err)
+	}
+	fingerprintB, err := LocalModelFingerprint(modelB)
+	if err != nil {
+		t.Fatalf("fingerprint model B: %v", err)
+	}
+	if fingerprintA == fingerprintB {
+		t.Fatalf("different artifact contents share fingerprint %q", fingerprintA)
+	}
+}
+
+func TestLocalModelFingerprintFailsClosedOnMissingArtifact(t *testing.T) {
+	modelDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(modelDir, "model.onnx"), []byte("synthetic model"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LocalModelFingerprint(modelDir); err == nil {
+		t.Fatal("LocalModelFingerprint() succeeded without tokenizer.json")
 	}
 }
