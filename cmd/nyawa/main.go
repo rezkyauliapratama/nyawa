@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -666,6 +668,48 @@ func newSearchPipeline(st search.StoreReader, emb *embedder.PriorityChain, cfg t
 	return search.NewPipelineWithConfidenceScorer(st, emb, cfg, scorer), scorer.Stop, nil
 }
 
+func mcpHealthHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"status":"ready"}`+"\n")
+	})
+}
+
+func startMCPHTTP(portValue, token string, st *store.Store, pipeline *search.Pipeline, ragStore *rag.RAGStore) (*http.Server, error) {
+	if portValue == "" {
+		return nil, nil
+	}
+	port, err := strconv.Atoi(portValue)
+	if err != nil || port < 1 || port > 65535 {
+		return nil, fmt.Errorf("NYAWA_MCP_HTTP_PORT must be an integer from 1 to 65535")
+	}
+	handler, err := mcp.NewHTTPHandler(st, pipeline, ragStore, token)
+	if err != nil {
+		return nil, err
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", handler)
+	mux.Handle("/healthz", mcpHealthHandler())
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return nil, fmt.Errorf("listen for MCP HTTP on port %d: %w", port, err)
+	}
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 180 * time.Second, IdleTimeout: 120 * time.Second}
+	go func() {
+		if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("MCP HTTP server: %v", err)
+		}
+	}()
+	log.Printf("MCP HTTP server listening on :%d/mcp", port)
+	return srv, nil
+}
+
 func cmdServe() {
 	if len(os.Args) < 3 {
 		log.Fatal("usage: nyawa serve <db>")
@@ -708,6 +752,13 @@ func cmdServe() {
 	defer stopScorer()
 	rs := setupRAGStore(st, os.Args[2], runtime)
 	srv := server.New(st, p, runtime.memory, rs, server.DefaultServerConfig())
+	mcpHTTP, err := startMCPHTTP(os.Getenv("NYAWA_MCP_HTTP_PORT"), os.Getenv("NYAWA_MCP_HTTP_TOKEN"), st, p, rs)
+	if err != nil {
+		log.Fatalf("MCP HTTP: %v", err)
+	}
+	if mcpHTTP != nil {
+		defer mcpHTTP.Close()
+	}
 	ragLabel := "disabled"
 	if runtime.ragErr == nil {
 		ragLabel = fmt.Sprintf("%s/%s/%d", runtime.ragProfile.Provider, runtime.ragProfile.Model, runtime.ragProfile.Dimensions)

@@ -2,6 +2,8 @@ package main
 
 import (
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,5 +57,33 @@ func TestUsageBannerReportsCanonicalVersion(t *testing.T) {
 func TestVersionStringForm(t *testing.T) {
 	if got, want := version.String(), "nyawa v"+version.Version; got != want {
 		t.Errorf("version.String() = %q, want %q", got, want)
+	}
+}
+
+func TestMCPHTTPListenerConfigurationFailsClosed(t *testing.T) {
+	if srv, err := startMCPHTTP("", "", nil, nil, nil); err != nil || srv != nil {
+		t.Fatalf("empty port should disable MCP HTTP, got server=%v err=%v", srv, err)
+	}
+	if _, err := startMCPHTTP("not-a-port", "test-token", nil, nil, nil); err == nil {
+		t.Fatal("invalid MCP HTTP port was accepted")
+	}
+	if _, err := startMCPHTTP("3301", "", nil, nil, nil); err == nil {
+		t.Fatal("MCP HTTP listener was configured without a bearer token")
+	}
+}
+
+func TestMCPHealthHandlerIsMinimalAndUnauthenticated(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rw := httptest.NewRecorder()
+	mcpHealthHandler().ServeHTTP(rw, req)
+	if rw.Code != http.StatusOK || strings.TrimSpace(rw.Body.String()) != `{"status":"ready"}` {
+		t.Fatalf("health response = status %d body %q", rw.Code, rw.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/healthz", nil)
+	rw = httptest.NewRecorder()
+	mcpHealthHandler().ServeHTTP(rw, req)
+	if rw.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /healthz status = %d, want 405", rw.Code)
 	}
 }
