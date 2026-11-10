@@ -4,9 +4,13 @@ package mcp
 
 import (
 	"bufio"
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -184,6 +188,8 @@ func (s *Server) handleRequest(req jsonRPCRequest) {
 		s.handleToolList(req)
 	case "tools/call":
 		s.handleToolCall(req)
+	case "ping":
+		s.writeResult(req.ID, map[string]any{})
 	default:
 		s.writeError(req.ID, -32601, fmt.Sprintf("Method not found: %s", req.Method))
 	}
@@ -850,4 +856,98 @@ func matchGraphSeeds(st *store.Store, query string) []string {
 		}
 	}
 	return seeds
+}
+
+const maxHTTPRequestBytes = 1 << 20
+
+// NewHTTPHandler returns an authenticated Streamable HTTP JSON-RPC endpoint
+// backed by the supplied runtime objects. A token is mandatory: an empty token
+// must never create an unauthenticated listener.
+func NewHTTPHandler(st *store.Store, pipeline *search.Pipeline, ragStore *rag.RAGStore, token string) (http.Handler, error) {
+	if strings.TrimSpace(token) == "" {
+		return nil, errors.New("MCP HTTP bearer token must not be empty")
+	}
+	return &httpHandler{server: NewServer(st, pipeline, ragStore), token: token}, nil
+}
+
+type httpHandler struct {
+	server *Server
+	token  string
+}
+
+func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !h.authorized(r.Header.Get("Authorization")) {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	mediaType := strings.TrimSpace(strings.SplitN(r.Header.Get("Content-Type"), ";", 2)[0])
+	if !strings.EqualFold(mediaType, "application/json") {
+		http.Error(w, "content-type must be application/json", http.StatusUnsupportedMediaType)
+		return
+	}
+
+	body := http.MaxBytesReader(w, r.Body, maxHTTPRequestBytes)
+	defer body.Close()
+	var req jsonRPCRequest
+	decoder := json.NewDecoder(body)
+	decoder.UseNumber()
+	if err := decoder.Decode(&req); err != nil {
+		status := http.StatusBadRequest
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		http.Error(w, "invalid JSON-RPC request", status)
+		return
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		http.Error(w, "request must contain one JSON-RPC message", http.StatusBadRequest)
+		return
+	}
+	if req.JSONRPC != "2.0" || req.Method == "" || (req.ID != nil && !validRequestID(req.ID)) {
+		http.Error(w, "invalid JSON-RPC request", http.StatusBadRequest)
+		return
+	}
+
+	// MCP notifications are acknowledged with 202 and have no JSON-RPC body.
+	if req.ID == nil {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	// Each request gets its own encoder while all expensive runtime objects
+	// (store, pipeline, RAG store, and their embedder) remain shared. This also
+	// keeps concurrent HTTP requests from racing on the stdio encoder.
+	var response strings.Builder
+	requestServer := *h.server
+	requestServer.writer = json.NewEncoder(&response)
+	requestServer.handleRequest(req)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, response.String())
+}
+
+func (h *httpHandler) authorized(header string) bool {
+	const prefix = "Bearer "
+	if !strings.HasPrefix(header, prefix) {
+		return false
+	}
+	provided := strings.TrimPrefix(header, prefix)
+	return len(provided) == len(h.token) && subtle.ConstantTimeCompare([]byte(provided), []byte(h.token)) == 1
+}
+
+func validRequestID(id any) bool {
+	switch id.(type) {
+	case string, json.Number:
+		return true
+	default:
+		return false
+	}
 }
