@@ -117,6 +117,51 @@ func TestOpenAIEmbedderUsesRetrievalQueryAndPassageTasks(t *testing.T) {
 	}
 }
 
+func TestOpenAIEmbedderBatchesPassagesAndRestoresResponseOrder(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var request openAIEmbedRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode batch request: %v", err)
+		}
+		if len(request.Input) != 2 || request.Input[0] != "synthetic passage A" || request.Input[1] != "synthetic passage B" {
+			t.Errorf("batch input = %q", request.Input)
+		}
+		if request.Task != TaskRetrievalPassage || request.Model != "jina-embeddings-v3" || request.Dimensions != 2 || !request.Normalized {
+			t.Errorf("batch profile = %+v", request)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"index":1,"embedding":[0.3,0.4]},{"index":0,"embedding":[0.1,0.2]}]}`))
+	}))
+	defer server.Close()
+
+	emb := newOpenAIEmbedder("fake-test-key", server.URL, "jina-embeddings-v3", 2)
+	emb.client = server.Client()
+	emb.EnableRetrievalTasks(true)
+	vectors, err := emb.EmbedPassages([]string{"synthetic passage A", "synthetic passage B"})
+	if err != nil {
+		t.Fatalf("EmbedPassages() error = %v", err)
+	}
+	if requests != 1 || len(vectors) != 2 || vectors[0][0] != 0.1 || vectors[1][0] != 0.3 {
+		t.Fatalf("batch result requests=%d vectors=%v", requests, vectors)
+	}
+}
+
+func TestOpenAIEmbedderRejectsDuplicateBatchResponseIndex(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"index":0,"embedding":[0.1,0.2]},{"index":0,"embedding":[0.3,0.4]}]}`))
+	}))
+	defer server.Close()
+
+	emb := newOpenAIEmbedder("fake-test-key", server.URL, "jina-embeddings-v3", 2)
+	emb.client = server.Client()
+	if _, err := emb.EmbedPassages([]string{"synthetic A", "synthetic B"}); err == nil {
+		t.Fatal("EmbedPassages() accepted duplicate response indices")
+	}
+}
+
 func TestOpenAIEmbedderTasklessMethodsOmitTask(t *testing.T) {
 	requests := make(chan map[string]json.RawMessage, 3)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
