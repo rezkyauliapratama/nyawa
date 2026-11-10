@@ -92,6 +92,34 @@ func (pc *PriorityChain) EmbedPassage(text string) ([]float32, error) {
 	return pc.embedTask(text, false)
 }
 
+// EmbedPassages uses a provider batch API when the active embedder supports it;
+// otherwise it preserves the existing single-input task-aware behavior.
+func (pc *PriorityChain) EmbedPassages(texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return [][]float32{}, nil
+	}
+	if pc.current == nil || !pc.current.Available() {
+		pc.selectActive()
+	}
+	if pc.current == nil {
+		return nil, ErrNoEmbedder
+	}
+	if batch, ok := pc.current.(interface {
+		EmbedPassages([]string) ([][]float32, error)
+	}); ok {
+		return batch.EmbedPassages(texts)
+	}
+	vectors := make([][]float32, len(texts))
+	for i, text := range texts {
+		vector, err := pc.EmbedPassage(text)
+		if err != nil {
+			return nil, fmt.Errorf("embed passage %d: %w", i, err)
+		}
+		vectors[i] = vector
+	}
+	return vectors, nil
+}
+
 func (pc *PriorityChain) embedTask(text string, query bool) ([]float32, error) {
 	if pc.current == nil || !pc.current.Available() {
 		return pc.Embed(text)

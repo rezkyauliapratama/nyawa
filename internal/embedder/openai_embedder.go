@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,9 +30,9 @@ const (
 //	EMBEDDING_MODEL     — Model name (default: jina-embeddings-v3)
 //	EMBEDDING_DIMS      — Output dimension (default: 1024, Matryoshka if supported)
 type OpenAIEmbedder struct {
-	apiKey  string
-	baseURL string
-	model   string
+	apiKey                string
+	baseURL               string
+	model                 string
 	client                *http.Client
 	dims                  int
 	retrievalTasksEnabled bool
@@ -164,12 +165,34 @@ func (o *OpenAIEmbedder) EmbedPassage(text string) ([]float32, error) {
 }
 
 func (o *OpenAIEmbedder) embed(text, task string) ([]float32, error) {
+	vectors, err := o.embedBatch([]string{text}, task)
+	if err != nil {
+		return nil, err
+	}
+	return vectors[0], nil
+}
+
+// EmbedPassages batches RAG chunks into one task-aware provider request. Memory
+// callers continue to use Embed; this method is only used by explicit RAG
+// backfill and never changes the configured vector profile.
+func (o *OpenAIEmbedder) EmbedPassages(texts []string) ([][]float32, error) {
+	task := ""
+	if o.retrievalTasksEnabled {
+		task = TaskRetrievalPassage
+	}
+	return o.embedBatch(texts, task)
+}
+
+func (o *OpenAIEmbedder) embedBatch(texts []string, task string) ([][]float32, error) {
 	if o.apiKey == "" {
 		return nil, fmt.Errorf("EMBEDDING_API_KEY not set")
 	}
+	if len(texts) == 0 {
+		return [][]float32{}, nil
+	}
 	body := openAIEmbedRequest{
 		Model:      o.model,
-		Input:      []string{text},
+		Input:      texts,
 		Dimensions: o.dims,
 		Normalized: true,
 		Task:       task,
@@ -191,23 +214,40 @@ func (o *OpenAIEmbedder) embed(text, task string) ([]float32, error) {
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("embed status %d: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("embed status %d", resp.StatusCode)
 	}
 	var result openAIEmbedResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("embed parse: %w", err)
 	}
-	if len(result.Data) == 0 {
-		return nil, fmt.Errorf("embed: empty response")
+	if len(result.Data) != len(texts) {
+		return nil, fmt.Errorf("embed: provider returned %d vectors for %d inputs", len(result.Data), len(texts))
 	}
-	if got := len(result.Data[0].Embedding); got != o.dims {
-		return nil, fmt.Errorf("%w: %s returned %d dimensions, expected %d", ErrEmbeddingDimensionMismatch, o.Name(), got, o.dims)
+	vectors := make([][]float32, len(texts))
+	seen := make([]bool, len(texts))
+	for _, item := range result.Data {
+		if item.Index < 0 || item.Index >= len(texts) || seen[item.Index] {
+			return nil, fmt.Errorf("embed: provider returned invalid or duplicate vector index %d", item.Index)
+		}
+		if got := len(item.Embedding); got != o.dims {
+			return nil, fmt.Errorf("%w: %s returned %d dimensions, expected %d", ErrEmbeddingDimensionMismatch, o.Name(), got, o.dims)
+		}
+		vector := make([]float32, len(item.Embedding))
+		for i, value := range item.Embedding {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return nil, fmt.Errorf("embed: provider returned non-finite vector value at index %d", item.Index)
+			}
+			vector[i] = float32(value)
+		}
+		vectors[item.Index] = vector
+		seen[item.Index] = true
 	}
-	vec := make([]float32, len(result.Data[0].Embedding))
-	for i, v := range result.Data[0].Embedding {
-		vec[i] = float32(v)
+	for i, ok := range seen {
+		if !ok {
+			return nil, fmt.Errorf("embed: provider omitted vector index %d", i)
+		}
 	}
-	return vec, nil
+	return vectors, nil
 }
 
 func (o *OpenAIEmbedder) Name() string    { return "openai/" + o.model }

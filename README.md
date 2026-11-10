@@ -235,10 +235,15 @@ synthetic layer-0 ring. Legacy experimental RAG graphs are normalized once and
 marked with a graph-format version. RAG retrieval combines the dedicated HNSW
 candidates with a parameterized, quoted FTS5 lexical query and exact chunk-ID
 lookup using deterministic reciprocal-rank fusion; memory search remains
-unchanged. Existing RAG chunks
-are marked `vector_indexed=0` by the additive schema migration and excluded from
-vector retrieval until a separately reviewed backfill/re-ingest workflow indexes
-them. This change does not automatically rebuild or backfill existing RAG data.
+unchanged. Existing RAG chunks are marked `vector_indexed=0` by the additive schema migration
+and excluded from vector retrieval until explicitly backfilled. The command
+`nyawa rag-reindex <db>` is dry-run by default; it reports only chunk/character
+counts and makes no provider calls or writes. Add `--apply` to embed unindexed passages in batches and
+write only the dedicated RAG HNSW. The command requires the task-aware Jina v3
+profile, enforces a total-character cap, and never opens or modifies the memory
+HNSW. Backfill is not automatic: take a consistent DB/index backup and run it in
+a maintenance window with no concurrent document edits. A detected orphaned
+vector fails closed and requires restore/rebuild rather than silent adoption.
 
 Copy [`.env.example`](.env.example) into your deployment configuration (do not
 commit a real `.env`), or set the variables in the process manager:

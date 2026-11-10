@@ -1,14 +1,17 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -63,6 +66,8 @@ func main() {
 		cmdGraph()
 	case "reindex":
 		cmdReindex()
+	case "rag-reindex":
+		cmdRAGReindex()
 	case "version":
 		fmt.Println(version.String())
 	default:
@@ -91,6 +96,7 @@ Usage:
   nyawa dream <db>                        Run Dream Cycle
   nyawa graph <db> <query> [--depth 2] [--limit 10]  Traverse entity graph
   nyawa reindex <db>                      Re-embed memories missing from HNSW
+  nyawa rag-reindex [--apply] [--batch-size N] [--max-input-chars N] <db>  Backfill dedicated RAG HNSW
   nyawa version                           Show version
 `, version.Number())
 }
@@ -130,6 +136,10 @@ const (
 	ragTaskModeAuto   = "auto"
 	ragTaskModeNone   = "none"
 	ragTaskModeJinaV3 = "jina-v3"
+
+	ragDefaultAPIBaseURL = "https://api.jina.ai/v1"
+	ragDefaultAPIModel   = "jina-embeddings-v3"
+	ragDefaultAPIDims    = 1024
 )
 
 type runtimeEmbedders struct {
@@ -237,11 +247,11 @@ func newRAGAPIEmbedderWithHTTPClient(getenv func(string) string, client *http.Cl
 	}
 	baseURL := strings.TrimSpace(getenv("EMBEDDING_BASE_URL"))
 	if baseURL == "" {
-		baseURL = "https://api.jina.ai/v1"
+		baseURL = ragDefaultAPIBaseURL
 	}
 	model := strings.TrimSpace(getenv("EMBEDDING_MODEL"))
 	if model == "" {
-		model = "jina-embeddings-v3"
+		model = ragDefaultAPIModel
 	}
 	taskMode, err := ragTaskMode(getenv("RAG_EMBEDDING_TASK_MODE"))
 	if err != nil {
@@ -867,6 +877,161 @@ func cmdReindex() {
 			before, coveragePct(before, total), total)
 	}
 	fmt.Printf("Reindexed %d memories (%d already indexed, %d failed)\n", reindexed, already, failed)
+}
+
+func cmdRAGReindex() {
+	fs := flag.NewFlagSet("rag-reindex", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	apply := fs.Bool("apply", false, "send RAG chunk text to the configured embedder and write the dedicated RAG index")
+	batchSize := fs.Int("batch-size", 32, "maximum passages per provider request (1-64)")
+	maxInputChars := fs.Int("max-input-chars", 300000, "fail closed if total unindexed text exceeds this character count")
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		log.Fatalf("rag-reindex arguments: %v", err)
+	}
+	if fs.NArg() != 1 {
+		log.Fatal("usage: nyawa rag-reindex [--apply] [--batch-size N] [--max-input-chars N] <db>")
+	}
+	if *batchSize < 1 || *batchSize > 64 || *maxInputChars < 1 {
+		log.Fatal("rag-reindex requires batch-size 1-64 and a positive max-input-chars")
+	}
+	dbPath := fs.Arg(0)
+	if info, err := os.Stat(dbPath); err != nil || !info.Mode().IsRegular() {
+		log.Fatalf("rag-reindex database must be an existing regular file")
+	}
+	readOnlyDB, err := sql.Open("sqlite3", sqliteReadOnlyDSN(dbPath))
+	if err != nil {
+		log.Fatalf("open RAG backfill plan read-only: %v", err)
+	}
+	readOnlyDB.SetMaxOpenConns(1)
+	pending, inputChars, err := inspectRAGBackfillPlan(readOnlyDB)
+	closeErr := readOnlyDB.Close()
+	if err != nil {
+		log.Fatalf("inspect RAG backfill plan: %v", err)
+	}
+	if closeErr != nil {
+		log.Fatalf("close RAG backfill plan: %v", closeErr)
+	}
+	model := strings.TrimSpace(os.Getenv("EMBEDDING_MODEL"))
+	if model == "" {
+		model = ragDefaultAPIModel
+	}
+	baseURL := strings.TrimSpace(os.Getenv("EMBEDDING_BASE_URL"))
+	if baseURL == "" {
+		baseURL = ragDefaultAPIBaseURL
+	}
+	dimensions := strings.TrimSpace(os.Getenv("EMBEDDING_DIMS"))
+	if dimensions == "" {
+		dimensions = fmt.Sprint(ragDefaultAPIDims)
+	}
+	mode := strings.TrimSpace(os.Getenv("RAG_EMBEDDING_TASK_MODE"))
+	if mode == "" {
+		mode = ragTaskModeAuto
+	}
+	tasks, taskErr := ragRetrievalTasksEnabled(mode, baseURL, model)
+	if taskErr != nil {
+		log.Fatalf("rag-reindex task profile: %v", taskErr)
+	}
+	if inputChars > *maxInputChars {
+		log.Fatalf("rag-reindex blocked: %d input characters exceed cap %d", inputChars, *maxInputChars)
+	}
+	plannedRequests := 0
+	if pending > 0 {
+		plannedRequests = (pending + *batchSize - 1) / *batchSize
+	}
+	fmt.Printf("RAG backfill plan: chunks=%d input_chars=%d model=%s dimensions=%s task_mode=%s task_fields=%t batch_size=%d max_requests=%d\n",
+		pending, inputChars, model, dimensions, mode, tasks, *batchSize, plannedRequests)
+	if !*apply {
+		fmt.Println("mode=dry-run provider_calls=0 database_writes=0; add --apply only for an approved maintenance window")
+		return
+	}
+
+	ragMode, err := ragEmbedderMode(os.Getenv("RAG_EMBEDDER"))
+	if err != nil || ragMode != ragEmbedderAPI {
+		log.Fatal("rag-reindex --apply requires RAG_EMBEDDER=api")
+	}
+	if model != ragDefaultAPIModel || baseURL != ragDefaultAPIBaseURL || !tasks {
+		log.Fatal("rag-reindex --apply requires the approved Jina v3 endpoint and retrieval task profile")
+	}
+	emb, profile, err := newRAGAPIEmbedder(os.Getenv)
+	if err != nil {
+		log.Fatalf("initialize RAG API embedder: %v", err)
+	}
+	defer emb.StopAll()
+	if profile.Model != ragDefaultAPIModel || profile.Dimensions != ragDefaultAPIDims || profile.QueryTask != embedder.TaskRetrievalQuery || profile.PassageTask != embedder.TaskRetrievalPassage {
+		log.Fatalf("rag-reindex profile mismatch: model=%s dimensions=%d query_task=%q passage_task=%q", profile.Model, profile.Dimensions, profile.QueryTask, profile.PassageTask)
+	}
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		log.Fatalf("open RAG database for backfill: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	defer db.Close()
+	indexPath := dbPath + ".rag.hnsw"
+	hnsw, err := rag.OpenVectorIndex(db, indexPath, profile)
+	if err != nil {
+		log.Fatalf("open dedicated RAG index: %v", err)
+	}
+	ragStore := rag.NewRAGStore(db, hnsw, indexPath, emb)
+	if err := ragStore.InitError(); err != nil {
+		log.Fatalf("initialize RAG store: %v", err)
+	}
+	result, err := ragStore.BackfillUnindexed(*batchSize, *maxInputChars)
+	if err != nil {
+		log.Fatalf("RAG backfill failed; stop and verify backup before retry: %v", err)
+	}
+	fmt.Printf("RAG backfill complete: chunks=%d indexed=%d input_chars=%d provider_batches=%d index_vectors=%d\n",
+		result.TotalChunks, result.IndexedChunks, result.InputCharacters, result.ProviderBatches, ragStore.Stats()["rag_index_vectors"])
+}
+
+func sqliteReadOnlyDSN(dbPath string) string {
+	absolute, err := filepath.Abs(dbPath)
+	if err != nil {
+		return "file:" + dbPath + "?mode=ro"
+	}
+	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}).String() + "?mode=ro"
+}
+
+func inspectRAGBackfillPlan(db *sql.DB) (int, int, error) {
+	var tableCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='rag_chunks'`).Scan(&tableCount); err != nil {
+		return 0, 0, err
+	}
+	if tableCount != 1 {
+		return 0, 0, fmt.Errorf("rag_chunks table is absent")
+	}
+	rows, err := db.Query(`PRAGMA table_info(rag_chunks)`)
+	if err != nil {
+		return 0, 0, err
+	}
+	hasVectorFlag := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return 0, 0, err
+		}
+		if name == "vector_indexed" {
+			hasVectorFlag = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, 0, err
+	}
+	query := `SELECT COUNT(*),COALESCE(SUM(length(content)),0) FROM rag_chunks`
+	if hasVectorFlag {
+		query += ` WHERE vector_indexed=0`
+	}
+	var count, chars int
+	if err := db.QueryRow(query).Scan(&count, &chars); err != nil {
+		return 0, 0, err
+	}
+	return count, chars, nil
 }
 
 // coveragePct returns indexed as a percentage of total, or 0 when total is 0.

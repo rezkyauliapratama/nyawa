@@ -16,14 +16,25 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/rezkyauliapratama/nyawa/internal/index"
 )
 
 var (
-	ErrRAGEmbedderUnavailable = errors.New("RAG embedder unavailable")
-	ErrRAGIndexUnavailable    = errors.New("RAG vector index unavailable")
+	ErrRAGEmbedderUnavailable       = errors.New("RAG embedder unavailable")
+	ErrRAGIndexUnavailable          = errors.New("RAG vector index unavailable")
+	ErrRAGBackfillOrphanedID        = errors.New("unindexed RAG chunk already exists in HNSW; restore or rebuild the dedicated RAG index")
+	ErrRAGBackfillIndexInconsistent = errors.New("RAG chunk vector flags do not match the dedicated HNSW index")
 )
+
+// RAGBackfillResult reports counts only; chunk text is never included.
+type RAGBackfillResult struct {
+	TotalChunks     int `json:"total_chunks"`
+	IndexedChunks   int `json:"indexed_chunks"`
+	InputCharacters int `json:"input_characters"`
+	ProviderBatches int `json:"provider_batches"`
+}
 
 type Collection struct {
 	ID          int       `json:"id"`
@@ -63,6 +74,25 @@ type Embedder interface {
 type retrievalTaskEmbedder interface {
 	EmbedQuery(string) ([]float32, error)
 	EmbedPassage(string) ([]float32, error)
+}
+
+type retrievalBatchEmbedder interface {
+	EmbedPassages([]string) ([][]float32, error)
+}
+
+func embedRAGPassages(emb Embedder, texts []string) ([][]float32, error) {
+	if batch, ok := emb.(retrievalBatchEmbedder); ok {
+		return batch.EmbedPassages(texts)
+	}
+	vectors := make([][]float32, len(texts))
+	for i, text := range texts {
+		vector, err := embedRAGPassage(emb, text)
+		if err != nil {
+			return nil, fmt.Errorf("embed passage %d: %w", i, err)
+		}
+		vectors[i] = vector
+	}
+	return vectors, nil
 }
 
 func embedRAGPassage(emb Embedder, text string) ([]float32, error) {
@@ -758,6 +788,214 @@ func (r *RAGStore) IngestFile(filePath, collectionName string, metadata map[stri
 		SourceType: sourceType, ChunkCount: len(prepared), VectorIndexedCount: len(prepared),
 		CreatedAt: time.Now(),
 	}, nil
+}
+
+// BackfillUnindexed embeds existing RAG chunks that are explicitly marked
+// vector_indexed=0. It never touches the memory HNSW. Provider calls are batched;
+// each completed batch is persisted before its rows are marked indexed so a
+// failed batch cannot claim vectors that are absent from disk. Run this during
+// a maintenance window with no concurrent document edits.
+func (r *RAGStore) BackfillUnindexed(batchSize, maxInputChars int) (RAGBackfillResult, error) {
+	result := RAGBackfillResult{}
+	if r.initErr != nil {
+		return result, fmt.Errorf("RAG index unavailable: %w", r.initErr)
+	}
+	if r.embedder == nil || !r.embedder.Available() {
+		return result, ErrRAGEmbedderUnavailable
+	}
+	if batchSize < 1 || batchSize > 64 {
+		return result, fmt.Errorf("RAG backfill batch size must be between 1 and 64")
+	}
+	if maxInputChars < 1 {
+		return result, fmt.Errorf("RAG backfill maximum input characters must be positive")
+	}
+	r.mu.RLock()
+	indexPath := r.hnswPath
+	initialIndex := r.hnsw
+	r.mu.RUnlock()
+	if indexPath == "" || initialIndex == nil {
+		return result, ErrRAGIndexUnavailable
+	}
+
+	type backfillItem struct {
+		id      string
+		content string
+	}
+	rows, err := r.db.Query(`SELECT id,content FROM rag_chunks WHERE vector_indexed=0 ORDER BY id`)
+	if err != nil {
+		return result, fmt.Errorf("list unindexed RAG chunks: %w", err)
+	}
+	items := make([]backfillItem, 0)
+	for rows.Next() {
+		var item backfillItem
+		if err := rows.Scan(&item.id, &item.content); err != nil {
+			rows.Close()
+			return result, fmt.Errorf("read unindexed RAG chunk: %w", err)
+		}
+		if item.id == "" || item.content == "" {
+			rows.Close()
+			return result, fmt.Errorf("unindexed RAG chunk has empty identity or content")
+		}
+		result.InputCharacters += utf8.RuneCountInString(item.content)
+		if result.InputCharacters > maxInputChars {
+			rows.Close()
+			return result, fmt.Errorf("RAG backfill input exceeds configured character cap (%d)", maxInputChars)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return result, fmt.Errorf("iterate unindexed RAG chunks: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return result, fmt.Errorf("close unindexed RAG chunk rows: %w", err)
+	}
+	result.TotalChunks = len(items)
+	indexedRows, err := r.db.Query(`SELECT id FROM rag_chunks WHERE vector_indexed=1 ORDER BY id`)
+	if err != nil {
+		return result, fmt.Errorf("list indexed RAG chunks: %w", err)
+	}
+	indexedCount := 0
+	for indexedRows.Next() {
+		var id string
+		if err := indexedRows.Scan(&id); err != nil {
+			indexedRows.Close()
+			return result, fmt.Errorf("read indexed RAG chunk ID: %w", err)
+		}
+		indexedCount++
+		if !initialIndex.Contains(id) {
+			indexedRows.Close()
+			return result, fmt.Errorf("%w: flagged chunk %s is absent", ErrRAGBackfillIndexInconsistent, id)
+		}
+	}
+	if err := indexedRows.Err(); err != nil {
+		indexedRows.Close()
+		return result, fmt.Errorf("iterate indexed RAG chunks: %w", err)
+	}
+	if err := indexedRows.Close(); err != nil {
+		return result, fmt.Errorf("close indexed RAG chunk rows: %w", err)
+	}
+	for _, item := range items {
+		if initialIndex.Contains(item.id) {
+			return result, fmt.Errorf("%w: %s", ErrRAGBackfillOrphanedID, item.id)
+		}
+	}
+	if initialIndex.Size() != indexedCount {
+		return result, fmt.Errorf("%w: hnsw_vectors=%d indexed_rows=%d", ErrRAGBackfillIndexInconsistent, initialIndex.Size(), indexedCount)
+	}
+	if result.TotalChunks == 0 {
+		return result, nil
+	}
+
+	for start := 0; start < len(items); start += batchSize {
+		end := start + batchSize
+		if end > len(items) {
+			end = len(items)
+		}
+		batch := items[start:end]
+		preflight := index.NewHNSW(index.DefaultHNSWConfig(initialIndex.Dimension()))
+		preflight.EnableRAGBoundedDegree()
+		if err := preflight.Load(indexPath); err != nil {
+			return result, fmt.Errorf("preflight dedicated RAG HNSW: %w", err)
+		}
+		for _, item := range batch {
+			if preflight.Contains(item.id) {
+				return result, fmt.Errorf("%w: %s", ErrRAGBackfillOrphanedID, item.id)
+			}
+		}
+		texts := make([]string, len(batch))
+		for i, item := range batch {
+			texts[i] = item.content
+		}
+		vectors, err := embedRAGPassages(r.embedder, texts)
+		if err != nil {
+			return result, fmt.Errorf("embed RAG backfill batch %d: %w", result.ProviderBatches+1, err)
+		}
+		if len(vectors) != len(batch) {
+			return result, fmt.Errorf("RAG backfill batch returned %d vectors for %d chunks", len(vectors), len(batch))
+		}
+		for i, vector := range vectors {
+			if err := initialIndex.ValidateVector(vector); err != nil {
+				return result, fmt.Errorf("validate RAG backfill vector %d: %w", i, err)
+			}
+		}
+		result.ProviderBatches++
+
+		// Fail closed on an unindexed row whose ID is already in the dedicated
+		// index. This can indicate an interrupted prior migration; do not assume
+		// that vector corresponds to the current chunk content.
+		r.mu.Lock()
+		candidate := index.NewHNSW(index.DefaultHNSWConfig(initialIndex.Dimension()))
+		candidate.EnableRAGBoundedDegree()
+		if err := candidate.Load(indexPath); err != nil {
+			r.mu.Unlock()
+			return result, fmt.Errorf("reload RAG HNSW for backfill: %w", err)
+		}
+		for _, item := range batch {
+			if candidate.Contains(item.id) {
+				r.mu.Unlock()
+				return result, fmt.Errorf("%w: %s", ErrRAGBackfillOrphanedID, item.id)
+			}
+		}
+		for i, item := range batch {
+			if err := candidate.Insert(item.id, vectors[i]); err != nil {
+				r.mu.Unlock()
+				return result, fmt.Errorf("insert RAG backfill vector %q: %w", item.id, err)
+			}
+		}
+		if _, _, err := candidate.MergeAndSave(indexPath); err != nil {
+			r.mu.Unlock()
+			return result, fmt.Errorf("persist RAG backfill HNSW: %w", err)
+		}
+		updated := index.NewHNSW(index.DefaultHNSWConfig(initialIndex.Dimension()))
+		updated.EnableRAGBoundedDegree()
+		if err := updated.Load(indexPath); err != nil {
+			r.mu.Unlock()
+			return result, fmt.Errorf("reload persisted RAG backfill HNSW: %w", err)
+		}
+		for _, item := range batch {
+			if !updated.Contains(item.id) {
+				r.mu.Unlock()
+				return result, fmt.Errorf("persisted RAG backfill index is missing chunk %q", item.id)
+			}
+		}
+		r.hnsw = updated
+		r.mu.Unlock()
+
+		tx, err := r.db.Begin()
+		if err != nil {
+			return result, fmt.Errorf("begin RAG backfill state update: %w", err)
+		}
+		for _, item := range batch {
+			res, err := tx.Exec(`UPDATE rag_chunks SET vector_indexed=1 WHERE id=? AND content=? AND vector_indexed=0`, item.id, item.content)
+			if err != nil {
+				_ = tx.Rollback()
+				return result, fmt.Errorf("mark RAG chunk indexed: %w", err)
+			}
+			affected, err := res.RowsAffected()
+			if err != nil {
+				_ = tx.Rollback()
+				return result, fmt.Errorf("verify RAG chunk index state: %w", err)
+			}
+			if affected != 1 {
+				_ = tx.Rollback()
+				return result, fmt.Errorf("RAG chunk changed during backfill; stop and reconcile the dedicated index")
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return result, fmt.Errorf("commit RAG backfill state update: %w", err)
+		}
+		result.IndexedChunks += len(batch)
+	}
+
+	var remaining int
+	if err := r.db.QueryRow(`SELECT COUNT(*) FROM rag_chunks WHERE vector_indexed=0`).Scan(&remaining); err != nil {
+		return result, fmt.Errorf("verify RAG backfill coverage: %w", err)
+	}
+	if remaining != 0 {
+		return result, fmt.Errorf("RAG backfill incomplete: %d chunks remain unindexed", remaining)
+	}
+	return result, nil
 }
 
 func (r *RAGStore) IngestDir(dirPath, collectionName string) (int, error) {

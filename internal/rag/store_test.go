@@ -18,6 +18,7 @@ type fakeRAGEmbedder struct {
 	available    bool
 	failAt       int
 	calls        int
+	batchCalls   int
 	queryCalls   int
 	passageCalls int
 }
@@ -42,6 +43,20 @@ func (e *fakeRAGEmbedder) EmbedQuery(text string) ([]float32, error) {
 func (e *fakeRAGEmbedder) EmbedPassage(text string) ([]float32, error) {
 	e.passageCalls++
 	return e.Embed(text)
+}
+
+func (e *fakeRAGEmbedder) EmbedPassages(texts []string) ([][]float32, error) {
+	e.batchCalls++
+	vectors := make([][]float32, len(texts))
+	for i, text := range texts {
+		e.passageCalls++
+		vector, err := e.Embed(text)
+		if err != nil {
+			return nil, err
+		}
+		vectors[i] = vector
+	}
+	return vectors, nil
 }
 
 func (e *fakeRAGEmbedder) Available() bool { return e.available }
@@ -120,6 +135,139 @@ func TestIngestFileEmbedsAllChunksBeforeWritingAndQueryUsesRAGIndex(t *testing.T
 	}
 	if emb.passageCalls == 0 || emb.queryCalls == 0 {
 		t.Fatalf("RAG task calls: passage=%d query=%d", emb.passageCalls, emb.queryCalls)
+	}
+}
+
+func seedUnindexedRAGChunks(t *testing.T, rs *RAGStore, contents []string) []string {
+	t.Helper()
+	collection, err := rs.CreateCollection("backfill", "synthetic backfill", 400)
+	if err != nil {
+		t.Fatalf("create backfill collection: %v", err)
+	}
+	ids := make([]string, len(contents))
+	tx, err := rs.db.Begin()
+	if err != nil {
+		t.Fatalf("begin backfill fixture: %v", err)
+	}
+	for i, content := range contents {
+		docID := fmt.Sprintf("rag_doc_backfill_%d", i)
+		chunkID := fmt.Sprintf("rag_chk_backfill_%d", i)
+		if _, err := tx.Exec(`INSERT INTO rag_documents(id,collection_id,filename,source_type,metadata,chunk_count) VALUES(?,?,?,?,?,1)`, docID, collection.ID, docID+".md", "file", "{}"); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("insert backfill doc: %v", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO rag_chunks(id,document_id,content,chunk_index,metadata,vector_indexed) VALUES(?,?,?,?,?,0)`, chunkID, docID, content, 0, "{}"); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("insert backfill chunk: %v", err)
+		}
+		ids[i] = chunkID
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit backfill fixture: %v", err)
+	}
+	return ids
+}
+
+func TestBackfillUnindexedChunksUsesBoundedPassageBatchesAndIsIdempotent(t *testing.T) {
+	emb := &fakeRAGEmbedder{dims: 4, available: true}
+	profile := EmbeddingProfile{Provider: "fake", Model: "fake-4", Dimensions: 4}
+	rs, _ := newRAGTestStore(t, emb, profile)
+	ids := seedUnindexedRAGChunks(t, rs, []string{"synthetic passage one", "synthetic passage two", "synthetic passage three"})
+
+	result, err := rs.BackfillUnindexed(2, 1024)
+	if err != nil {
+		t.Fatalf("BackfillUnindexed() error = %v", err)
+	}
+	if result.TotalChunks != 3 || result.IndexedChunks != 3 || result.ProviderBatches != 2 || emb.batchCalls != 2 {
+		t.Fatalf("backfill result=%+v batchCalls=%d", result, emb.batchCalls)
+	}
+	if got := rs.Stats(); got["vector_indexed_chunks"] != 3 || got["rag_index_vectors"] != 3 {
+		t.Fatalf("backfill stats = %+v", got)
+	}
+	for _, id := range ids {
+		if !rs.hnsw.Contains(id) {
+			t.Fatalf("backfill index is missing %q", id)
+		}
+	}
+
+	again, err := rs.BackfillUnindexed(2, 1024)
+	if err != nil {
+		t.Fatalf("idempotent BackfillUnindexed() error = %v", err)
+	}
+	if again.TotalChunks != 0 || again.ProviderBatches != 0 || emb.batchCalls != 2 {
+		t.Fatalf("second backfill unexpectedly did work: result=%+v batchCalls=%d", again, emb.batchCalls)
+	}
+}
+
+func TestBackfillUnindexedChunksFailsClosedBeforeProviderOnOrphanedVector(t *testing.T) {
+	emb := &fakeRAGEmbedder{dims: 4, available: true}
+	profile := EmbeddingProfile{Provider: "fake", Model: "fake-4", Dimensions: 4}
+	rs, _ := newRAGTestStore(t, emb, profile)
+	ids := seedUnindexedRAGChunks(t, rs, []string{"synthetic orphaned vector"})
+	vector, err := emb.Embed("already present")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.hnsw.Insert(ids[0], vector); err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.hnsw.Save(rs.hnswPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := rs.BackfillUnindexed(4, 1024); !errors.Is(err, ErrRAGBackfillOrphanedID) {
+		t.Fatalf("BackfillUnindexed() error = %v, want ErrRAGBackfillOrphanedID", err)
+	}
+	if emb.batchCalls != 0 {
+		t.Fatalf("orphaned index triggered provider calls: %d", emb.batchCalls)
+	}
+	if got := rs.Stats(); got["vector_indexed_chunks"] != 0 {
+		t.Fatalf("orphaned index changed DB vector flags: %+v", got)
+	}
+}
+
+func TestBackfillUnindexedChunksRejectsInconsistentIndexedFlags(t *testing.T) {
+	emb := &fakeRAGEmbedder{dims: 4, available: true}
+	profile := EmbeddingProfile{Provider: "fake", Model: "fake-4", Dimensions: 4}
+	rs, _ := newRAGTestStore(t, emb, profile)
+	ids := seedUnindexedRAGChunks(t, rs, []string{"synthetic flagged chunk"})
+	if _, err := rs.db.Exec(`UPDATE rag_chunks SET vector_indexed=1 WHERE id=?`, ids[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := rs.BackfillUnindexed(2, 1024); !errors.Is(err, ErrRAGBackfillIndexInconsistent) {
+		t.Fatalf("BackfillUnindexed() error = %v, want ErrRAGBackfillIndexInconsistent", err)
+	}
+	if emb.batchCalls != 0 {
+		t.Fatalf("inconsistent flags triggered provider calls: %d", emb.batchCalls)
+	}
+}
+
+func TestBackfillUnindexedChunksEnforcesCharacterCapBeforeProvider(t *testing.T) {
+	emb := &fakeRAGEmbedder{dims: 4, available: true}
+	profile := EmbeddingProfile{Provider: "fake", Model: "fake-4", Dimensions: 4}
+	rs, _ := newRAGTestStore(t, emb, profile)
+	seedUnindexedRAGChunks(t, rs, []string{"synthetic text over cap"})
+
+	if _, err := rs.BackfillUnindexed(2, 4); err == nil {
+		t.Fatal("BackfillUnindexed() accepted input exceeding character cap")
+	}
+	if emb.batchCalls != 0 || rs.hnsw.Size() != 0 || rs.Stats()["vector_indexed_chunks"] != 0 {
+		t.Fatalf("character-cap failure caused side effects: batches=%d stats=%+v", emb.batchCalls, rs.Stats())
+	}
+}
+
+func TestBackfillUnindexedChunksDoesNotPersistFailedBatch(t *testing.T) {
+	emb := &fakeRAGEmbedder{dims: 4, available: true, failAt: 2}
+	profile := EmbeddingProfile{Provider: "fake", Model: "fake-4", Dimensions: 4}
+	rs, _ := newRAGTestStore(t, emb, profile)
+	seedUnindexedRAGChunks(t, rs, []string{"synthetic passage one", "synthetic passage two"})
+
+	if _, err := rs.BackfillUnindexed(2, 1024); err == nil {
+		t.Fatal("BackfillUnindexed() succeeded after a fake embedding failure")
+	}
+	if got := rs.Stats(); got["vector_indexed_chunks"] != 0 || got["rag_index_vectors"] != 0 {
+		t.Fatalf("failed backfill mutated index or DB flags: %+v", got)
 	}
 }
 
