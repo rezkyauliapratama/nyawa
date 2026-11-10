@@ -179,14 +179,37 @@ func TestLegacyAliasesResolve(t *testing.T) {
 
 // ─── helpers ──────────────────────────────────────
 
+type testRAGIngestEmbedder struct{}
+
+func (testRAGIngestEmbedder) Embed(text string) ([]float32, error) {
+	vector := make([]float32, 4)
+	if len(text) > 0 {
+		vector[0] = float32(len(text))
+	}
+	return vector, nil
+}
+
+func (testRAGIngestEmbedder) Available() bool { return true }
+func (testRAGIngestEmbedder) Dims() int       { return 4 }
+
 func newTestServer(t *testing.T) (*Server, *bytes.Buffer) {
 	t.Helper()
-	st, err := store.NewStore(filepath.Join(t.TempDir(), "mcp-params.db"), nil)
+	dbPath := filepath.Join(t.TempDir(), "mcp-params.db")
+	st, err := store.NewStore(dbPath, nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	rs := rag.NewRAGStore(st.GetDB(), st.GetHNSW(), st.GetHNSWPath(), nil)
+	indexPath := dbPath + ".rag.hnsw"
+	profile := rag.EmbeddingProfile{Provider: "fake", Model: "mcp-handler-test", Dimensions: 4}
+	hnsw, err := rag.OpenVectorIndex(st.GetDB(), indexPath, profile)
+	if err != nil {
+		t.Fatalf("open test RAG index: %v", err)
+	}
+	rs := rag.NewRAGStore(st.GetDB(), hnsw, indexPath, testRAGIngestEmbedder{})
+	if err := rs.InitError(); err != nil {
+		t.Fatalf("initialize test RAG store: %v", err)
+	}
 	buf := &bytes.Buffer{}
 	return &Server{store: st, ragStore: rs, writer: json.NewEncoder(buf)}, buf
 }

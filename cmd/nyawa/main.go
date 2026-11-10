@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -122,28 +124,31 @@ func getStore(p string, emb store.Embedder) *store.Store {
 const (
 	memoryEmbedderLocal = "local"
 	memoryEmbedderAPI   = "api"
+	ragEmbedderLocal    = "local"
+	ragEmbedderAPI      = "api"
+
+	ragTaskModeAuto   = "auto"
+	ragTaskModeNone   = "none"
+	ragTaskModeJinaV3 = "jina-v3"
 )
 
-// getEmbedder selects the memory embedder. The default deliberately remains
-// BGE/384 with Ollama only as its existing fallback. API use is opt-in: a
-// configured EMBEDDING_* value alone never changes a production index.
-func getEmbedder() (*embedder.PriorityChain, error) {
-	mode, err := memoryEmbedderMode(os.Getenv("MEMORY_EMBEDDER"))
-	if err != nil {
-		return nil, err
-	}
-	if mode == memoryEmbedderAPI {
-		api, err := embedder.NewOpenAIEmbedderFromEnv(os.Getenv)
-		if err != nil {
-			return nil, fmt.Errorf("MEMORY_EMBEDDER=api: %w", err)
-		}
-		// API mode is intentionally a single-element chain. Falling back to BGE
-		// or Ollama here would silently put a different vector space into the
-		// same HNSW index when an API request fails.
-		log.Printf("memory embedder: api (%s, dim=%d)", api.Name(), api.Dims())
-		return embedder.NewPriorityChain(api), nil
-	}
+type runtimeEmbedders struct {
+	memory     *embedder.PriorityChain
+	rag        *embedder.PriorityChain
+	ragProfile rag.EmbeddingProfile
+	ragErr     error
+	bge        *embedder.PythonEmbedder
+}
 
+func (e *runtimeEmbedders) Stop() {
+	if e != nil && e.bge != nil {
+		e.bge.Stop()
+	}
+}
+
+// startBGE starts one local BGE subprocess. The runtime pair builder shares
+// this instance when both memory and RAG use the same local model.
+func startBGE() (*embedder.PythonEmbedder, string) {
 	dir, source := embedder.DefaultModelDir()
 	bge := embedder.NewPythonEmbedder(dir)
 	if err := bge.Start(); err != nil {
@@ -151,16 +156,20 @@ func getEmbedder() (*embedder.PriorityChain, error) {
 	} else {
 		log.Printf("BGE embedder ready (model=%s, source=%s, dim=%d)", dir, source, bge.Dims())
 	}
-	ollama := embedder.NewOllamaEmbedder(embedder.OllamaConfig{BaseURL: "http://localhost:11434", Model: "nomic-embed-text"})
-	return embedder.NewPriorityChain(bge, ollama), nil
+	return bge, dir
 }
 
-func mustGetEmbedder() *embedder.PriorityChain {
-	emb, err := getEmbedder()
-	if err != nil {
-		log.Fatal(err)
+func newMemoryEmbedder(mode string, bge *embedder.PythonEmbedder, getenv func(string) string) (*embedder.PriorityChain, error) {
+	if mode == memoryEmbedderAPI {
+		api, err := embedder.NewOpenAIEmbedderFromEnv(getenv)
+		if err != nil {
+			return nil, fmt.Errorf("MEMORY_EMBEDDER=api: %w", err)
+		}
+		log.Printf("memory embedder: api (%s, dim=%d)", api.Name(), api.Dims())
+		return embedder.NewPriorityChain(api), nil
 	}
-	return emb
+	ollama := embedder.NewOllamaEmbedder(embedder.OllamaConfig{BaseURL: "http://localhost:11434", Model: "nomic-embed-text"})
+	return embedder.NewPriorityChain(bge, ollama), nil
 }
 
 func memoryEmbedderMode(raw string) (string, error) {
@@ -172,6 +181,176 @@ func memoryEmbedderMode(raw string) (string, error) {
 	default:
 		return "", fmt.Errorf("MEMORY_EMBEDDER must be %q or %q, got %q", memoryEmbedderLocal, memoryEmbedderAPI, raw)
 	}
+}
+
+func ragEmbedderMode(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", ragEmbedderLocal, "bge":
+		return ragEmbedderLocal, nil
+	case ragEmbedderAPI:
+		return ragEmbedderAPI, nil
+	default:
+		return "", fmt.Errorf("RAG_EMBEDDER must be %q or %q, got %q", ragEmbedderLocal, ragEmbedderAPI, raw)
+	}
+}
+
+func ragTaskMode(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", ragTaskModeAuto:
+		return ragTaskModeAuto, nil
+	case ragTaskModeNone:
+		return ragTaskModeNone, nil
+	case ragTaskModeJinaV3:
+		return ragTaskModeJinaV3, nil
+	default:
+		return "", fmt.Errorf("RAG_EMBEDDING_TASK_MODE must be %q, %q, or %q, got %q", ragTaskModeAuto, ragTaskModeNone, ragTaskModeJinaV3, raw)
+	}
+}
+
+func ragRetrievalTasksEnabled(mode, baseURL, model string) (bool, error) {
+	mode, err := ragTaskMode(mode)
+	if err != nil {
+		return false, err
+	}
+	switch mode {
+	case ragTaskModeNone:
+		return false, nil
+	case ragTaskModeJinaV3:
+		return true, nil
+	default:
+		parsed, err := url.Parse(baseURL)
+		if err != nil {
+			return false, fmt.Errorf("parse embedding base URL for task capability: %w", err)
+		}
+		return strings.EqualFold(parsed.Hostname(), "api.jina.ai") && model == "jina-embeddings-v3", nil
+	}
+}
+
+func newRAGAPIEmbedder(getenv func(string) string) (*embedder.PriorityChain, rag.EmbeddingProfile, error) {
+	return newRAGAPIEmbedderWithHTTPClient(getenv, nil)
+}
+
+func newRAGAPIEmbedderWithHTTPClient(getenv func(string) string, client *http.Client) (*embedder.PriorityChain, rag.EmbeddingProfile, error) {
+	api, err := embedder.NewOpenAIEmbedderFromEnvWithHTTPClient(getenv, client)
+	if err != nil {
+		return nil, rag.EmbeddingProfile{}, err
+	}
+	baseURL := strings.TrimSpace(getenv("EMBEDDING_BASE_URL"))
+	if baseURL == "" {
+		baseURL = "https://api.jina.ai/v1"
+	}
+	model := strings.TrimSpace(getenv("EMBEDDING_MODEL"))
+	if model == "" {
+		model = "jina-embeddings-v3"
+	}
+	taskMode, err := ragTaskMode(getenv("RAG_EMBEDDING_TASK_MODE"))
+	if err != nil {
+		return nil, rag.EmbeddingProfile{}, err
+	}
+	tasksEnabled, err := ragRetrievalTasksEnabled(taskMode, baseURL, model)
+	if err != nil {
+		return nil, rag.EmbeddingProfile{}, err
+	}
+	api.EnableRetrievalTasks(tasksEnabled)
+	profile := rag.EmbeddingProfile{Provider: "openai-compatible", Model: model, BaseURL: baseURL, Dimensions: api.Dims()}
+	if tasksEnabled {
+		profile.QueryTask = embedder.TaskRetrievalQuery
+		profile.PassageTask = embedder.TaskRetrievalPassage
+	}
+	return embedder.NewPriorityChain(api), profile, nil
+}
+
+// getEmbedder remains the memory-only selector used by memory CLI commands.
+func getEmbedder() (*embedder.PriorityChain, error) {
+	mode, err := memoryEmbedderMode(os.Getenv("MEMORY_EMBEDDER"))
+	if err != nil {
+		return nil, err
+	}
+	var bge *embedder.PythonEmbedder
+	if mode == memoryEmbedderLocal {
+		bge, _ = startBGE()
+	}
+	return newMemoryEmbedder(mode, bge, os.Getenv)
+}
+
+// getRuntimeEmbedders selects memory and RAG independently. A local BGE process
+// is shared when both selectors choose local; the RAG local chain deliberately
+// excludes Ollama so it cannot switch vector spaces behind the RAG index.
+func getRuntimeEmbedders() (*runtimeEmbedders, error) {
+	return getRuntimeEmbeddersWith(os.Getenv, startBGE)
+}
+
+func getRuntimeEmbeddersWith(getenv func(string) string, startLocal func() (*embedder.PythonEmbedder, string)) (*runtimeEmbedders, error) {
+	memoryMode, err := memoryEmbedderMode(getenv("MEMORY_EMBEDDER"))
+	if err != nil {
+		return nil, err
+	}
+	ragMode, ragModeErr := ragEmbedderMode(getenv("RAG_EMBEDDER"))
+
+	var bge *embedder.PythonEmbedder
+	var modelDir string
+	if memoryMode == memoryEmbedderLocal || (ragModeErr == nil && ragMode == ragEmbedderLocal) {
+		bge, modelDir = startLocal()
+	}
+	memory, err := newMemoryEmbedder(memoryMode, bge, getenv)
+	if err != nil {
+		if bge != nil {
+			bge.Stop()
+		}
+		return nil, err
+	}
+	runtime := &runtimeEmbedders{memory: memory, bge: bge}
+	if ragModeErr != nil {
+		runtime.ragErr = ragModeErr
+		return runtime, nil
+	}
+	if ragMode == ragEmbedderAPI {
+		runtime.rag, runtime.ragProfile, err = newRAGAPIEmbedder(getenv)
+		if err != nil {
+			runtime.ragErr = fmt.Errorf("RAG_EMBEDDER=api: %w", err)
+		}
+		return runtime, nil
+	}
+	if bge == nil {
+		runtime.ragErr = fmt.Errorf("RAG local embedder was not initialized")
+		return runtime, nil
+	}
+	fingerprint, fingerprintErr := embedder.LocalModelFingerprint(modelDir)
+	if fingerprintErr != nil {
+		runtime.ragErr = fmt.Errorf("identify RAG local model artifacts: %w", fingerprintErr)
+		return runtime, nil
+	}
+	runtime.rag = embedder.NewPriorityChain(bge)
+	runtime.ragProfile = rag.EmbeddingProfile{Provider: "bge-onnx", Model: "minilm-multilingual@" + fingerprint, Dimensions: bge.Dims()}
+	return runtime, nil
+}
+
+func mustGetEmbedder() *embedder.PriorityChain {
+	emb, err := getEmbedder()
+	if err != nil {
+		log.Fatal(err)
+	}
+	return emb
+}
+
+func setupRAGStore(st *store.Store, dbPath string, runtime *runtimeEmbedders) *rag.RAGStore {
+	if runtime.ragErr != nil {
+		log.Printf("RAG disabled: %v", runtime.ragErr)
+		return rag.NewUnavailableRAGStore(st.GetDB(), runtime.ragErr)
+	}
+	path := dbPath + ".rag.hnsw"
+	hnsw, err := rag.OpenVectorIndex(st.GetDB(), path, runtime.ragProfile)
+	if err != nil {
+		log.Printf("RAG index disabled: %v", err)
+		return rag.NewUnavailableRAGStore(st.GetDB(), err)
+	}
+	store := rag.NewRAGStore(st.GetDB(), hnsw, path, runtime.rag)
+	if err := store.InitError(); err != nil {
+		log.Printf("RAG store disabled: %v", err)
+		return store
+	}
+	log.Printf("RAG embedder configured: %s/%s dim=%d ready=%t index=%s", runtime.ragProfile.Provider, runtime.ragProfile.Model, runtime.ragProfile.Dimensions, runtime.rag.Available(), path)
+	return store
 }
 
 func cmdInit() {
@@ -481,9 +660,12 @@ func cmdServe() {
 	if len(os.Args) < 3 {
 		log.Fatal("usage: nyawa serve <db>")
 	}
-	emb := mustGetEmbedder()
-	defer emb.StopAll()
-	st := getStore(os.Args[2], emb)
+	runtime, err := getRuntimeEmbedders()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer runtime.Stop()
+	st := getStore(os.Args[2], runtime.memory)
 	defer st.Close()
 
 	engine := dream.New(st.GetDB(), st.GetHNSW(), st.GetHNSWPath())
@@ -506,17 +688,21 @@ func cmdServe() {
 		}
 	}()
 
-	hc := embedder.NewHealthCheckRunner(emb, 60*time.Second)
+	hc := embedder.NewHealthCheckRunner(runtime.memory, 60*time.Second)
 	hc.Start()
 	defer hc.Stop()
-	p, stopScorer, err := newSearchPipeline(st, emb, types.DefaultConfig().Search)
+	p, stopScorer, err := newSearchPipeline(st, runtime.memory, types.DefaultConfig().Search)
 	if err != nil {
 		log.Fatalf("initialize recall confidence scorer: %v", err)
 	}
 	defer stopScorer()
-	rs := rag.NewRAGStore(st.GetDB(), st.GetHNSW(), st.GetHNSWPath(), emb)
-	srv := server.New(st, p, emb, rs, server.DefaultServerConfig())
-	log.Printf("Server — db=%s embedder=%s dream=%v", os.Args[2], emb.Current(), engine.Running())
+	rs := setupRAGStore(st, os.Args[2], runtime)
+	srv := server.New(st, p, runtime.memory, rs, server.DefaultServerConfig())
+	ragLabel := "disabled"
+	if runtime.ragErr == nil {
+		ragLabel = fmt.Sprintf("%s/%s/%d", runtime.ragProfile.Provider, runtime.ragProfile.Model, runtime.ragProfile.Dimensions)
+	}
+	log.Printf("Server — db=%s memory_embedder=%s rag_embedder=%s dream=%v", os.Args[2], runtime.memory.Current(), ragLabel, engine.Running())
 	if err := srv.Start(); err != nil {
 		log.Fatalf("server: %v", err)
 	}
@@ -526,16 +712,19 @@ func cmdMCP() {
 	if len(os.Args) < 3 {
 		log.Fatal("usage: nyawa mcp <db>")
 	}
-	emb := mustGetEmbedder()
-	defer emb.StopAll()
-	st := getStore(os.Args[2], emb)
-	log.Printf("MCP — db=%s embedder=%s", os.Args[2], emb.Current())
-	p, stopScorer, err := newSearchPipeline(st, emb, types.DefaultConfig().Search)
+	runtime, err := getRuntimeEmbedders()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer runtime.Stop()
+	st := getStore(os.Args[2], runtime.memory)
+	log.Printf("MCP — db=%s memory_embedder=%s", os.Args[2], runtime.memory.Current())
+	p, stopScorer, err := newSearchPipeline(st, runtime.memory, types.DefaultConfig().Search)
 	if err != nil {
 		log.Fatalf("initialize recall confidence scorer: %v", err)
 	}
 	defer stopScorer()
-	rs := rag.NewRAGStore(st.GetDB(), st.GetHNSW(), st.GetHNSWPath(), emb)
+	rs := setupRAGStore(st, os.Args[2], runtime)
 	if err := mcp.NewServer(st, p, rs).Run(); err != nil {
 		log.Fatalf("mcp: %v", err)
 	}

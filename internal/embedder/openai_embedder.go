@@ -32,8 +32,9 @@ type OpenAIEmbedder struct {
 	apiKey  string
 	baseURL string
 	model   string
-	client  *http.Client
-	dims    int
+	client                *http.Client
+	dims                  int
+	retrievalTasksEnabled bool
 }
 
 // NewOpenAIEmbedder preserves the original permissive constructor for callers
@@ -64,6 +65,13 @@ func NewOpenAIEmbedder() *OpenAIEmbedder {
 // MEMORY_EMBEDDER=api is explicit, where silently accepting a typo could lead
 // to an incompatible HNSW index.
 func NewOpenAIEmbedderFromEnv(getenv func(string) string) (*OpenAIEmbedder, error) {
+	return NewOpenAIEmbedderFromEnvWithHTTPClient(getenv, nil)
+}
+
+// NewOpenAIEmbedderFromEnvWithHTTPClient builds a validated API embedder and
+// optionally accepts an HTTP client. A nil client uses the standard timeout
+// configured by the embedder.
+func NewOpenAIEmbedderFromEnvWithHTTPClient(getenv func(string) string, client *http.Client) (*OpenAIEmbedder, error) {
 	apiKey := strings.TrimSpace(getenv("EMBEDDING_API_KEY"))
 	if apiKey == "" {
 		return nil, fmt.Errorf("EMBEDDING_API_KEY is required")
@@ -91,7 +99,11 @@ func NewOpenAIEmbedderFromEnv(getenv func(string) string) (*OpenAIEmbedder, erro
 		}
 	}
 
-	return newOpenAIEmbedder(apiKey, baseURL, model, dims), nil
+	emb := newOpenAIEmbedder(apiKey, baseURL, model, dims)
+	if client != nil {
+		emb.client = client
+	}
+	return emb, nil
 }
 
 func newOpenAIEmbedder(apiKey, baseURL, model string, dims int) *OpenAIEmbedder {
@@ -109,6 +121,7 @@ type openAIEmbedRequest struct {
 	Input      []string `json:"input"`
 	Dimensions int      `json:"dimensions,omitempty"`
 	Normalized bool     `json:"normalized"`
+	Task       string   `json:"task,omitempty"`
 }
 
 type openAIEmbedResponse struct {
@@ -119,7 +132,38 @@ type openAIEmbedResponse struct {
 	Model string `json:"model"`
 }
 
+const (
+	TaskRetrievalQuery   = "retrieval.query"
+	TaskRetrievalPassage = "retrieval.passage"
+)
+
+// Embed retains the task-less behavior used by non-RAG callers. RAG callers
+// select the query or passage task explicitly through the methods below.
 func (o *OpenAIEmbedder) Embed(text string) ([]float32, error) {
+	return o.embed(text, "")
+}
+
+// EnableRetrievalTasks allows the RAG API configuration to opt this embedder
+// into provider-specific query/passage task fields. It is disabled by default.
+func (o *OpenAIEmbedder) EnableRetrievalTasks(enabled bool) {
+	o.retrievalTasksEnabled = enabled
+}
+
+func (o *OpenAIEmbedder) EmbedQuery(text string) ([]float32, error) {
+	if !o.retrievalTasksEnabled {
+		return o.embed(text, "")
+	}
+	return o.embed(text, TaskRetrievalQuery)
+}
+
+func (o *OpenAIEmbedder) EmbedPassage(text string) ([]float32, error) {
+	if !o.retrievalTasksEnabled {
+		return o.embed(text, "")
+	}
+	return o.embed(text, TaskRetrievalPassage)
+}
+
+func (o *OpenAIEmbedder) embed(text, task string) ([]float32, error) {
 	if o.apiKey == "" {
 		return nil, fmt.Errorf("EMBEDDING_API_KEY not set")
 	}
@@ -128,6 +172,7 @@ func (o *OpenAIEmbedder) Embed(text string) ([]float32, error) {
 		Input:      []string{text},
 		Dimensions: o.dims,
 		Normalized: true,
+		Task:       task,
 	}
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(body); err != nil {
