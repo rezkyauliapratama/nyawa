@@ -1,4 +1,4 @@
-name: C8.7 Corrected Calibration
+name: C8.7 Synthetic Development E2E
 
 on:
   workflow_dispatch:
@@ -30,23 +30,24 @@ env:
 jobs:
   calibration:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    name: Synthetic C8.7 corrected calibration
+    name: Synthetic C8.7 development E2E
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Generate deterministic calibration-only fixture and validate
+      - name: Generate corrected synthetic development v2 fixture and validate
         run: |
-          FIXTURE="$RUNNER_TEMP/c87-fixtures.json"
-          CHECK="$RUNNER_TEMP/c87-fixtures-check.json"
+          FIXTURE="$RUNNER_TEMP/c87-development-v2.json"
+          CHECK="$RUNNER_TEMP/c87-development-v2-check.json"
           python3 -m py_compile scripts/c87_fixture_generator.py scripts/c87_corrected_calibration.py
-          python3 scripts/c87_fixture_generator.py --output "$FIXTURE"
-          python3 scripts/c87_fixture_generator.py --output "$CHECK"
+          python3 scripts/c87_fixture_generator.py --version development-v2 --output "$FIXTURE"
+          python3 scripts/c87_fixture_generator.py --version development-v2 --output "$CHECK"
           test "$(sha256sum "$FIXTURE" | cut -d' ' -f1)" = "$(sha256sum "$CHECK" | cut -d' ' -f1)"
-          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert len(d["cases"]) == 60 and len(d["records"]) == 40; assert {x["split"] for x in d["cases"]+d["records"]} == {"calibration"}; assert sum(x["category"] == "namespace_isolation" and x["answerable"] is False for x in d["cases"]) == 5; print("PASS: 60 calibration cases, 40 calibration records, 5 namespace negatives")' "$FIXTURE"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert len(d["cases"]) == 120 and len(d["records"]) == 160; assert d["schema_version"] == "c8.7.corrected-synthetic-development.v2"; assert d["sealed_holdout"] is False; assert d["classification"] == "synthetic_development_not_independent_not_holdout_not_production_evidence"; assert {x["split"] for x in d["cases"]+d["records"]} == {"synthetic_development"}; assert d["corrections"]["underspecified_identifier_items"] == d["corrections"]["underspecified_hash_items"] == 10; print("PASS: corrected development v2; 120 cases, 160 records; no holdout")' "$FIXTURE"
           python3 scripts/c87_corrected_calibration.py --mode self-test
+          python3 scripts/c87_corrected_calibration.py --mode synthetic-self-test
 
       - name: Check runner capacity
         run: python3 scripts/c81_abstention_calibration.py --mode preflight
@@ -64,7 +65,7 @@ jobs:
             --mode e2e \
             --image "$C87_IMAGE" \
             --container "$C87_CONTAINER" \
-            --fixtures "$RUNNER_TEMP/c87-fixtures.json"
+            --fixtures "$RUNNER_TEMP/c87-development-v2.json"
 
       - name: Final cleanup
         if: always()
