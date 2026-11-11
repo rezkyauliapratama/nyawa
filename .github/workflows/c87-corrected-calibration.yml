@@ -2,6 +2,18 @@ name: C8.7 Corrected Calibration
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+    paths:
+      - .github/workflows/c87-corrected-calibration.yml
+      - scripts/c87_corrected_calibration.py
+      - scripts/c87_fixture_generator.py
+      - scripts/c81_abstention_calibration.py
 
 concurrency:
   group: c87-corrected-calibration
@@ -17,6 +29,7 @@ env:
 
 jobs:
   calibration:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: Synthetic C8.7 corrected calibration
     runs-on: ubuntu-latest
     timeout-minutes: 25
