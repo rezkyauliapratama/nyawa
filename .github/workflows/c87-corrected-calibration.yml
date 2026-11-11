@@ -24,11 +24,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Generate fixture and validate
+      - name: Generate deterministic calibration-only fixture and validate
         run: |
           FIXTURE="$RUNNER_TEMP/c87-fixtures.json"
+          CHECK="$RUNNER_TEMP/c87-fixtures-check.json"
           python3 -m py_compile scripts/c87_fixture_generator.py scripts/c87_corrected_calibration.py
           python3 scripts/c87_fixture_generator.py --output "$FIXTURE"
+          python3 scripts/c87_fixture_generator.py --output "$CHECK"
+          test "$(sha256sum "$FIXTURE" | cut -d' ' -f1)" = "$(sha256sum "$CHECK" | cut -d' ' -f1)"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert len(d["cases"]) == 60 and len(d["records"]) == 40; assert {x["split"] for x in d["cases"]+d["records"]} == {"calibration"}; assert sum(x["category"] == "namespace_isolation" and x["answerable"] is False for x in d["cases"]) == 5; print("PASS: 60 calibration cases, 40 calibration records, 5 namespace negatives")' "$FIXTURE"
           python3 scripts/c87_corrected_calibration.py --mode self-test
 
       - name: Check runner capacity

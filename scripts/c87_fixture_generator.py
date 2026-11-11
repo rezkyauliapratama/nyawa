@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""C8.7 corrected calibration fixture generator — 80 records, 120 cases, 60/60 split."""
+"""Generate the deterministic C8.7 calibration-only synthetic fixture."""
 from __future__ import annotations
 
 import argparse
@@ -8,137 +8,126 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = "c8.7.corrected-calibration.v1"
-SPLITS = ("calibration", "holdout")
 
 
 def build_dataset() -> dict[str, Any]:
-    records: list[dict] = []
-    cases: list[dict] = []
-    ns = "c87-synthetic-main"
+    records: list[dict[str, Any]] = []
+    cases: list[dict[str, Any]] = []
+    namespace = "c87-synthetic-main"
     next_id = 0
 
-    def a() -> str:
-        nonlocal next_id; next_id += 1; return f"c87a-{next_id:04d}"
+    def record(ns: str, kind: str, content: str, *, status: str = "active",
+               supersedes: list[str] | None = None) -> str:
+        nonlocal next_id
+        next_id += 1
+        fixture_id = f"c87a-{next_id:04d}"
+        records.append({
+            "fixture_id": fixture_id, "namespace": ns, "type": kind,
+            "split": "calibration", "status": status,
+            "supersedes": list(supersedes or []), "content": content,
+        })
+        return fixture_id
 
-    def rec(split: str, ns_: str, kind: str, txt: str, *,
-            status: str = "active", supersedes: list[str] | None = None) -> str:
-        fid = a()
-        records.append({"fixture_id": fid, "namespace": ns_, "type": kind, "split": split,
-                        "status": status, "supersedes": supersedes or [], "content": txt})
-        return fid
+    def case(category: str, query: str, *, answerable: bool = True,
+             expected: list[str] | None = None, forbidden: list[str] | None = None,
+             ns: str = namespace) -> None:
+        ordinal = 1 + sum(c["category"] == category for c in cases)
+        cases.append({
+            "case_id": f"c87c-cal-{category}-{ordinal:02d}",
+            "category": category, "split": "calibration", "answerable": answerable,
+            "namespace": ns, "query": query,
+            "expected_fixture_ids": list(expected or []),
+            "forbidden_fixture_ids": list(forbidden or []),
+        })
 
-    def add(split: str, cat: str, q: str, ans: bool, *,
-            exp: list[str] | None = None, forb: list[str] | None = None, ns_: str | None = None) -> None:
-        n = sum(1 for c in cases if c["category"] == cat and c["split"] == split) + 1
-        sc = "cal" if split == "calibration" else "hold"
-        cases.append({"case_id": f"c87c-{sc}-{cat}-{n:02d}", "category": cat,
-                       "split": split, "answerable": ans, "namespace": ns_ or ns,
-                       "query": q, "expected_fixture_ids": exp or [],
-                       "forbidden_fixture_ids": forb or []})
+    exact_ids = [f"SYNTH-C87-ID-{i:04d}" for i in range(1, 6)]
+    for ident in exact_ids:
+        fid = record(namespace, "artifact", f"Exact identifier {ident} at /synthetic/c87/{ident}.md.")
+        case("exact_identifier", f"Find synthetic record for {ident}.", expected=[fid])
+        case("exact_identifier", f"Lookup the path for identifier {ident}.", expected=[fid])
 
-    for split in SPLITS:
-        ic = split == "calibration"
-        lib_a = ["silver", "amber", "quiet", "cobalt", "orchid", "maple", "violet", "copper", "golden", "lunar"]
-        lib_b = ["lease", "backup", "approval", "retention", "scale", "queue", "retry", "cache", "handoff", "window"]
+    decision_topics = ("silver", "amber", "quiet", "cobalt", "orchid")
+    for topic in decision_topics:
+        fid = record(namespace, "decision", f"Decision: {topic} cache uses policy POLICY-{topic.upper()}-17.")
+        case("active_decision", f"What policy applies to {topic} cache?", expected=[fid])
+        case("active_decision", f"Which rule governs the {topic} cache?", expected=[fid])
 
-        # exact_identifier (artifact) — 5 records, 10 cases (2 per record)
-        for i in range(5):
-            ident = f"SYNTH-C87-ID-{i+1+(0 if ic else 100):04d}"
-            aid = rec(split, ns, "artifact",
-                      f"Exact identifier {ident} found at path /synthetic/c87/item-{i+1}.md.")
-            add(split, "exact_identifier", f"Find synthetic record for {ident}.", True, exp=[aid])
-            add(split, "exact_identifier", f"Lookup the path for identifier {ident}.", True, exp=[aid])
+    constraint_topics = ("lease", "backup", "approval", "retention", "scale")
+    for index, topic in enumerate(constraint_topics):
+        hours = (index + 2) * 6
+        fid = record(namespace, "constraint", f"Constraint: {topic} refresh window is {hours}h.")
+        case("hard_constraint", f"What is the {topic} refresh window?", expected=[fid])
+        case("hard_constraint", f"How often does {topic} refresh?", expected=[fid])
 
-        # active_decision (decision) — 5 records, 10 cases
-        for i in range(5):
-            ent = lib_a[i if ic else i+5]
-            aid = rec(split, ns, "decision",
-                      f"Decision: {ent} cache uses policy ID-{hash(ent+split)%100}.")
-            add(split, "active_decision", f"What policy applies to {ent} cache?", True, exp=[aid])
-            add(split, "active_decision", f"Which rule governs the {ent} cache?", True, exp=[aid])
+    for index, topic in enumerate(constraint_topics):
+        old_hours, current_hours = 30 + index, 6 + index
+        old = record(namespace, "decision", f"Old {topic} policy: {old_hours}h.", status="superseded")
+        current = record(namespace, "decision", f"Updated {topic} policy: {current_hours}h.", supersedes=[old])
+        case("supersession", f"What is the current {topic} window? (updated)", expected=[current], forbidden=[old])
+        case("supersession", f"Latest rule for {topic} window?", expected=[current], forbidden=[old])
 
-        # hard_constraint (constraint -> procedure) — 5 records, 10 cases
-        for i in range(5):
-            topic = lib_b[i if ic else i+5]
-            aid = rec(split, ns, "constraint",
-                      f"Constraint: {topic} refresh window is {hash(topic+split)%48+6}h.")
-            add(split, "hard_constraint", f"What is the {topic} refresh window?", True, exp=[aid])
-            add(split, "hard_constraint", f"How often does {topic} refresh?", True, exp=[aid])
+    for index in range(5):
+        foreign_ns = f"c87-scope-{(index + 1) * 11:02d}"
+        fid = record(foreign_ns, "fact", f"Scope {index + 1} label: entity-{(index + 1) * 13:02d}.")
+        case("namespace_isolation", f"What is scope {index + 1} label?", expected=[fid], ns=foreign_ns)
+        case("namespace_isolation", f"Describe scope {index + 1} label.", expected=[fid], ns=foreign_ns)
+        case("namespace_isolation", f"What is scope {index + 1} label?", answerable=False,
+             forbidden=[fid], ns=namespace)
 
-        # supersession — 5 old + 5 current = 10 records, 10 cases
-        for i in range(5):
-            topic = lib_b[i if ic else i+5]
-            oa = rec(split, ns, "decision",
-                     f"Old {topic} policy: {hash(topic+'old'+split)%50+10}h.", status="superseded")
-            ca = rec(split, ns, "decision",
-                     f"Updated {topic} policy: {hash(topic+'cur'+split)%24+4}h.",
-                     status="active", supersedes=[oa])
-            add(split, "supersession", f"What is the current {topic} window? (updated)", True, exp=[ca], forb=[oa])
-            add(split, "supersession", f"Latest rule for {topic} window?", True, exp=[ca], forb=[oa])
+    for query in (
+        "Find identifier SYNTH-ID-9999.", "What policy for undefined topic?",
+        "How many nonexistent queue workers?", "Name the invented glacier tuning.",
+        "What label for scope 99 chat C?",
+    ):
+        case("negative_confusable", query, answerable=False)
 
-        # namespace_isolation (fact) — 5 records, 10 cases
-        for i in range(5):
-            ns2 = f"c87-scope-{hash(split)*(i+2)%100:02d}"
-            aid = rec(split, ns2, "fact",
-                      f"Scope {i+1} label: entity-{hash(split+str(i))%100}.")
-            add(split, "namespace_isolation", f"What is scope {i+1} label?", True, exp=[aid], ns_=ns2)
-            add(split, "namespace_isolation", f"Describe scope {i+1} label.", True, exp=[aid], ns_=ns2)
+    for index in range(10):
+        record(namespace, "fact", f"Decoy {index + 1}: fictional unrelated calibration note.")
 
-        # negative — 10 per split
-        for q in [
-            "Find identifier SYNTH-ID-9999.", "What policy for undefined topic?",
-            "How many nonexistent queue workers?", "Name the invented glacier tuning.",
-            "What label for scope 99 chat C?", "Fictional satellite routing key?",
-            "Imaginary rainforest moon phase?", "Nonexistent routing value?",
-            "Fictional lunar checksum?", "Find record for imaginary topic Z.",
-        ] if ic else [
-            "Find identifier SYNTH-ID-8888.", "What policy for missing topic?",
-            "How many phantom maintenance workers?", "Name desert engine transmission key.",
-            "What label for scope 98 chat D?", "Canyon beacon code?",
-            "Which ocean choir paper key?", "Nonexistent handoff rule?",
-            "Glacier ferry magnetic code?", "Find record for missing entity Q.",
-        ]:
-            add(split, "negative_confusable", q, False)
-
-        # decoys — 10 per split
-        for i in range(10):
-            rec(split, ns, "fact", f"Decoy {i+1}: fictional unrelated note for {split}.")
-
-    # Validate
-    rs, cs = records, cases
-    assert len(rs) == 80, f"records={len(rs)}"
-    assert len(cs) == 120, f"cases={len(cs)}"
-    cal_c = [c for c in cs if c["split"] == "calibration"]
-    hold_c = [c for c in cs if c["split"] == "holdout"]
-    assert len(cal_c) == 60 and len(hold_c) == 60
-    assert sum(1 for c in cal_c if c["answerable"]) == 50
-    assert sum(1 for c in hold_c if c["answerable"]) == 50
-    cal_fids = {r["fixture_id"] for r in rs if r["split"] == "calibration"}
-    hold_fids = {r["fixture_id"] for r in rs if r["split"] == "holdout"}
-    assert cal_fids.isdisjoint(hold_fids), "split leak"
-    assert all(r["type"] in ("artifact", "constraint", "decision", "fact") for r in rs), "bad type"
-    assert all(r["status"] in ("active", "superseded") for r in rs), "bad status"
-    all_fids = cal_fids | hold_fids
-    for c in cs:
-        for fid in c["expected_fixture_ids"] + c["forbidden_fixture_ids"]:
-            assert fid in all_fids, f"missing {fid} in {c['case_id']}"
-
-    return {"schema_version": SCHEMA,
-            "description": "C8.7 corrected calibration corpus with types, status, supersedes.",
-            "records": rs, "cases": cs, "k": 5,
-            "gates": {"positive_recall_at_k_min": 0.9, "exact_identifier_recall_min": 1.0,
-                       "negative_false_positive_rate_max": 0.0, "namespace_leaks_max": 0}}
+    assert len(records) == 40, f"calibration records={len(records)}"
+    assert len(cases) == 60, f"calibration cases={len(cases)}"
+    assert sum(c["answerable"] for c in cases) == 50
+    fixture_ids = {r["fixture_id"] for r in records}
+    assert all(r["split"] == "calibration" for r in records)
+    assert all(c["split"] == "calibration" for c in cases)
+    assert all(r["type"] in {"artifact", "constraint", "decision", "fact"} for r in records)
+    assert all(r["status"] in {"active", "superseded"} for r in records)
+    for item in cases:
+        assert set(item["expected_fixture_ids"] + item["forbidden_fixture_ids"]).issubset(fixture_ids)
+    return {
+        "schema_version": SCHEMA,
+        "description": "Deterministic synthetic C8.7 calibration-only corpus.",
+        "records": records,
+        "cases": cases,
+        "k": 5,
+        "gates": {
+            "positive_recall_at_5_min": 0.90,
+            "exact_identifier_recall_at_5_min": 1.0,
+            "active_decision_recall_at_5_min": 0.90,
+            "hard_constraint_recall_at_5_min": 1.0,
+            "supersession_recall_at_5_min": 0.90,
+            "namespace_isolation_recall_at_5_min": 0.90,
+            "negative_false_positive_rate_at_k_max": 0.0,
+            "raw_namespace_leak_count_max": 0,
+            "selected_namespace_leak_count_max": 0,
+            "selected_forbidden_candidate_exposure_count_max": 0,
+            "superseded_selected_candidate_count_max": 0,
+        },
+    }
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--output", type=Path, required=True)
-    args = ap.parse_args()
-    ds = build_dataset()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    dataset = build_dataset()
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(ds, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps({"fixture": str(args.output), "records": len(ds["records"]),
-                      "cases": len(ds["cases"]), "schema": ds["schema_version"]}))
+    args.output.write_text(json.dumps(dataset, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps({
+        "fixture": str(args.output), "records": len(dataset["records"]),
+        "cases": len(dataset["cases"]), "schema": dataset["schema_version"],
+        "splits": sorted({r["split"] for r in dataset["records"]}),
+    }, sort_keys=True))
     return 0
 
 
