@@ -1,0 +1,68 @@
+name: C8.7 Corrected Calibration
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: c87-corrected-calibration
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  C87_IMAGE: ghcr.io/rezkyauliapratama/nyawa/bge-runtime@sha256:bcbc858b5df17d734858eb5db7c1faa521a327576d8070e97bc248653eff5246
+  C87_CONTAINER: nyawa-c87-eval-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  calibration:
+    name: Synthetic C8.7 corrected calibration
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate fixture and validate
+        run: |
+          FIXTURE="$RUNNER_TEMP/c87-fixtures.json"
+          python3 -m py_compile scripts/c87_fixture_generator.py scripts/c87_corrected_calibration.py
+          python3 scripts/c87_fixture_generator.py --output "$FIXTURE"
+          python3 scripts/c87_corrected_calibration.py --mode self-test
+
+      - name: Check runner capacity
+        run: python3 scripts/c81_abstention_calibration.py --mode preflight
+
+      - name: Authenticate to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run C8.7 corrected evaluation
+        run: |
+          python3 scripts/c87_corrected_calibration.py \
+            --mode e2e \
+            --image "$C87_IMAGE" \
+            --container "$C87_CONTAINER" \
+            --fixtures "$RUNNER_TEMP/c87-fixtures.json"
+
+      - name: Final cleanup
+        if: always()
+        run: |
+          if docker inspect "$C87_CONTAINER" >/dev/null 2>&1; then
+            image="$(docker inspect --format '{{.Config.Image}}' "$C87_CONTAINER")"
+            owned="$(docker inspect --format '{{index .Config.Labels \"org.nyawa.abstention-calibration\"}}' "$C87_CONTAINER")"
+            if [[ "$image" != "$C87_IMAGE" || "$owned" != "true" ]]; then
+              echo "::error::refusing to remove a container not created by this C8.7 run"
+              exit 1
+            fi
+            docker rm --force "$C87_CONTAINER" >/dev/null
+          fi
+          if docker inspect "$C87_CONTAINER" >/dev/null 2>&1; then
+            echo "::error::disposable C8.7 container remains after cleanup"
+            exit 1
+          fi
+          echo "Disposable C8.7 container absent after cleanup."
