@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import math
 import re
 import sys
 import time
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 from typing import Any
 
 from c81_abstention_calibration import HTTP_HELPER, cleanup, docker, inside_http, preflight, verify_container
@@ -245,6 +248,205 @@ def _vector_indexed(body: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise RuntimeError("stats response has no valid vector_indexed count")
     return value
+
+
+def _validated_hash_fixture_ids(dataset: dict[str, Any]) -> set[str]:
+    """Identify only the ten canonical v2 raw SHA-256 records, without exposing digests."""
+    validate_development_dataset_v2(dataset)
+    records = {row["fixture_id"]: row for row in dataset["records"]}
+    cases = [row for row in dataset["cases"] if row.get("group") == "exact_hash"]
+    expected_ids = {f"D-HASH-{index:02d}" for index in range(1, 11)}
+    if len(cases) != 10:
+        raise RuntimeError("development-v2 exact-hash case set is unexpected")
+    actual_ids: set[str] = set()
+    for case in cases:
+        expected = case.get("expected_fixture_ids")
+        if (case.get("expected_safety") != "answer" or not isinstance(expected, list)
+                or len(expected) != 1 or not isinstance(case.get("expected_answer"), str)):
+            raise RuntimeError("development-v2 exact-hash labels are malformed")
+        fixture_id = expected[0]
+        record = records.get(fixture_id)
+        if (fixture_id not in expected_ids or record is None
+                or not re.fullmatch(r"[0-9a-f]{64}", case["expected_answer"])):
+            raise RuntimeError("development-v2 exact-hash fixture identity is unexpected")
+        digest_match = re.search(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])", record["content"])
+        if digest_match is None or digest_match.group(0) != case["expected_answer"]:
+            raise RuntimeError("development-v2 exact-hash fixture does not match its canonical label")
+        actual_ids.add(fixture_id)
+    if actual_ids != expected_ids:
+        raise RuntimeError("development-v2 exact-hash fixture IDs are incomplete or unexpected")
+    return actual_ids
+
+
+SAFE_PROVIDER_REASONS = frozenset({
+    "OpenAI Key", "Anthropic Key", "AWS Access Key", "AWS Secret Key", "Bearer Token",
+    "GitHub Token", "GitHub PAT", "JWT Token", "PostgreSQL URL", "RSA Private Key",
+    "EC Private Key", "ENV Variable",
+})
+
+
+def _safe_provider_reason(reason: Any) -> str:
+    """Expose only static reason labels known from the filter; redact everything else."""
+    return reason if isinstance(reason, str) and reason in SAFE_PROVIDER_REASONS else "unrecognized (redacted)"
+
+
+def _classify_store_response(record: dict[str, Any], response: Any,
+                             hash_fixture_ids: set[str]) -> tuple[str | None, str | None]:
+    """Return (memory ID, blocked reason) for success or the one validated synthetic block."""
+    fixture_id = record["fixture_id"]
+    if not isinstance(response, dict):
+        raise RuntimeError(f"store response malformed for {fixture_id}")
+    status = response.get("status")
+    if isinstance(status, bool) or not isinstance(status, int):
+        raise RuntimeError(f"store response status malformed for {fixture_id}")
+    body = response.get("body")
+    if status == 201:
+        if not isinstance(body, dict):
+            raise RuntimeError(f"store response body malformed for {fixture_id}")
+        memory_id = field(body, "id")
+        if not isinstance(memory_id, str) or not memory_id.strip():
+            raise RuntimeError(f"store response omitted or malformed id for {fixture_id}")
+        return memory_id, None
+    if status == 403:
+        if not isinstance(body, dict):
+            raise RuntimeError(f"malformed HTTP 403 response for {fixture_id}; response body redacted")
+        reason = field(body, "reason")
+        safe_reason = _safe_provider_reason(reason)
+        if fixture_id not in hash_fixture_ids:
+            raise RuntimeError(f"unexpected HTTP 403 for non-hash fixture {fixture_id}; provider reason {safe_reason}")
+        if reason != "AWS Secret Key":
+            raise RuntimeError(f"unexpected HTTP 403 reason for {fixture_id}; provider reason {safe_reason}")
+        return None, "AWS Secret Key"
+    raise RuntimeError(f"store failed for {fixture_id}: HTTP {status}")
+
+
+def quality_outcome(metrics: dict[str, Any], requested_count: int,
+                    accepted_count: int, blocked_count: int) -> tuple[bool, bool, bool]:
+    """Keep measured policy metrics separate from the hard full-coverage quality gate."""
+    metrics_pass = policy_feasible(metrics)
+    coverage_complete = blocked_count == 0 and accepted_count == requested_count
+    return metrics_pass, coverage_complete, metrics_pass and coverage_complete
+
+
+def retrieval_comparability(coverage_complete: bool) -> dict[str, str | None]:
+    """Distinguish full-corpus metrics from partial-ingestion diagnostics."""
+    if coverage_complete:
+        return {"status": "FULL_CORPUS", "caveat": None}
+    return {
+        "status": "PARTIAL_CORPUS_DIAGNOSTIC_ONLY",
+        "caveat": (
+            "retrieval metrics are diagnostic on a partial corpus; top-K/ranking and negatives may differ "
+            "from full 160-record corpus; not comparable to a full-corpus run; blocked hash cases remain "
+            "in denominator and quality cannot pass"
+        ),
+    }
+
+
+def evaluate_api_workflow(dataset: dict[str, Any],
+                          request: Any) -> dict[str, Any]:
+    """Store, attest indexing, and query every original case through an injected transport."""
+    validate_development_dataset_v2(dataset)
+    hash_fixture_ids = _validated_hash_fixture_ids(dataset)
+    records, cases = dataset["records"], dataset["cases"]
+    metadata = {row["fixture_id"]: {key: row[key] for key in ("namespace", "split", "status", "supersedes")}
+                for row in records}
+    memory_to_fixture: dict[str, str] = {}
+    blocked_records: list[dict[str, Any]] = []
+    for row in records:
+        response = request("POST", "/v1/memories", {
+            "content": row["content"], "namespace": row["namespace"],
+            "type": supported_mcp_type(row["type"]),
+        })
+        memory_id, reason = _classify_store_response(row, response, hash_fixture_ids)
+        if reason is not None:
+            blocked_records.append({"fixture_id": row["fixture_id"], "status": 403, "reason": reason})
+            continue
+        assert memory_id is not None
+        if memory_id in memory_to_fixture:
+            raise RuntimeError("store API returned a duplicate memory ID; candidate mapping is ambiguous")
+        memory_to_fixture[memory_id] = row["fixture_id"]
+
+    stats_response = request("GET", "/v1/stats", None)
+    if not isinstance(stats_response, dict) or stats_response.get("status") != 200:
+        status = stats_response.get("status") if isinstance(stats_response, dict) else "malformed"
+        raise RuntimeError(f"stats returned HTTP {status}")
+    vector_indexed = _vector_indexed(stats_response.get("body"))
+    if vector_indexed != len(memory_to_fixture):
+        raise RuntimeError(f"vector index count mismatch: {vector_indexed}/{len(memory_to_fixture)} accepted records")
+
+    raw: dict[str, list[dict[str, Any]]] = {}
+    predictions: dict[str, dict[str, Any]] = {}
+    diagnostics: dict[str, Any] = {}
+    latency_ms: dict[str, float] = {}
+    for case in cases:
+        payload = {"query": case["query"], "limit": 12, "min_score": 0.0}
+        if case["namespace"] is not None:
+            payload["namespace"] = case["namespace"]
+        started = time.monotonic()
+        response = request("POST", "/v1/recall", payload)
+        latency_ms[case["case_id"]] = round((time.monotonic() - started) * 1000, 2)
+        if not isinstance(response, dict) or response.get("status") != 200:
+            status = response.get("status") if isinstance(response, dict) else "malformed"
+            raise RuntimeError(f"recall failed for {case['case_id']}: HTTP {status}")
+        items = _result_items(response.get("body"), case["case_id"])
+        candidates, unmapped = _api_candidates(items, memory_to_fixture, case["case_id"])
+        if unmapped:
+            raise RuntimeError(f"recall returned unexpected memory IDs for {case['case_id']}")
+        candidate_ids = [row["fixture_id"] for row in candidates]
+        if len(candidate_ids) != len(set(candidate_ids)):
+            raise RuntimeError(f"recall returned duplicate fixture IDs for {case['case_id']}")
+        raw[case["case_id"]] = candidates
+        sidecar = _sidecar_for_candidates(candidates, metadata)
+        # Labels remain outside inference; only query, explicit scope, API candidates, and sidecar enter.
+        predictions[case["case_id"]] = frozen_decision(case["query"], case["namespace"], candidates, sidecar)
+        diagnostics[case["case_id"]] = {
+            "nyawa_response_candidate_count": len(candidates),
+            "sidecar_candidate_count": len(sidecar),
+            "unmapped_candidate_count": len(unmapped), "unmapped_candidates": unmapped,
+            "raw_superseded_count": sum(metadata[row["fixture_id"]]["status"] != "active"
+                                        for row in candidates if row["fixture_id"] in metadata),
+            "raw_cross_namespace_count": sum(metadata[row["fixture_id"]]["namespace"] != case["namespace"]
+                                             for row in candidates if row["fixture_id"] in metadata
+                                             and case["namespace"] is not None),
+        }
+
+    metrics = score_predictions(cases, raw, predictions, metadata)
+    metrics_pass, coverage_complete, quality_pass = quality_outcome(
+        metrics, len(records), len(memory_to_fixture), len(blocked_records))
+    latencies = sorted(latency_ms.values())
+    p95_index = max(0, math.ceil(0.95 * len(latencies)) - 1)
+    return {
+        "status": "SYNTHETIC_QUALITY_PASS" if quality_pass else "SYNTHETIC_QUALITY_FAIL",
+        "process_status": "COMPLETED", "ingestion_status": "FULL" if coverage_complete else "PARTIAL",
+        "quality_status": "PASS" if quality_pass else "FAIL",
+        "quality_gates_pass": quality_pass, "observed_policy_metrics_pass": metrics_pass,
+        "coverage_complete": coverage_complete,
+        "ingestion": {"requested_count": len(records),
+                      "requested_fixture_ids": [row["fixture_id"] for row in records],
+                      "accepted_count": len(memory_to_fixture),
+                      "accepted_fixture_ids": list(memory_to_fixture.values()),
+                      "blocked_count": len(blocked_records), "blocked_records": blocked_records,
+                      "vector_indexed": vector_indexed},
+        "filter_check_diagnostics": {
+            "canonical_raw_sha256_fixture_count": len(hash_fixture_ids),
+            "blocked_fixture_ids": [row["fixture_id"] for row in blocked_records],
+            "provider_reasons": sorted({row["reason"] for row in blocked_records}),
+            "native_limitation": (
+                f"Observed Nyawa rejecting {len(blocked_records)} raw synthetic SHA-256 record(s) with reason "
+                "'AWS Secret Key'; those cases remain in the original scoring denominator."
+                if blocked_records else
+                "No expected raw synthetic SHA-256 rejection was observed in this run; no native limitation is claimed."
+            ),
+        },
+        "quality_metrics": metrics, "raw_retrieval_diagnostics": diagnostics,
+        "retrieval_results": {case["case_id"]: [{"fixture_id": row["fixture_id"], "score": row["score"],
+                             "rank": row["rank"]} for row in raw[case["case_id"]]] for case in cases},
+        "predictions": predictions, "latency_ms": latency_ms,
+        "latency_median_ms": round(latencies[len(latencies) // 2], 2) if latencies else 0.0,
+        "latency_p95_ms": round(latencies[p95_index], 2) if latencies else 0.0,
+        "queries_run": len(latency_ms), "fixture_counts": {
+            "synthetic_development_cases": len(cases), "synthetic_development_records": len(records)},
+    }
 
 
 FROZEN_THRESHOLD = 0.99
@@ -595,84 +797,30 @@ def run_e2e(container: str, image: str, fixture_path: Path) -> dict[str, Any]:
             logs = docker(["logs", container], timeout=15, check=False).stdout[-1000:]
             raise RuntimeError(f"Nyawa timeout: {last_error}; {logs}")
 
-        records, cases = dataset["records"], dataset["cases"]
-        # SIMULATED sidecar only: native HTTP store accepts content, namespace and type, not lineage/state.
-        metadata = {row["fixture_id"]: {key: row[key] for key in ("namespace", "split", "status", "supersedes")}
-                    for row in records}
-        memory_to_fixture: dict[str, str] = {}
-        for row in records:
-            response = inside_http(container, "POST", "/v1/memories", {
-                "content": row["content"], "namespace": row["namespace"],
-                "type": supported_mcp_type(row["type"]),
-            })
-            if response["status"] != 201 or not isinstance(response.get("body"), dict):
-                raise RuntimeError(f"store failed for {row['fixture_id']}: HTTP {response['status']}")
-            memory_id = field(response["body"], "id")
-            if memory_id is None or not str(memory_id):
-                raise RuntimeError(f"store response omitted id for {row['fixture_id']}")
-            if str(memory_id) in memory_to_fixture:
-                raise RuntimeError("store API returned a duplicate memory ID; candidate mapping is ambiguous")
-            memory_to_fixture[str(memory_id)] = row["fixture_id"]
-
-        stats_response = inside_http(container, "GET", "/v1/stats")
-        if stats_response["status"] != 200:
-            raise RuntimeError(f"stats returned HTTP {stats_response['status']}")
-        vector_indexed = _vector_indexed(stats_response["body"])
-        if vector_indexed < len(records):
-            raise RuntimeError(f"not all inserted records were vector-indexed: {vector_indexed}/{len(records)}")
-
-        raw: dict[str, list[dict[str, Any]]] = {}
-        predictions: dict[str, dict[str, Any]] = {}
-        diagnostics: dict[str, Any] = {}
-        latency_ms: dict[str, float] = {}
-        for case in cases:
-            payload = {"query": case["query"], "limit": 12, "min_score": 0.0}
-            if case["namespace"] is not None:
-                payload["namespace"] = case["namespace"]
-            started = time.monotonic()
-            response = inside_http(container, "POST", "/v1/recall", payload)
-            latency_ms[case["case_id"]] = round((time.monotonic() - started) * 1000, 2)
-            if response["status"] != 200:
-                raise RuntimeError(f"recall failed for {case['case_id']}: HTTP {response['status']}")
-            items = _result_items(response.get("body"), case["case_id"])
-            candidates, unmapped = _api_candidates(items, memory_to_fixture, case["case_id"])
-            raw[case["case_id"]] = candidates
-            sidecar = _sidecar_for_candidates(candidates, metadata)
-            # No expected answer/source/forbidden label reaches the inference function.
-            predictions[case["case_id"]] = frozen_decision(case["query"], case["namespace"], candidates, sidecar)
-            diagnostics[case["case_id"]] = {
-                "nyawa_response_candidate_count": len(candidates),
-                "sidecar_candidate_count": len(sidecar),
-                "unmapped_candidate_count": len(unmapped), "unmapped_candidates": unmapped,
-                "raw_superseded_count": sum(metadata[row["fixture_id"]]["status"] != "active"
-                                            for row in candidates if row["fixture_id"] in metadata),
-                "raw_cross_namespace_count": sum(metadata[row["fixture_id"]]["namespace"] != case["namespace"]
-                                                 for row in candidates if row["fixture_id"] in metadata
-                                                 and case["namespace"] is not None),
-            }
-
-        metrics = score_predictions(cases, raw, predictions, metadata)
-        feasible = policy_feasible(metrics)
-        latencies = sorted(latency_ms.values())
-        p95_index = max(0, math.ceil(0.95 * len(latencies)) - 1)
+        # The injected transport keeps the same local HTTP calls while making partial ingestion
+        # and its original-denominator scoring independently testable without Docker or network.
+        result = evaluate_api_workflow(dataset, lambda method, path, payload:
+                                       inside_http(container, method, path, payload))
         return {
             "schema": "c8.7.synthetic-development-e2e-report/v2",
-            "status": "SYNTHETIC_QUALITY_PASS" if feasible else "SYNTHETIC_QUALITY_FAIL",
+            **result,
             "infrastructure_status": "PASS", "scope": "corrected synthetic development only",
+            "ci_exit_behavior": "quality or corpus coverage failure exits 2 after printing the full JSON report; infrastructure failure exits 1; pass exits 0",
+            "retrieval_comparability": retrieval_comparability(result["coverage_complete"]),
             "classification": dataset["classification"], "sealed_holdout_evaluated": False,
             "holdout_generated": False, "actual_nyawa": True,
             "backend": {"requested": "local embedder", "runtime_model": "not attested",
                         "runtime_dimension": "not attested"},
+            "vector_indexed": result["ingestion"]["vector_indexed"],
             "vector_indexing_attestation": {
                 "evidence": "Nyawa /v1/stats vector_indexed count only",
-                "vector_indexed": vector_indexed,
+                "vector_indexed": result["ingestion"]["vector_indexed"],
                 "model_identity_verified": False,
                 "dimension_verified": False,
             },
             "frozen_policy": FROZEN_POLICY_PROVENANCE,
             "threshold": FROZEN_THRESHOLD, "threshold_tuned_on_this_corpus": False,
             "policy_gates": {"minimum": MIN_GATES, "maximum": MAX_GATES},
-            "quality_metrics": metrics, "quality_gates_pass": feasible,
             "eligibility": {"inference_inputs": ["query", "request_namespace", "nyawa_response_candidates", "simulated_metadata_sidecar"],
                             "inference_labels_used": False, "scoring_labels_used_after_inference": True,
                             "raw_retrieval_preserved": True,
@@ -685,17 +833,9 @@ def run_e2e(container: str, image: str, fixture_path: Path) -> dict[str, Any]:
             },
             "answer_generation": False,
             "scoring_semantics": "scorer selects a source and checks expected-text containment; it does not generate an answer",
-            "fixture_counts": {"synthetic_development_cases": len(cases), "synthetic_development_records": len(records)},
-            "vector_indexed": vector_indexed, "raw_retrieval_diagnostics": diagnostics,
-            "retrieval_results": {case["case_id"]: [{"fixture_id": row["fixture_id"], "score": row["score"],
-                                 "rank": row["rank"]} for row in raw[case["case_id"]]] for case in cases},
-            "predictions": predictions, "latency_ms": latency_ms,
-            "latency_median_ms": round(latencies[len(latencies) // 2], 2) if latencies else 0.0,
-            "latency_p95_ms": round(latencies[p95_index], 2) if latencies else 0.0,
             "runtime_attestation": {"mode": "disposable local container", "network": "none",
                                     "database": "tmpfs only", "container": container, "host_mounts": False},
             "image": image, "fixture_sha256": hashlib.sha256(fixture_path.read_bytes()).hexdigest(),
-            "queries_run": len(cases),
         }
     finally:
         cleanup(container, image)
@@ -1176,6 +1316,206 @@ class C87DevelopmentV2Tests(unittest.TestCase):
         self.assertIn('"human_sample_review_required": True', source)
         self.assertIn('"answer_generation": False', source)
 
+    def test_store_response_continues_only_for_canonical_hash_reason(self) -> None:
+        dataset = build_development_dataset_v2()
+        hash_ids = _validated_hash_fixture_ids(dataset)
+        hash_record = next(row for row in dataset["records"] if row["fixture_id"] == "D-HASH-01")
+        plain_record = next(row for row in dataset["records"] if row["fixture_id"] == "D-PATH-01")
+        self.assertEqual(_classify_store_response(hash_record,
+                         {"status": 403, "body": {"error": "content blocked", "reason": "AWS Secret Key"}},
+                         hash_ids), (None, "AWS Secret Key"))
+        for response in (
+            {"status": 403, "body": {"reason": "unexpected-provider-secret"}},
+            {"status": 403, "body": "not-json"},
+        ):
+            with self.assertRaises(RuntimeError) as caught:
+                _classify_store_response(hash_record, response, hash_ids)
+            self.assertNotIn("unexpected-provider-secret", str(caught.exception))
+            self.assertNotIn(hash_record["content"], str(caught.exception))
+        with self.assertRaisesRegex(RuntimeError, "provider reason GitHub Token"):
+            _classify_store_response(hash_record, {"status": 403, "body": {"reason": "GitHub Token"}}, hash_ids)
+        with self.assertRaisesRegex(RuntimeError, "non-hash fixture.*provider reason AWS Secret Key"):
+            _classify_store_response(plain_record, {"status": 403, "body": {"reason": "AWS Secret Key"}}, hash_ids)
+        for status in (400, 401, 404, 429, 500, 503):
+            with self.subTest(status=status), self.assertRaisesRegex(RuntimeError, f"HTTP {status}"):
+                _classify_store_response(hash_record, {"status": status, "body": {"raw": hash_record["content"]}}, hash_ids)
+        with self.assertRaisesRegex(RuntimeError, "status malformed"):
+            _classify_store_response(hash_record, {"status": True, "body": {}}, hash_ids)
+        with self.assertRaisesRegex(RuntimeError, "malformed id"):
+            _classify_store_response(hash_record, {"status": 201, "body": {"id": {"unexpected": "object"}}}, hash_ids)
+
+    def test_partial_transport_runs_all_120_cases_and_keeps_original_denominators(self) -> None:
+        dataset = build_development_dataset_v2()
+        records = {row["fixture_id"]: row for row in dataset["records"]}
+        cases_by_query = {row["query"]: row for row in dataset["cases"]}
+        fixture_to_memory: dict[str, str] = {}
+        memory_to_fixture: dict[str, str] = {}
+        query_payloads: list[dict[str, Any]] = []
+        blocked_ids = {f"D-HASH-{index:02d}" for index in range(1, 11)}
+
+        def fake_request(method: str, path: str, payload: Any) -> dict[str, Any]:
+            if path == "/v1/memories":
+                row = next(record for record in records.values() if record["content"] == payload["content"])
+                if row["fixture_id"] in blocked_ids:
+                    return {"status": 403, "body": {"error": "content blocked", "reason": "AWS Secret Key"}}
+                memory_id = f"mem-{row['fixture_id']}"
+                fixture_to_memory[row["fixture_id"]] = memory_id
+                memory_to_fixture[memory_id] = row["fixture_id"]
+                return {"status": 201, "body": {"id": memory_id}}
+            if path == "/v1/stats":
+                return {"status": 200, "body": {"store": {"vector_indexed": len(fixture_to_memory)}}}
+            if path == "/v1/recall":
+                query_payloads.append(payload)
+                case = cases_by_query[payload["query"]]
+                expected = case["expected_fixture_ids"]
+                if case["expected_safety"] == "answer" and expected and expected[0] not in blocked_ids:
+                    fid = expected[0]
+                    return {"status": 200, "body": {"results": [{
+                        "id": fixture_to_memory[fid], "score": 0.99,
+                        "content": records[fid]["content"], "rank": 1,
+                    }]}}
+                return {"status": 200, "body": {"results": []}}
+            raise AssertionError(f"unexpected transport path: {path}")
+
+        report = evaluate_api_workflow(dataset, fake_request)
+        self.assertEqual(report["process_status"], "COMPLETED")
+        self.assertEqual(report["ingestion_status"], "PARTIAL")
+        self.assertEqual(report["quality_status"], "FAIL")
+        self.assertFalse(report["quality_gates_pass"])
+        self.assertEqual(report["ingestion"]["requested_count"], 160)
+        self.assertEqual(set(report["ingestion"]["requested_fixture_ids"]), set(records))
+        self.assertEqual(report["ingestion"]["accepted_count"], 150)
+        self.assertEqual(set(report["ingestion"]["accepted_fixture_ids"]), set(records) - blocked_ids)
+        self.assertEqual(report["ingestion"]["blocked_count"], 10)
+        self.assertEqual(report["ingestion"]["vector_indexed"], 150)
+        self.assertTrue(all(set(item) == {"fixture_id", "status", "reason"}
+                            for item in report["ingestion"]["blocked_records"]))
+        self.assertEqual(set(report["filter_check_diagnostics"]["blocked_fixture_ids"]), blocked_ids)
+        self.assertEqual(set(report["filter_check_diagnostics"]["provider_reasons"]), {"AWS Secret Key"})
+        self.assertEqual(report["queries_run"], 120)
+        self.assertEqual(len(query_payloads), 120)
+        self.assertTrue(all(set(payload) <= {"query", "namespace", "limit", "min_score"} for payload in query_payloads))
+        query_set = {payload["query"] for payload in query_payloads}
+        self.assertTrue(all(case["query"] in query_set for case in dataset["cases"]
+                            if case.get("group") == "exact_hash"))
+        metrics = report["quality_metrics"]
+        self.assertEqual(report["fixture_counts"], {"synthetic_development_cases": 120, "synthetic_development_records": 160})
+        self.assertEqual(metrics["positive_case_count"] + metrics["negative_case_count"], 120)
+        self.assertEqual(metrics["positive_case_count"], 70)
+        self.assertEqual(metrics["negative_case_count"], 50)
+        self.assertEqual(metrics["hard_constraint_recall_at_5"], 0.0)
+        hash_case = next(row for row in dataset["cases"] if row["expected_fixture_ids"] == ["D-HASH-01"])
+        self.assertEqual(report["predictions"][hash_case["case_id"]]["decision"], "abstain")
+        self.assertEqual(report["retrieval_results"][hash_case["case_id"]], [])
+        self.assertNotIn(records["D-HASH-01"]["content"], json.dumps(report))
+        self.assertNotIn("sha256", json.dumps(report["ingestion"]))
+
+    def test_any_rejection_forces_quality_failure_even_with_perfect_metrics(self) -> None:
+        perfect_metrics = {**MIN_GATES, **MAX_GATES, "raw_retrieval_recall_at_5": 1.0}
+        metrics_pass, coverage_complete, quality_pass = quality_outcome(perfect_metrics, 160, 159, 1)
+        self.assertTrue(metrics_pass)
+        self.assertFalse(coverage_complete)
+        self.assertFalse(quality_pass)
+        self.assertEqual(quality_outcome(perfect_metrics, 160, 160, 0), (True, True, True))
+
+    def test_fake_transport_fails_closed_for_index_mismatch_and_duplicate_ids(self) -> None:
+        dataset = build_development_dataset_v2()
+
+        def wrong_index(method: str, path: str, payload: Any) -> dict[str, Any]:
+            if path == "/v1/memories":
+                return {"status": 201, "body": {"id": "same-id"}}
+            if path == "/v1/stats":
+                return {"status": 200, "body": {"store": {"vector_indexed": 1}}}
+            raise AssertionError("recalls must not begin after failed indexing")
+
+        with self.assertRaisesRegex(RuntimeError, "duplicate memory ID"):
+            evaluate_api_workflow(dataset, wrong_index)
+
+        memory_counter = 0
+        def under_indexed(method: str, path: str, payload: Any) -> dict[str, Any]:
+            nonlocal memory_counter
+            if path == "/v1/memories":
+                memory_counter += 1
+                return {"status": 201, "body": {"id": f"id-{memory_counter}"}}
+            if path == "/v1/stats":
+                return {"status": 200, "body": {"store": {"vector_indexed": 0}}}
+            raise AssertionError("recalls must not begin after failed indexing")
+
+        with self.assertRaisesRegex(RuntimeError, "vector index count mismatch"):
+            evaluate_api_workflow(dataset, under_indexed)
+
+        accepted = 0
+        def unexpected_recall_id(method: str, path: str, payload: Any) -> dict[str, Any]:
+            nonlocal accepted
+            if path == "/v1/memories":
+                accepted += 1
+                return {"status": 201, "body": {"id": f"id-{accepted}"}}
+            if path == "/v1/stats":
+                return {"status": 200, "body": {"store": {"vector_indexed": accepted}}}
+            return {"status": 200, "body": {"results": [{"id": "not-stored-here", "score": 0.9,
+                                                             "content": "candidate text", "rank": 1}]}}
+
+        with self.assertRaisesRegex(RuntimeError, "unexpected memory IDs"):
+            evaluate_api_workflow(dataset, unexpected_recall_id)
+
+    def test_partial_corpus_report_marks_metrics_noncomparable(self) -> None:
+        partial = retrieval_comparability(False)
+        self.assertEqual(partial["status"], "PARTIAL_CORPUS_DIAGNOSTIC_ONLY")
+        self.assertEqual(
+            partial["caveat"],
+            "retrieval metrics are diagnostic on a partial corpus; top-K/ranking and negatives may differ "
+            "from full 160-record corpus; not comparable to a full-corpus run; blocked hash cases remain "
+            "in denominator and quality cannot pass",
+        )
+        self.assertEqual(retrieval_comparability(True), {"status": "FULL_CORPUS", "caveat": None})
+
+    def test_cli_exit_statuses_and_report_output(self) -> None:
+        base_report = {
+            "quality_gates_pass": True,
+            "quality_status": "PASS",
+            "coverage_complete": True,
+            "ingestion_status": "FULL",
+            "quality_metrics": {"recall_at_5": 1.0},
+        }
+
+        def invoke(report: dict[str, Any] | None = None,
+                   error: Exception | None = None) -> tuple[int, str, str]:
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch.object(sys, "argv", ["c87_corrected_calibration.py", "--mode", "e2e",
+                                             "--fixtures", str(Path(__file__))]):
+                with patch(__name__ + ".run_e2e", side_effect=error if error else None,
+                           return_value=report or base_report):
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        exit_code = main()
+            return exit_code, stdout.getvalue(), stderr.getvalue()
+
+        pass_code, pass_stdout, pass_stderr = invoke(base_report)
+        self.assertEqual(pass_code, 0)
+        self.assertEqual(json.loads(pass_stdout), base_report)
+        self.assertEqual(pass_stderr, "")
+
+        failed_report = {
+            "quality_gates_pass": False,
+            "quality_status": "FAIL",
+            "coverage_complete": False,
+            "ingestion_status": "PARTIAL",
+            "quality_metrics": {"recall_at_5": 0.5},
+        }
+        fail_code, fail_stdout, fail_stderr = invoke(failed_report)
+        self.assertEqual(fail_code, 2)
+        serialized_report = json.dumps(failed_report, indent=2, sort_keys=True) + "\n"
+        self.assertTrue(fail_stdout.startswith(serialized_report))
+        self.assertEqual(json.loads(serialized_report), failed_report)
+        self.assertIn("::error::C8.7 QUALITY/COVERAGE FAILURE", fail_stdout)
+        self.assertIn("quality_status=FAIL", fail_stdout)
+        self.assertIn("ingestion_status=PARTIAL", fail_stdout)
+        self.assertEqual(fail_stderr, "")
+
+        infra_code, infra_stdout, infra_stderr = invoke(error=RuntimeError("simulated infrastructure crash"))
+        self.assertEqual(infra_code, 1)
+        self.assertEqual(infra_stdout, "")
+        self.assertIn("C8.7 INFRASTRUCTURE_FAILURE: simulated infrastructure crash", infra_stderr)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -1200,7 +1540,14 @@ def main() -> int:
             print(f"C8.7 INFRASTRUCTURE_FAILURE: {error}", file=sys.stderr)
             return 1
         print(json.dumps(report, indent=2, sort_keys=True))
-        return 0 if report["quality_gates_pass"] else 2
+        if not report["quality_gates_pass"]:
+            print(
+                "::error::C8.7 QUALITY/COVERAGE FAILURE: quality gates or corpus coverage failed; "
+                f"quality_status={report.get('quality_status')} "
+                f"ingestion_status={report.get('ingestion_status')}. Full JSON report is printed above."
+            )
+            return 2
+        return 0
     return 1
 
 
