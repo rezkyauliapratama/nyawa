@@ -45,6 +45,13 @@ type StoreReader interface {
 	ListEntityNames(limit int) ([]string, error)
 }
 
+// ScopedGraphReader is an optional extension. Namespaced searches skip graph
+// enrichment when the store cannot traverse with namespace filtering; they
+// never fall back to an unscoped graph query.
+type ScopedGraphReader interface {
+	TraverseGraphScoped(seedNames []string, depth, limit int, namespace string) ([]graph.TraversalResult, error)
+}
+
 // ModalityScoreReader is optional so existing StoreReader implementations keep
 // working unchanged while the production store can expose calibration telemetry.
 type ModalityScoreReader interface {
@@ -75,7 +82,8 @@ func (p *Pipeline) Search(q types.StoreQuery) ([]*types.MemoryResult, error) {
 		// Hand out copies: the caller owns the returned slice and releases it
 		// back into the result pool, which resets every entry. Returning the
 		// cached pointers directly would let the next release wipe the cache.
-		return cloneResults(cached), nil
+		results := filterNamespaceResults(q.Namespace, cloneResults(cached))
+		return results, nil
 	}
 	queryVec, err := p.embedder.Embed(q.QueryText)
 	var haveVector bool
@@ -162,9 +170,11 @@ func (p *Pipeline) Search(q types.StoreQuery) ([]*types.MemoryResult, error) {
 	for _, m := range memories { memMap[m.ID] = m }
 	now := float64(time.Now().Unix()) / 3600.0
 	results := p.post.Process(fused, memMap, now)
+	results = filterNamespaceResults(q.Namespace, results)
 
 	// Phase 5.4: graph-injected recall
 	results = p.mergeGraphResults(q, results)
+	results = filterNamespaceResults(q.Namespace, results)
 
 	// Filters run before the limit cut, so Limit means "at most N results
 	// after filtering" (README: filter -> top-K).
@@ -205,6 +215,21 @@ func (p *Pipeline) Search(q types.StoreQuery) ([]*types.MemoryResult, error) {
 		for _, r := range results { _ = p.store.IncrementAccessCount(r.ID) }
 	}()
 	return results, nil
+}
+
+// filterNamespaceResults enforces an exact namespace match on materialized
+// results; an empty namespace intentionally leaves results unscoped.
+func filterNamespaceResults(namespace string, results []*types.MemoryResult) []*types.MemoryResult {
+	if namespace == "" {
+		return results
+	}
+	filtered := results[:0]
+	for _, result := range results {
+		if result != nil && result.Namespace == namespace {
+			filtered = append(filtered, result)
+		}
+	}
+	return filtered
 }
 
 // applyFilters drops results the query declared it does not want: anything
@@ -296,7 +321,17 @@ func (p *Pipeline) mergeGraphResults(q types.StoreQuery, results []*types.Memory
 	if limit <= 0 {
 		limit = types.DefaultQueryLimit
 	}
-	graphResults, err := p.store.TraverseGraph(seeds, 2, limit*2)
+	var graphResults []graph.TraversalResult
+	var err error
+	if q.Namespace == "" {
+		graphResults, err = p.store.TraverseGraph(seeds, 2, limit*2)
+	} else {
+		scopedReader, ok := p.store.(ScopedGraphReader)
+		if !ok {
+			return results
+		}
+		graphResults, err = scopedReader.TraverseGraphScoped(seeds, 2, limit*2, q.Namespace)
+	}
 	if err != nil || len(graphResults) == 0 {
 		return results
 	}
@@ -329,6 +364,9 @@ func (p *Pipeline) mergeGraphResults(q types.StoreQuery, results []*types.Memory
 		if err == nil {
 			for _, mem := range newMems {
 				if mem == nil {
+					continue
+				}
+				if q.Namespace != "" && mem.Namespace != q.Namespace {
 					continue
 				}
 				if mem.SupersededAt != nil {

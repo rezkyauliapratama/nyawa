@@ -2,6 +2,8 @@ package graph
 
 import (
 	"database/sql"
+	"fmt"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -244,5 +246,88 @@ func TestTraverseDefaultParams(t *testing.T) {
 	}
 	if len(results) == 0 {
 		t.Error("expected results with default params")
+	}
+}
+
+func TestTraverseScopedFiltersBeforeLimit(t *testing.T) {
+	s, db := setupTraverseGraph(t)
+	if _, err := db.Exec(`CREATE TABLE memories (id TEXT PRIMARY KEY, namespace TEXT NOT NULL, superseded_at TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO entity_nodes(name, category) VALUES ('ScopeShared', 'tech')`); err != nil {
+		t.Fatal(err)
+	}
+	var entityID int
+	if err := db.QueryRow(`SELECT id FROM entity_nodes WHERE name = 'ScopeShared'`).Scan(&entityID); err != nil {
+		t.Fatal(err)
+	}
+	// More than 2*limit higher-scored beta memories precede the eligible alpha
+	// memory in the unscoped ranking. A post-limit filter would lose alpha.
+	for i := 0; i < 8; i++ {
+		id := fmt.Sprintf("scope-beta-%d", i)
+		if _, err := db.Exec(`INSERT INTO memories(id, namespace) VALUES (?, 'beta')`, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO entity_edges(memory_id, entity_id, weight) VALUES (?, ?, ?)`, id, entityID, float64(20-i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO memories(id, namespace) VALUES ('scope-alpha', 'alpha')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO entity_edges(memory_id, entity_id, weight) VALUES ('scope-alpha', ?, 0.01)`, entityID); err != nil {
+		t.Fatal(err)
+	}
+
+	alpha, err := s.TraverseScoped([]string{"ScopeShared"}, 1, 2, "alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(alpha) != 1 || alpha[0].MemoryID != "scope-alpha" {
+		t.Fatalf("scoped top-K lost local candidate: got %#v", alpha)
+	}
+
+	beta, err := s.TraverseScoped([]string{"ScopeShared"}, 1, 2, "beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(beta) != 2 || beta[0].MemoryID != "scope-beta-0" || beta[1].MemoryID != "scope-beta-1" {
+		t.Fatalf("beta-scoped results = %#v, want its two highest-scored memories", beta)
+	}
+
+	missing, err := s.TraverseScoped([]string{"ScopeShared"}, 1, 2, "missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("namespace with no matching memories returned %#v", missing)
+	}
+
+	unscoped, err := s.Traverse([]string{"ScopeShared"}, 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seenAlpha, seenBeta := false, false
+	for _, result := range unscoped {
+		seenAlpha = seenAlpha || result.MemoryID == "scope-alpha"
+		seenBeta = seenBeta || strings.HasPrefix(result.MemoryID, "scope-beta-")
+	}
+	if !seenAlpha || !seenBeta {
+		t.Fatalf("unscoped traversal should retain mixed namespaces, got %#v", unscoped)
+	}
+}
+
+func TestTraverseScopedReturnsMemoryQueryErrors(t *testing.T) {
+	s, db := setupTraverseGraph(t)
+	if _, err := db.Exec(`CREATE TABLE memories (id TEXT PRIMARY KEY, namespace TEXT NOT NULL, superseded_at TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DROP TABLE entity_edges`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := s.TraverseScoped([]string{"Rezky"}, 1, 10, "alpha")
+	if err == nil || !strings.Contains(err.Error(), "traverse scoped seed memories") {
+		t.Fatalf("scoped traversal error = %v, want seed memory query error", err)
 	}
 }
