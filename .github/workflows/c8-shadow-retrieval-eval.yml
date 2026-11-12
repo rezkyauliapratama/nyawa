@@ -1,7 +1,17 @@
 name: C8 Shadow Retrieval Evaluation
+run-name: C8 retrieval ${{ inputs.scope }} run ${{ github.run_id }}
 
 on:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: "Run six-query smoke (fast) or the full 25-query C8 evaluation"
+        required: true
+        type: choice
+        options:
+          - quick-smoke
+          - full
+        default: quick-smoke
 
 concurrency:
   group: c8-shadow-retrieval-eval
@@ -17,7 +27,7 @@ env:
 
 jobs:
   shadow-eval:
-    name: Synthetic C8 retrieval evaluation
+    name: Synthetic C8 retrieval (${{ inputs.scope }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -30,7 +40,12 @@ jobs:
           python3 scripts/c8-shadow-retrieval-eval.py --mode self-test
 
       - name: Check runner capacity before any container starts
-        run: python3 scripts/c8-shadow-retrieval-eval.py --mode preflight
+        run: >-
+          python3 scripts/c8-shadow-retrieval-eval.py
+          --mode preflight
+          --scope "${{ inputs.scope }}"
+          --trace-file "$RUNNER_TEMP/c8-eval-trace.jsonl"
+          --report-file "$RUNNER_TEMP/c8-eval-report.json"
 
       - name: Authenticate to GHCR for package read
         uses: docker/login-action@v3
@@ -40,7 +55,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull pinned image and run synthetic C8 evaluation
-        run: python3 scripts/c8-shadow-retrieval-eval.py --mode e2e --image "$C8_IMAGE" --container "$C8_CONTAINER"
+        run: >-
+          python3 scripts/c8-shadow-retrieval-eval.py
+          --mode e2e
+          --scope "${{ inputs.scope }}"
+          --image "$C8_IMAGE"
+          --container "$C8_CONTAINER"
+          --trace-file "$RUNNER_TEMP/c8-eval-trace.jsonl"
+          --report-file "$RUNNER_TEMP/c8-eval-report.json"
 
       - name: Final cleanup verification
         if: always()
@@ -59,3 +81,14 @@ jobs:
             exit 1
           fi
           echo "Disposable C8 container absent after cleanup."
+
+      - name: Upload report and trace artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: c8-${{ inputs.scope }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/c8-eval-report.json
+            ${{ runner.temp }}/c8-eval-trace.jsonl
+          if-no-files-found: warn
+          retention-days: 14
