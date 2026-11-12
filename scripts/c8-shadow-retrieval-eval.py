@@ -13,6 +13,8 @@ import subprocess
 import sys
 import time
 import unittest
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +26,52 @@ FIXTURES = Path(__file__).resolve().parents[1] / "tests/fixtures/c8-shadow-retri
 MEMORY_LIMIT = 4 * 1024**3
 MIN_AVAILABLE_MEMORY = 5 * 1024**3
 AWS_SECRET_SHAPED = re.compile(r"[A-Za-z0-9/+=]{40}")
+QUICK_CASE_IDS = ("Q01_SHA", "Q06_DECISION", "Q11_SCOPE_01", "Q12_SCOPE_02", "Q16_ACTIVE_LEASE", "Q21_NO_HIT_LUNAR")
+TRACE_FILE: Path | None = None
+
+
+def trace_event(event: str, **fields: Any) -> None:
+    """Emit content-free JSONL progress with run identity and UTC timestamp."""
+    record = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+        "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", "1"),
+        "event": event,
+        **fields,
+    }
+    line = json.dumps(record, sort_keys=True, allow_nan=False)
+    if TRACE_FILE is not None:
+        TRACE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with TRACE_FILE.open("a", encoding="utf-8") as stream:
+            stream.write(line + "\n")
+    print(line, file=sys.stderr, flush=True)
+
+
+@contextmanager
+def traced_stage(name: str, **fields: Any):
+    started = time.monotonic()
+    trace_event("stage", name=name, status="started", **fields)
+    try:
+        yield
+    except Exception as error:
+        trace_event("stage", name=name, status="failed", elapsed_ms=round((time.monotonic() - started) * 1000, 2), error_type=type(error).__name__, **fields)
+        raise
+    else:
+        trace_event("stage", name=name, status="complete", elapsed_ms=round((time.monotonic() - started) * 1000, 2), **fields)
+
+
+def select_scope(dataset: dict[str, Any], scope: str) -> dict[str, Any]:
+    """Return a copy with either the fixed fast smoke or all fixture cases."""
+    if scope == "full":
+        return {**dataset, "cases": list(dataset["cases"])}
+    if scope != "quick-smoke":
+        raise ValueError(f"unsupported evaluation scope: {scope}")
+    cases = {case["case_id"]: case for case in dataset["cases"]}
+    missing = [case_id for case_id in QUICK_CASE_IDS if case_id not in cases]
+    if missing:
+        raise ValueError(f"quick-smoke fixture cases are missing: {missing}")
+    return {**dataset, "cases": [cases[case_id] for case_id in QUICK_CASE_IDS]}
+
 
 HTTP_HELPER = r"""
 import json, sys, urllib.error, urllib.request
@@ -288,105 +336,143 @@ def cleanup(container: str, image: str) -> None:
         raise RuntimeError("C8 cleanup readback failed: container still exists")
 
 
-def run_e2e(container: str, image: str, fixture_path: Path) -> dict[str, Any]:
+def run_e2e(container: str, image: str, fixture_path: Path, scope: str, report_path: Path | None) -> dict[str, Any]:
     if image != IMAGE:
         raise RuntimeError("image must equal the approved immutable BGE r1 digest")
-    dataset = load_dataset(fixture_path)
-    preflight()
-    docker(["pull", image], timeout=300)
-    image_info = json.loads(docker(["image", "inspect", image]).stdout)[0]
-    if image not in image_info.get("RepoDigests", []):
-        raise RuntimeError("pulled image digest does not match the pinned image")
+    full_dataset = load_dataset(fixture_path)
+    dataset = select_scope(full_dataset, scope)
+    fixture_sha256 = hashlib.sha256(fixture_path.read_bytes()).hexdigest()
+    image_digest = image.split("@", 1)[1]
+    trace_event("run_start", scope=scope, image_digest=image_digest, fixture_sha256=fixture_sha256,
+                fixture_case_count=len(full_dataset["cases"]), selected_case_ids=[case["case_id"] for case in dataset["cases"]])
+    with traced_stage("runner_preflight", scope=scope):
+        preflight()
+    with traced_stage("image_pull", image_digest=image_digest):
+        docker(["pull", image], timeout=300)
+    with traced_stage("image_digest_verify", image_digest=image_digest):
+        image_info = json.loads(docker(["image", "inspect", image]).stdout)[0]
+        if image not in image_info.get("RepoDigests", []):
+            raise RuntimeError("pulled image digest does not match the pinned image")
     existing = docker(["inspect", container], timeout=15, check=False)
     if existing.returncode == 0:
         raise RuntimeError("container name already exists; refusing to replace it")
     try:
-        docker([
-            "run", "--detach", "--name", container,
-            "--label", "org.nyawa.c8-shadow-eval=true",
-            "--network=none", "--read-only",
-            "--tmpfs", "/scratch:rw,nosuid,nodev,size=768m",
-            "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m",
-            "--memory=4g", "--memory-swap=4g", "--cpus=2", "--pids-limit=128",
-            "--restart=no", "--cap-drop=ALL", "--security-opt=no-new-privileges:true",
-            "--env", "MEMORY_EMBEDDER=local",
-            "--env", "NYAWA_EMBED_MODEL_DIR=/opt/nyawa/model",
-            "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp",
-            image, "serve", "/scratch/c8-shadow.db",
-        ], timeout=60)
-        verify_container(container, image)
-        deadline = time.monotonic() + 180
-        root = health = None
-        last_error = "not ready"
-        while time.monotonic() < deadline:
-            state = json.loads(docker(["inspect", "--format", "{{json .State}}", container]).stdout)
-            if not state.get("Running"):
+        with traced_stage("container_start", container=container, image_digest=image_digest):
+            docker([
+                "run", "--detach", "--name", container,
+                "--label", "org.nyawa.c8-shadow-eval=true",
+                "--network=none", "--read-only",
+                "--tmpfs", "/scratch:rw,nosuid,nodev,size=768m",
+                "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m",
+                "--memory=4g", "--memory-swap=4g", "--cpus=2", "--pids-limit=128",
+                "--restart=no", "--cap-drop=ALL", "--security-opt=no-new-privileges:true",
+                "--env", "MEMORY_EMBEDDER=local",
+                "--env", "NYAWA_EMBED_MODEL_DIR=/opt/nyawa/model",
+                "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp",
+                image, "serve", "/scratch/c8-shadow.db",
+            ], timeout=60)
+        with traced_stage("container_isolation_verify", container=container):
+            verify_container(container, image)
+        with traced_stage("readiness", timeout_seconds=180):
+            deadline = time.monotonic() + 180
+            root = health = None
+            last_error = "not ready"
+            while time.monotonic() < deadline:
+                state = json.loads(docker(["inspect", "--format", "{{json .State}}", container]).stdout)
+                if not state.get("Running"):
+                    logs = docker(["logs", container], timeout=15, check=False).stdout[-1000:]
+                    raise RuntimeError(f"Nyawa exited before readiness ({state.get('ExitCode')}): {logs}")
+                try:
+                    root = inside_http(container, "GET", "/")
+                    health = inside_http(container, "GET", "/v1/health")
+                    if root["status"] == 200 and health["status"] == 200:
+                        break
+                    last_error = f"root={root['status']} health={health['status']}"
+                except Exception as error:
+                    last_error = str(error)
+                time.sleep(2)
+            else:
                 logs = docker(["logs", container], timeout=15, check=False).stdout[-1000:]
-                raise RuntimeError(f"Nyawa exited before readiness ({state.get('ExitCode')}): {logs}")
-            try:
-                root = inside_http(container, "GET", "/")
-                health = inside_http(container, "GET", "/v1/health")
-                if root["status"] == 200 and health["status"] == 200:
-                    break
-                last_error = f"root={root['status']} health={health['status']}"
-            except Exception as error:
-                last_error = str(error)
-            time.sleep(2)
-        else:
-            logs = docker(["logs", container], timeout=15, check=False).stdout[-1000:]
-            raise RuntimeError(f"Nyawa readiness timeout: {last_error}; {logs}")
-        root_body = root["body"]
-        if root_body.get("version") != "1.2.4" or root_body.get("status") != "running":
-            raise RuntimeError(f"unexpected Nyawa identity: {root_body}")
+                raise RuntimeError(f"Nyawa readiness timeout: {last_error}; {logs}")
+        with traced_stage("runtime_identity", expected_version="1.2.4"):
+            root_body = root["body"]
+            if root_body.get("version") != "1.2.4" or root_body.get("status") != "running":
+                raise RuntimeError(f"unexpected Nyawa identity: {root_body}")
 
         inserted: dict[str, str] = {}
-        for record in dataset["records"]:
-            response = inside_http(container, "POST", "/v1/memories", {
-                "content": record["content"], "namespace": record["namespace"], "type": record["type"]
-            })
-            if response["status"] != 201 or not response["body"].get("id"):
-                raise RuntimeError(f"synthetic insert failed for {record['fixture_id']}: {response}")
-            inserted[record["fixture_id"]] = str(response["body"]["id"])
+        with traced_stage("seed_synthetic_records", record_count=len(dataset["records"])):
+            for index, record in enumerate(dataset["records"], start=1):
+                response = inside_http(container, "POST", "/v1/memories", {
+                    "content": record["content"], "namespace": record["namespace"], "type": record["type"]
+                })
+                if response["status"] != 201 or not response["body"].get("id"):
+                    raise RuntimeError(f"synthetic insert failed for {record['fixture_id']}: {response}")
+                inserted[record["fixture_id"]] = str(response["body"]["id"])
+                trace_event("record_inserted", fixture_id=record["fixture_id"], index=index, total=len(dataset["records"]))
 
-        stats = inside_http(container, "GET", "/v1/stats")
-        if stats["status"] != 200:
-            raise RuntimeError(f"stats returned HTTP {stats['status']}")
-        store_stats = stats["body"].get("store", stats["body"])
-        vector_indexed = int(store_stats.get("vector_indexed", 0))
-        if vector_indexed < len(dataset["records"]):
-            raise RuntimeError(f"not all synthetic records are vector-indexed: {store_stats}")
+        with traced_stage("vector_index_check", expected_records=len(dataset["records"])):
+            stats = inside_http(container, "GET", "/v1/stats")
+            if stats["status"] != 200:
+                raise RuntimeError(f"stats returned HTTP {stats['status']}")
+            store_stats = stats["body"].get("store", stats["body"])
+            vector_indexed = int(store_stats.get("vector_indexed", 0))
+            if vector_indexed < len(dataset["records"]):
+                raise RuntimeError(f"not all synthetic records are vector-indexed: {store_stats}")
+            trace_event("vector_indexed", count=vector_indexed, expected=len(dataset["records"]))
 
         per_case = []
-        for case in dataset["cases"]:
-            start = time.monotonic()
-            response = inside_http(container, "POST", "/v1/recall", {
-                "query": case["query"],
-                "namespace": case["namespace"],
-                "limit": int(dataset["k"]),
-                "min_score": float(case.get("min_score", 0.0)),
-                "exclude_types": case.get("exclude_types", []),
-            })
-            elapsed = (time.monotonic() - start) * 1000
-            if response["status"] != 200:
-                raise RuntimeError(f"recall failed for {case['case_id']}: HTTP {response['status']}")
-            items = response["body"].get("results", [])
-            if not isinstance(items, list):
-                raise RuntimeError(f"recall results malformed for {case['case_id']}")
-            per_case.append(score_case(case, items, elapsed, int(dataset["k"])))
+        with traced_stage("recall_queries", scope=scope, query_count=len(dataset["cases"])):
+            for index, case in enumerate(dataset["cases"], start=1):
+                trace_event("recall_case", status="started", case_id=case["case_id"], index=index, total=len(dataset["cases"]))
+                start = time.monotonic()
+                response = inside_http(container, "POST", "/v1/recall", {
+                    "query": case["query"],
+                    "namespace": case["namespace"],
+                    "limit": int(dataset["k"]),
+                    "min_score": float(case.get("min_score", 0.0)),
+                    "exclude_types": case.get("exclude_types", []),
+                })
+                elapsed = (time.monotonic() - start) * 1000
+                if response["status"] != 200:
+                    trace_event("recall_case", status="failed", case_id=case["case_id"], elapsed_ms=round(elapsed, 2), http_status=response["status"])
+                    raise RuntimeError(f"recall failed for {case['case_id']}: HTTP {response['status']}")
+                items = response["body"].get("results", [])
+                if not isinstance(items, list):
+                    trace_event("recall_case", status="failed", case_id=case["case_id"], error_type="malformed_results")
+                    raise RuntimeError(f"recall results malformed for {case['case_id']}")
+                per_case.append(score_case(case, items, elapsed, int(dataset["k"])))
+                trace_event("recall_case", status="complete", case_id=case["case_id"], index=index, total=len(dataset["cases"]), elapsed_ms=round(elapsed, 2), candidate_count=len(items))
 
-        report = summarize(dataset, per_case)
+        with traced_stage("metric_summary", scope=scope, query_count=len(per_case)):
+            report = summarize(dataset, per_case)
         report.update({
+            "report_schema": "c8.shadow-evaluation-report.v1",
+            "evaluation_scope": scope,
+            "full_fixture_case_count": len(full_dataset["cases"]),
+            "selected_case_ids": [case["case_id"] for case in dataset["cases"]],
             "image": image,
+            "image_digest": image_digest,
             "runtime_version": root_body["version"],
-            "fixture_sha256": hashlib.sha256(fixture_path.read_bytes()).hexdigest(),
+            "fixture_sha256": fixture_sha256,
             "synthetic_records_inserted": len(inserted),
             "vector_indexed": vector_indexed,
             "queries_run": len(dataset["cases"]),
             "result_limit_k": int(dataset["k"]),
+            "github_run_id": os.environ.get("GITHUB_RUN_ID"),
+            "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+            "source_sha": os.environ.get("GITHUB_SHA"),
+            "source_ref": os.environ.get("GITHUB_REF"),
         })
+        if report_path is not None:
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_bytes = json.dumps(report, indent=2, sort_keys=True, allow_nan=False).encode("utf-8")
+            report_path.write_bytes(report_bytes)
+            trace_event("report_written", filename=report_path.name, bytes=len(report_bytes), status=report["status"])
+        trace_event("evaluation_complete", scope=scope, status=report["status"], queries_run=len(per_case), fixture_sha256=fixture_sha256)
         return report
     finally:
-        cleanup(container, image)
+        with traced_stage("container_cleanup", container=container):
+            cleanup(container, image)
 
 
 class C8MetricsTests(unittest.TestCase):
@@ -397,6 +483,12 @@ class C8MetricsTests(unittest.TestCase):
             self.assertGreaterEqual(sum(case["category"] == category for case in dataset["cases"]), 5)
         self.assertTrue(all(r["namespace"].startswith("c8-synthetic-") for r in dataset["records"]))
         self.assertFalse(any(AWS_SECRET_SHAPED.search(r["content"]) for r in dataset["records"]))
+
+    def test_scope_selection_is_fixed_and_traceable(self) -> None:
+        dataset = load_dataset()
+        quick = select_scope(dataset, "quick-smoke")
+        self.assertEqual(tuple(case["case_id"] for case in quick["cases"]), QUICK_CASE_IDS)
+        self.assertEqual(len(select_scope(dataset, "full")["cases"]), len(dataset["cases"]))
 
     def test_fixture_rejects_secret_shaped_strings(self) -> None:
         dataset = load_dataset()
@@ -454,24 +546,83 @@ def main() -> int:
     parser.add_argument("--image", default=IMAGE)
     parser.add_argument("--container", default="nyawa-c8-shadow-eval")
     parser.add_argument("--fixtures", type=Path, default=FIXTURES)
+    parser.add_argument("--scope", choices=("quick-smoke", "full"), default="quick-smoke")
+    parser.add_argument("--trace-file", type=Path)
+    parser.add_argument("--report-file", type=Path)
     args = parser.parse_args()
+    global TRACE_FILE
+    TRACE_FILE = args.trace_file
+    if TRACE_FILE is not None:
+        TRACE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        TRACE_FILE.touch(exist_ok=True)
+    trace_event("harness_start", mode=args.mode, scope=args.scope)
     if args.mode == "preflight":
-        preflight()
+        try:
+            with traced_stage("runner_preflight", scope=args.scope):
+                preflight()
+        except Exception as error:
+            trace_event("preflight_result", status="FAILED", error_type=type(error).__name__)
+            if args.report_file is not None:
+                preflight_report = {
+                    "report_schema": "c8.shadow-evaluation-report.v1",
+                    "status": "PREFLIGHT_FAILED",
+                    "retrieval_run": False,
+                    "evaluation_scope": args.scope,
+                    "failure_type": type(error).__name__,
+                    "image_digest": args.image.split("@", 1)[1] if "@" in args.image else "unverified",
+                    "github_run_id": os.environ.get("GITHUB_RUN_ID"),
+                    "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+                    "source_sha": os.environ.get("GITHUB_SHA"),
+                }
+                args.report_file.parent.mkdir(parents=True, exist_ok=True)
+                args.report_file.write_text(json.dumps(preflight_report, indent=2, sort_keys=True) + chr(10), encoding="utf-8")
+            print(f"C8 preflight FAILED: {error}", file=sys.stderr)
+            return 1
+        if args.report_file is not None:
+            preflight_report = {
+                "report_schema": "c8.shadow-evaluation-report.v1",
+                "status": "PREFLIGHT_PASS",
+                "retrieval_run": False,
+                "evaluation_scope": args.scope,
+                "image_digest": args.image.split("@", 1)[1] if "@" in args.image else "unverified",
+                "github_run_id": os.environ.get("GITHUB_RUN_ID"),
+                "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+                "source_sha": os.environ.get("GITHUB_SHA"),
+            }
+            args.report_file.parent.mkdir(parents=True, exist_ok=True)
+            args.report_file.write_text(json.dumps(preflight_report, indent=2, sort_keys=True) + chr(10), encoding="utf-8")
         return 0
     if args.mode == "self-test":
         suite = unittest.defaultTestLoader.loadTestsFromTestCase(C8MetricsTests)
         return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
     try:
-        report = run_e2e(args.container, args.image, args.fixtures)
+        report = run_e2e(args.container, args.image, args.fixtures, args.scope, args.report_file)
         print(json.dumps(report, indent=2, sort_keys=True))
         summary = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary:
             with open(summary, "a", encoding="utf-8") as stream:
-                stream.write("## C8 Shadow Retrieval Evaluation\n\n```json\n")
+                stream.write("Scope: " + args.scope + chr(10))
+                stream.write("Run: " + os.environ.get("GITHUB_RUN_ID", "local") + "." + os.environ.get("GITHUB_RUN_ATTEMPT", "1") + chr(10))
+                stream.write("Source SHA: " + os.environ.get("GITHUB_SHA", "local") + chr(10) + chr(10))
+                stream.write("## C8 Shadow Retrieval Evaluation" + chr(10) + chr(10) + "```json" + chr(10))
                 stream.write(json.dumps(report, indent=2, sort_keys=True))
                 stream.write("\n```\n\nOnly synthetic records were used; no provider call or Hermes injection.\n")
         return 0 if report["status"] == "PASS" else 1
     except Exception as error:
+        trace_event("run_failed", scope=args.scope, error_type=type(error).__name__)
+        if args.report_file is not None:
+            failure_report = {
+                "report_schema": "c8.shadow-evaluation-report.v1",
+                "status": "FAILED",
+                "evaluation_scope": args.scope,
+                "failure_type": type(error).__name__,
+                "image_digest": args.image.split("@", 1)[1] if "@" in args.image else "unverified",
+                "github_run_id": os.environ.get("GITHUB_RUN_ID"),
+                "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+                "source_sha": os.environ.get("GITHUB_SHA"),
+            }
+            args.report_file.parent.mkdir(parents=True, exist_ok=True)
+            args.report_file.write_text(json.dumps(failure_report, indent=2, sort_keys=True) + chr(10), encoding="utf-8")
         print(f"C8 evaluation FAILED: {error}", file=sys.stderr)
         return 1
 
