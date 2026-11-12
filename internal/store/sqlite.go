@@ -696,6 +696,12 @@ func (s *Store) TraverseGraph(seedNames []string, depth, limit int) ([]graph.Tra
 	}
 	return s.graph.Traverse(seedNames, depth, limit)
 }
+func (s *Store) TraverseGraphScoped(seedNames []string, depth, limit int, namespace string) ([]graph.TraversalResult, error) {
+	if s.graph == nil {
+		return nil, nil
+	}
+	return s.graph.TraverseScoped(seedNames, depth, limit, namespace)
+}
 func (s *Store) ListEntityNames(limit int) ([]string, error) {
 	if limit <= 0 {
 		limit = 10000
