@@ -19,6 +19,7 @@ import (
 	"github.com/rezkyauliapratama/nyawa/internal/graph"
 	"github.com/rezkyauliapratama/nyawa/internal/rag"
 	"github.com/rezkyauliapratama/nyawa/internal/search"
+	"github.com/rezkyauliapratama/nyawa/internal/security"
 	"github.com/rezkyauliapratama/nyawa/internal/store"
 	"github.com/rezkyauliapratama/nyawa/internal/types"
 	"github.com/rezkyauliapratama/nyawa/internal/version"
@@ -28,12 +29,13 @@ type Server struct {
 	store    *store.Store
 	pipeline *search.Pipeline
 	ragStore *rag.RAGStore
+	security *security.Filter
 	reader   *bufio.Scanner
 	writer   *json.Encoder
 }
 
 func NewServer(st *store.Store, p *search.Pipeline, rs *rag.RAGStore) *Server {
-	return &Server{store: st, pipeline: p, ragStore: rs, reader: bufio.NewScanner(os.Stdin), writer: json.NewEncoder(os.Stdout)}
+	return &Server{store: st, pipeline: p, ragStore: rs, security: security.NewFilter(), reader: bufio.NewScanner(os.Stdin), writer: json.NewEncoder(os.Stdout)}
 }
 
 type callToolResult struct {
@@ -268,6 +270,14 @@ func (s *Server) handleStore(id any, raw json.RawMessage) {
 	}
 	if args.Content == "" {
 		s.writeError(id, -32602, "content required")
+		return
+	}
+	filter := s.security
+	if filter == nil {
+		filter = security.NewFilter()
+	}
+	if cls, _ := filter.Classify(args.Content); cls == security.Secret {
+		s.writeError(id, -32602, "content blocked")
 		return
 	}
 	if args.Namespace == "" {

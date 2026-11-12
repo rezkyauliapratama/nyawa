@@ -236,11 +236,16 @@ func (s *Server) handleBatchStore(w http.ResponseWriter, r *http.Request) {
 	if len(req.Memories) == 0 { writeJSON(w, 400, map[string]string{"error": "memories required"}); return }
 	results := make([]map[string]any, 0, len(req.Memories))
 	for i, m := range req.Memories {
-		if m.Content == "" { continue }
+		content := m.Content
+		if content == "" { continue }
+		if cls, reason := s.security.Classify(content); cls == security.Secret {
+			results = append(results, map[string]any{"status": "error", "error": "content blocked", "reason": reason})
+			continue
+		}
 		ns := m.Namespace; if ns == "" { ns = "default" }
 		mt := types.MemoryType(m.Type); if mt == "" { mt = types.TypeNote }
 		id := fmt.Sprintf("mem_%d_%d", time.Now().UnixNano(), i)
-		if err := s.store.InsertMemory(&types.Memory{ID: id, Content: m.Content, Type: mt, Namespace: ns}); err != nil {
+		if err := s.store.InsertMemory(&types.Memory{ID: id, Content: content, Type: mt, Namespace: ns}); err != nil {
 			results = append(results, map[string]any{"id": id, "status": "error", "error": err.Error()}); continue
 		}
 		results = append(results, map[string]any{"id": id, "status": "stored"})
