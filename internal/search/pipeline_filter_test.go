@@ -316,35 +316,99 @@ func TestRecallLimitCapsResults(t *testing.T) {
 	}
 }
 
-// TestRecallCacheIsKeyedOnFilters guards the interaction that made the filters
-// unobservable: an unfiltered query and a filtered one share the same query
-// text, so a cache keyed only on the text serves the wrong entry.
+// TestRecallCacheIsKeyedOnFilters guards that query filters and namespace are
+// part of the cache key, using records from both namespaces so results can be
+// checked on cold and cached paths rather than relying on an unscoped fake.
 func TestRecallCacheIsKeyedOnFilters(t *testing.T) {
-	p := newFilterPipeline()
+	now := time.Now()
+	memories := map[string]*types.Memory{
+		"memA": {ID: "memA", Content: "A", Type: types.TypeDecision, Namespace: "hermes", CreatedAt: now},
+		"memB": {ID: "memB", Content: "B", Type: types.TypeNote, Namespace: "hermes", CreatedAt: now},
+		"memC": {ID: "memC", Content: "C", Type: types.MemoryType("conversation"), Namespace: "hermes", CreatedAt: now},
+		"otherA": {ID: "otherA", Content: "A", Type: types.TypeDecision, Namespace: "other", CreatedAt: now},
+		"otherB": {ID: "otherB", Content: "B", Type: types.TypeNote, Namespace: "other", CreatedAt: now},
+		"otherC": {ID: "otherC", Content: "C", Type: types.MemoryType("conversation"), Namespace: "other", CreatedAt: now},
+	}
+	st := &fakeStore{
+		fts:    []string{"memA", "memB", "memC", "otherA", "otherB", "otherC"},
+		vector: []string{"memA", "otherA"},
+		mems:   memories,
+	}
+	p := NewPipeline(st, embedder.NewPriorityChain(fakeEmbedder{}), types.SearchConfig{RRFK: 60, RecencyWeight: 0.05, ImportanceWeight: 0.10})
 
-	first, err := p.Search(types.StoreQuery{QueryText: "q", Namespace: "hermes", Limit: 10})
+	hermesQuery := types.StoreQuery{QueryText: "q", Namespace: "hermes", Limit: 10}
+	if _, ok := p.cache.Get(hermesQuery.CacheKey()); ok {
+		t.Fatal("hermes query unexpectedly cached before cold search")
+	}
+	first, err := p.Search(hermesQuery)
 	if err != nil {
-		t.Fatalf("search: %v", err)
+		t.Fatalf("cold hermes search: %v", err)
+	}
+	if !equalIDs(idsOf(first), "memA", "memB", "memC") {
+		t.Fatalf("cold hermes results = %v, want [memA memB memC]", idsOf(first))
 	}
 	p.ReleaseResults(first)
+	if _, ok := p.cache.Get(hermesQuery.CacheKey()); !ok {
+		t.Fatal("hermes cold search did not populate its cache entry")
+	}
 
-	filtered, err := p.Search(types.StoreQuery{QueryText: "q", Namespace: "hermes", Limit: 10, MinScore: 1.0})
+	// Preserve the min-score/filter-key assertion: it must not reuse the
+	// unfiltered result set for an otherwise identical query.
+	filteredQuery := types.StoreQuery{QueryText: "q", Namespace: "hermes", Limit: 10, MinScore: 1.0}
+	if filteredQuery.CacheKey() == hermesQuery.CacheKey() {
+		t.Fatal("min-score query shares the unfiltered cache key")
+	}
+	if _, ok := p.cache.Get(filteredQuery.CacheKey()); ok {
+		t.Fatal("filtered query unexpectedly hit the unfiltered cache entry")
+	}
+	filtered, err := p.Search(filteredQuery)
 	if err != nil {
-		t.Fatalf("filtered search: %v", err)
+		t.Fatalf("cold filtered search: %v", err)
 	}
 	if !equalIDs(idsOf(filtered), "memA") {
 		t.Fatalf("filtered search after unfiltered one = %v, want [memA]", idsOf(filtered))
 	}
 	p.ReleaseResults(filtered)
-
-	// A different namespace must not reuse the cached result either.
-	other, err := p.Search(types.StoreQuery{QueryText: "q", Namespace: "other", Limit: 10})
+	if _, ok := p.cache.Get(filteredQuery.CacheKey()); !ok {
+		t.Fatal("filtered cold search did not populate its own cache entry")
+	}
+	filteredCached, err := p.Search(filteredQuery)
 	if err != nil {
-		t.Fatalf("other namespace search: %v", err)
+		t.Fatalf("cached filtered search: %v", err)
 	}
-	if len(other) != 3 {
-		t.Fatalf("other namespace results = %v, want the fake store's 3 (namespace is not filtered by the fake)", idsOf(other))
+	if !equalIDs(idsOf(filteredCached), "memA") {
+		t.Fatalf("cached filtered results = %v, want [memA]", idsOf(filteredCached))
 	}
+	p.ReleaseResults(filteredCached)
+
+	// A different namespace has its own cold entry and must never receive
+	// records cached for hermes, on either its cold or cache-hit path.
+	otherQuery := types.StoreQuery{QueryText: "q", Namespace: "other", Limit: 10}
+	if otherQuery.CacheKey() == hermesQuery.CacheKey() {
+		t.Fatal("different namespaces share a cache key")
+	}
+	if _, ok := p.cache.Get(otherQuery.CacheKey()); ok {
+		t.Fatal("other namespace unexpectedly hit the hermes cache entry")
+	}
+	other, err := p.Search(otherQuery)
+	if err != nil {
+		t.Fatalf("cold other namespace search: %v", err)
+	}
+	if !equalIDs(idsOf(other), "otherA", "otherB", "otherC") {
+		t.Fatalf("cold other namespace results = %v, want [otherA otherB otherC]", idsOf(other))
+	}
+	p.ReleaseResults(other)
+	if _, ok := p.cache.Get(otherQuery.CacheKey()); !ok {
+		t.Fatal("other namespace cold search did not populate its own cache entry")
+	}
+	otherCached, err := p.Search(otherQuery)
+	if err != nil {
+		t.Fatalf("cached other namespace search: %v", err)
+	}
+	if !equalIDs(idsOf(otherCached), "otherA", "otherB", "otherC") {
+		t.Fatalf("cached other namespace results = %v, want [otherA otherB otherC]", idsOf(otherCached))
+	}
+	p.ReleaseResults(otherCached)
 }
 
 // TestRecallCacheSurvivesResultRelease guards the pool/cache interaction: the

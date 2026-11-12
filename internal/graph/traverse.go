@@ -9,6 +9,13 @@ import (
 
 const decay = 0.5
 
+func memoryEdgeQuery(entityID int, namespace string) (string, []any) {
+	if namespace == "" {
+		return `SELECT memory_id, weight FROM entity_edges WHERE entity_id = ?`, []any{entityID}
+	}
+	return `SELECT e.memory_id, e.weight FROM entity_edges e JOIN memories m ON m.id = e.memory_id WHERE e.entity_id = ? AND m.namespace = ? AND m.superseded_at IS NULL`, []any{entityID, namespace}
+}
+
 type TraversalResult struct {
 	MemoryID   string   `json:"memory_id"`
 	Score      float64  `json:"score"`
@@ -17,6 +24,21 @@ type TraversalResult struct {
 }
 
 func (s *Store) Traverse(seedNames []string, depth, limit int) ([]TraversalResult, error) {
+	return s.traverse(seedNames, depth, limit, "")
+}
+
+// TraverseScoped applies an exact namespace filter while collecting each
+// entity's memory edges, before scores are sorted and limited. Entity-to-entity
+// relations remain global, so this scopes returned memories, not graph topology
+// or tenant authorization.
+func (s *Store) TraverseScoped(seedNames []string, depth, limit int, namespace string) ([]TraversalResult, error) {
+	if namespace == "" {
+		return s.Traverse(seedNames, depth, limit)
+	}
+	return s.traverse(seedNames, depth, limit, namespace)
+}
+
+func (s *Store) traverse(seedNames []string, depth, limit int, namespace string) ([]TraversalResult, error) {
 	if depth <= 0 {
 		depth = 2
 	}
@@ -44,14 +66,22 @@ func (s *Store) Traverse(seedNames []string, depth, limit int) ([]TraversalResul
 
 	// Step 2: collect seed's own memories (hop 0, path_length = 1)
 	for id := range seedIDs {
-		rows, err := s.db.Query(`SELECT memory_id, weight FROM entity_edges WHERE entity_id = ?`, id)
+		query, args := memoryEdgeQuery(id, namespace)
+		rows, err := s.db.Query(query, args...)
 		if err != nil {
+			if namespace != "" {
+				return nil, fmt.Errorf("traverse scoped seed memories: %w", err)
+			}
 			continue
 		}
 		for rows.Next() {
 			var memID string
 			var w float64
 			if err := rows.Scan(&memID, &w); err != nil {
+				if namespace != "" {
+					rows.Close()
+					return nil, fmt.Errorf("scan scoped seed memory: %w", err)
+				}
 				continue
 			}
 			contrib := w * math.Pow(decay, 0) / 1.0
@@ -68,6 +98,10 @@ func (s *Store) Traverse(seedNames []string, depth, limit int) ([]TraversalResul
 					Entities:   []string{seedIDs[id]},
 				}
 			}
+		}
+		if err := rows.Err(); err != nil && namespace != "" {
+			rows.Close()
+			return nil, fmt.Errorf("iterate scoped seed memories: %w", err)
 		}
 		rows.Close()
 	}
@@ -146,14 +180,22 @@ func (s *Store) Traverse(seedNames []string, depth, limit int) ([]TraversalResul
 			var entityName string
 			s.db.QueryRow(`SELECT name FROM entity_nodes WHERE id = ?`, d.entityID).Scan(&entityName)
 
-			memRows, err := s.db.Query(`SELECT memory_id, weight FROM entity_edges WHERE entity_id = ?`, d.entityID)
+			query, args := memoryEdgeQuery(d.entityID, namespace)
+			memRows, err := s.db.Query(query, args...)
 			if err != nil {
+				if namespace != "" {
+					return nil, fmt.Errorf("traverse scoped related memories: %w", err)
+				}
 				continue
 			}
 			for memRows.Next() {
 				var memID string
 				var edgeWeight float64
 				if err := memRows.Scan(&memID, &edgeWeight); err != nil {
+					if namespace != "" {
+						memRows.Close()
+						return nil, fmt.Errorf("scan scoped related memory: %w", err)
+					}
 					continue
 				}
 
@@ -174,6 +216,10 @@ func (s *Store) Traverse(seedNames []string, depth, limit int) ([]TraversalResul
 						Entities:   []string{entityName},
 					}
 				}
+			}
+			if err := memRows.Err(); err != nil && namespace != "" {
+				memRows.Close()
+				return nil, fmt.Errorf("iterate scoped related memories: %w", err)
 			}
 			memRows.Close()
 		}
