@@ -59,7 +59,7 @@ jobs:
     if: github.event_name == 'pull_request'
     name: Qwen answerability calibration only (holdout frozen)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 20
     env:
       HF_HUB_DISABLE_TELEMETRY: "1"
       HF_HUB_DISABLE_PROGRESS_BARS: "1"
@@ -84,6 +84,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Generate calibration fixture and run Qwen-only pilot
+        timeout-minutes: 15
         env:
           HF_HOME: ${{ runner.temp }}/hf-cache
         run: |
