@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """recall-bench — harness benchmark recall Nyawa.
 
-Menjalankan sekumpulan kueri (queries.tsv) terhadap sebuah binary `nyawa recall`,
-mem-parsing keluaran recall, lalu menghitung recall@1/@3/@5 dan MRR.
+Menjalankan sekumpulan kueri (queries.tsv) terhadap CLI di container Nyawa
+secara default (atau binary lokal eksplisit), mem-parsing keluaran recall, lalu
+menghitung recall@1/@3/@5 dan MRR.
 
 Sebagai pembanding leksikal, harness ini juga menjalankan pencarian BM25 FTS5
 langsung ke DB (read-only) dalam tiga mode:
@@ -12,7 +13,7 @@ langsung ke DB (read-only) dalam tiga mode:
   - or  : token query digabung dengan OR  (pencarian leksikal paling longgar)
   - and : token query digabung dengan AND (pencarian leksikal paling ketat)
 
-Tidak pernah menulis ke DB: koneksi dibuka dengan mode=ro.
+DB sumber dibuka `mode=ro`; CLI berjalan pada snapshot sementara karena recall menaikkan `access_count`.
 
 Contoh:
   python3 bench.py
@@ -25,14 +26,19 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_BINARY = "/opt/data/.nyawa/nyawa"
+DEFAULT_CONTAINER = "nyawa-dashboard"
+DEFAULT_CONTAINER_BINARY = "/usr/local/bin/nyawa"
 DEFAULT_DB = "/opt/data/.nyawa/memory.db"
+DEFAULT_SNAPSHOT_DIR = "/opt/data/cache/scratch"
 RESULT_MARKER = re.compile(r"^#(\d+) \[([-0-9.]+)\] (.*)$")
 TOKEN_RE = re.compile(r"[0-9A-Za-z_]+")
 
@@ -45,6 +51,36 @@ def open_db(path: str) -> sqlite3.Connection:
     # sebagian memori memuat byte non-UTF8; decode konsisten seperti parser output
     con.text_factory = lambda b: b.decode("utf-8", "replace")
     return con
+
+
+@contextmanager
+def database_snapshot(source_db: str, snapshot_dir: str = DEFAULT_SNAPSHOT_DIR,
+                      container: str = DEFAULT_CONTAINER):
+    """Create an ephemeral DB/HNSW copy so recall cannot mutate the source DB."""
+    os.makedirs(snapshot_dir, exist_ok=True)
+    source_db = os.path.abspath(source_db)
+    with tempfile.TemporaryDirectory(prefix="nyawa-recall-bench-", dir=snapshot_dir) as temp_dir:
+        snapshot_db = os.path.join(temp_dir, "memory.db")
+        src = sqlite3.connect(f"file:{source_db}?mode=ro", uri=True, timeout=30)
+        dst = sqlite3.connect(snapshot_db, timeout=30)
+        try:
+            src.backup(dst, pages=256, sleep=0.05)
+        finally:
+            dst.close()
+            src.close()
+
+        # HNSW.Save writes a complete temp file and atomically renames it, so a
+        # concurrent copy sees either the previous or the next complete index.
+        index_source = source_db + ".hnsw"
+        has_hnsw = os.path.isfile(index_source)
+        if has_hnsw:
+            snapshot_index = snapshot_db + ".hnsw"
+            try:
+                shutil.copy2(index_source, snapshot_index)
+            except PermissionError:
+                # The container owns the production HNSW file on some hosts.
+                run_checked(["docker", "exec", container, "cp", index_source, snapshot_index])
+        yield snapshot_db, has_hnsw
 
 
 def load_content_index(con: sqlite3.Connection) -> tuple[dict[str, list[str]], dict[str, dict]]:
@@ -88,8 +124,47 @@ def parse_recall(stdout: str) -> list[dict]:
     return results
 
 
-def run_recall(binary: str, db: str, query: str, ns: str | None, timeout: int) -> dict:
-    cmd = [binary, "recall", db, query]
+def build_cli_prefix(binary: str | None, container: str, container_binary: str) -> tuple[list[str], str]:
+    """Return the executable prefix and mode; local binaries are explicit candidates only."""
+    if binary:
+        return [binary], "local"
+    return ["docker", "exec", container, container_binary], "container"
+
+
+def run_checked(cmd: list[str], timeout: int = 30) -> str:
+    """Run a CLI metadata command and raise a useful error on failure."""
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"perintah tidak ditemukan: {cmd[0]}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"timeout saat menjalankan {' '.join(cmd)} setelah {timeout}s") from exc
+    stdout = proc.stdout.decode("utf-8", "replace")
+    stderr = proc.stderr.decode("utf-8", "replace").strip()
+    if proc.returncode != 0:
+        detail = stderr or stdout.strip() or f"exit code {proc.returncode}"
+        raise RuntimeError(f"gagal menjalankan {' '.join(cmd)}: {detail}")
+    return stdout.strip()
+
+
+def identify_binary(binary_cmd: list[str], mode: str, binary: str | None,
+                    container: str, container_binary: str) -> tuple[str, str]:
+    """Read version and SHA-256 from the same execution target used by recall."""
+    version = run_checked([*binary_cmd, "version"])
+    if mode == "local":
+        with open(binary or "", "rb") as fh:
+            bin_sha = hashlib.sha256(fh.read()).hexdigest()
+    else:
+        digest_output = run_checked(["docker", "exec", container, "sha256sum", container_binary])
+        match = re.match(r"^([0-9a-fA-F]{64})\s", digest_output)
+        if not match:
+            raise RuntimeError(f"sha256sum mengembalikan format yang tidak dikenali: {digest_output}")
+        bin_sha = match.group(1).lower()
+    return version, bin_sha
+
+
+def run_recall(binary_cmd: list[str], db: str, query: str, ns: str | None, timeout: int) -> dict:
+    cmd = [*binary_cmd, "recall", db, query]
     if ns:
         cmd += ["--ns", ns]
     try:
@@ -164,8 +239,9 @@ def first_rank_for_targets(order: list[str], targets: list[str]) -> int | None:
     return None
 
 
-def evaluate(rows: list[dict], con: sqlite3.Connection, binary: str, timeout: int,
-             fts_limit: int, ns: str | None, engine_map: dict | None = None) -> dict:
+def evaluate(rows: list[dict], con: sqlite3.Connection, binary_cmd: list[str], recall_db: str,
+             timeout: int, fts_limit: int, ns: str | None,
+             engine_map: dict | None = None) -> dict:
     by_content, meta = load_content_index(con)
     engine_map = engine_map or {}
 
@@ -176,7 +252,7 @@ def evaluate(rows: list[dict], con: sqlite3.Connection, binary: str, timeout: in
         eff_ns = row["ns"] or ns
 
         # ----- jalankan recall -----
-        rr = run_recall(binary, con_dbpath, q, eff_ns, timeout)
+        rr = run_recall(binary_cmd, recall_db, q, eff_ns, timeout)
         order: list[str] = []
         ranked_results: list[dict] = []
         matched_by_content: dict[str, list[str]] = {}
@@ -278,8 +354,10 @@ def write_markdown(path: str, doc: dict) -> None:
     a = lines.append
     a(f"# BASELINE recall Nyawa — {meta['date']}")
     a("")
-    a(f"- Binary: `{meta['binary']}` (sha256 `{meta['binary_sha256'][:16]}…`, `{meta['binary_version']}`)")
-    a(f"- DB: `{meta['db']}` (mtime `{meta['db_mtime']}`, `{meta['db_total_memories']}` memori, dibaca `mode=ro`)")
+    cli_target = (f"{meta['container']}:{meta['binary']}" if meta["execution_mode"] == "container"
+                  else meta["binary"])
+    a(f"- CLI: `{meta['execution_mode']}` `{cli_target}` (sha256 `{meta['binary_sha256'][:16]}…`, `{meta['binary_version']}`)")
+    a(f"- DB sumber: `{meta['db']}` (mtime `{meta['db_mtime']}`, `{meta['db_total_memories']}` memori; snapshot sementara, sumber dibaca `mode=ro`)")
     a(f"- Dijalankan: {meta['generated_at']}")
     a(f"- Label: `{meta['label']}`")
     a("")
@@ -345,14 +423,17 @@ def write_markdown(path: str, doc: dict) -> None:
 # --------------------------------------------------------------------------- #
 # main
 # --------------------------------------------------------------------------- #
-con_dbpath = DEFAULT_DB
-
-
 def main() -> int:
-    global con_dbpath
     ap = argparse.ArgumentParser(description="Harness benchmark recall Nyawa")
-    ap.add_argument("--binary", default=DEFAULT_BINARY, help="path binary nyawa (default: runtime)")
-    ap.add_argument("--db", default=DEFAULT_DB, help="path DB SQLite (dibaca read-only)")
+    ap.add_argument("--binary", default=None,
+                    help="binary kandidat lokal; tanpa opsi ini, pakai CLI di container")
+    ap.add_argument("--container", default=DEFAULT_CONTAINER,
+                    help=f"container Nyawa (default: {DEFAULT_CONTAINER})")
+    ap.add_argument("--container-binary", default=DEFAULT_CONTAINER_BINARY,
+                    help=f"path CLI di dalam container (default: {DEFAULT_CONTAINER_BINARY})")
+    ap.add_argument("--snapshot-dir", default=DEFAULT_SNAPSHOT_DIR,
+                    help=f"direktori snapshot sementara yang dibagikan dengan container (default: {DEFAULT_SNAPSHOT_DIR})")
+    ap.add_argument("--db", default=DEFAULT_DB, help="DB SQLite sumber; dibaca read-only dan disalin sementara")
     ap.add_argument("--queries", default=os.path.join(SCRIPT_DIR, "queries.tsv"))
     ap.add_argument("--out-dir", default=SCRIPT_DIR)
     ap.add_argument("--label", default="runtime", help="label output (mis. runtime / kandidat)")
@@ -365,9 +446,11 @@ def main() -> int:
     ap.add_argument("--engine-fts-json", default=None,
                     help="keluaran ftsprobe (leg FTS mentah mesin, driver SQLite runtime) untuk digabung")
     args = ap.parse_args()
-    con_dbpath = args.db
 
-    if not os.path.exists(args.binary):
+    binary_cmd, mode = build_cli_prefix(args.binary, args.container, args.container_binary)
+    binary_label = (f"local:{os.path.abspath(args.binary)}" if mode == "local"
+                    else f"container:{args.container}:{args.container_binary}")
+    if mode == "local" and not os.path.isfile(args.binary):
         print(f"binary tidak ada: {args.binary}", file=sys.stderr)
         return 2
 
@@ -376,26 +459,36 @@ def main() -> int:
         print("tidak ada kueri", file=sys.stderr)
         return 2
 
-    con = open_db(args.db)
-    # statistik DB
-    total = con.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
-    db_mtime = datetime.fromtimestamp(os.path.getmtime(args.db), tz=timezone.utc).isoformat()
     try:
-        version = subprocess.run([args.binary, "version"], capture_output=True, timeout=30).stdout.decode().strip()
-    except Exception:
-        version = "?"
-    with open(args.binary, "rb") as fh:
-        bin_sha = hashlib.sha256(fh.read()).hexdigest()
+        version, bin_sha = identify_binary(binary_cmd, mode, args.binary,
+                                           args.container, args.container_binary)
+    except (OSError, RuntimeError) as exc:
+        print(f"CLI Nyawa tidak siap: {exc}", file=sys.stderr)
+        return 2
 
-    print(f"== recall-bench | label={args.label} | binary={args.binary} | {len(rows)} kueri ==")
+    db_mtime = datetime.fromtimestamp(os.path.getmtime(args.db), tz=timezone.utc).isoformat()
+    print(f"== recall-bench | label={args.label} | cli={binary_label} | {len(rows)} kueri ==")
     engine_map = {}
     if args.engine_fts_json and os.path.exists(args.engine_fts_json):
         with open(args.engine_fts_json, encoding="utf-8") as fh:
             for er in json.load(fh):
                 engine_map[er["query"]] = er
         print(f"   + engine-raw FTS dari {args.engine_fts_json} ({len(engine_map)} kueri)")
-    ev = evaluate(rows, con, args.binary, args.timeout, args.fts_limit, args.ns, engine_map)
-    con.close()
+
+    try:
+        with database_snapshot(args.db, args.snapshot_dir, args.container) as (recall_db, snapshot_has_hnsw):
+            if not snapshot_has_hnsw:
+                print("PERINGATAN: snapshot tidak punya HNSW; leg recall bisa FTS-only", file=sys.stderr)
+            con = open_db(recall_db)
+            try:
+                total = con.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+                ev = evaluate(rows, con, binary_cmd, recall_db, args.timeout,
+                              args.fts_limit, args.ns, engine_map)
+            finally:
+                con.close()
+    except (OSError, RuntimeError, sqlite3.Error) as exc:
+        print(f"gagal membuat/menguji snapshot DB: {exc}", file=sys.stderr)
+        return 2
 
     per_query = ev["per_query"]
     agg = {
@@ -445,9 +538,13 @@ def main() -> int:
             "date": date,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "label": args.label,
-            "binary": os.path.abspath(args.binary),
+            "binary": os.path.abspath(args.binary) if mode == "local" else args.container_binary,
             "binary_sha256": bin_sha,
             "binary_version": version,
+            "execution_mode": mode,
+            "container": args.container if mode == "container" else None,
+            "database_mode": "temporary_snapshot",
+            "snapshot_has_hnsw": snapshot_has_hnsw,
             "db": os.path.abspath(args.db),
             "db_mtime": db_mtime,
             "db_total_memories": total,

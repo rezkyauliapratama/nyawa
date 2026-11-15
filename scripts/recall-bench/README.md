@@ -1,12 +1,17 @@
 # recall-bench
 
-Harness benchmark **recall** Nyawa. Menjalankan daftar kueri tetap ke sebuah
-binary `nyawa recall`, mem-parsing keluarannya, lalu menghitung **recall@1 /
-recall@3 / recall@5** dan **MRR**. Sebagai pembanding leksikal, harness juga
-menjalankan pencarian **BM25 FTS5** langsung ke DB (read-only).
+Harness benchmark **recall** Nyawa. Secara default, menjalankan CLI di container
+`nyawa-dashboard` lewat `docker exec`, mem-parsing hasil `nyawa recall`, lalu
+menghitung **recall@1 / recall@3 / recall@5** dan **MRR**. Binary lokal hanya
+dipakai bila diberikan eksplisit lewat `--binary` untuk menguji kandidat.
+Sebagai pembanding leksikal, harness juga menjalankan pencarian **BM25 FTS5**
+langsung ke snapshot DB sementara (read-only).
 
-Harness **tidak pernah menulis** ke DB (koneksi `mode=ro`) dan **tidak
-menyentuh** binary/kode mesin recall. Ini murni alat ukur.
+Harness tidak pernah mengubah DB sumber. Ia membuat snapshot SQLite sementara
+beserta berkas HNSW di `--snapshot-dir`, lalu menjalankan CLI terhadap snapshot
+itu. Ini penting karena `nyawa recall` menaikkan `access_count` pada DB yang
+dibacanya. Snapshot dibersihkan setelah benchmark; DB sumber dibuka `mode=ro`.
+Output JSON/Markdown tetap ditulis ke `--out-dir` dan dapat memuat isi memori.
 
 ## Berkas
 
@@ -22,27 +27,30 @@ menyentuh** binary/kode mesin recall. Ini murni alat ukur.
 ## Cara pakai
 
 ```bash
-# baseline terhadap binary runtime (default)
+# baseline terhadap CLI di container nyawa-dashboard (default)
 python3 scripts/recall-bench/bench.py
 
 # binary lain, dengan label agar berkas hasil tidak saling menimpa
 python3 scripts/recall-bench/bench.py \
-    --binary /opt/data/.nyawa/nyawa-kandidat \
+    --binary ./nyawa-kandidat \
     --label kandidat
 
 # DB/kueri lain
 python3 scripts/recall-bench/bench.py \
     --db /opt/data/.nyawa/memory.db \
     --queries scripts/recall-bench/queries.tsv \
-    --out-dir /tmp/hasil-bench
+    --out-dir /opt/data/cache/scratch/hasil-bench
 ```
 
 Argumen penting:
 
 | Argumen | Default | Keterangan |
 |---|---|---|
-| `--binary` | `/opt/data/.nyawa/nyawa` | binary `nyawa` yang diuji |
-| `--db` | `/opt/data/.nyawa/memory.db` | DB SQLite (dibuka read-only) |
+| `--binary` | tidak disetel | binary lokal kandidat; jika tidak disetel, gunakan container |
+| `--container` | `nyawa-dashboard` | target `docker exec` untuk runtime CLI |
+| `--container-binary` | `/usr/local/bin/nyawa` | path CLI di dalam container |
+| `--snapshot-dir` | `/opt/data/cache/scratch` | lokasi sementara yang dibagikan ke container; snapshot dihapus setelah run |
+| `--db` | `/opt/data/.nyawa/memory.db` | DB sumber, dibuka read-only lalu disnapshot |
 | `--queries` | `queries.tsv` di folder skrip | daftar kueri |
 | `--out-dir` | folder skrip | lokasi output |
 | `--label` | `runtime` | sufiks nama berkas & penanda di JSON |
@@ -140,6 +148,6 @@ Baris diawali `#` adalah komentar.
 ## Menjalankan ulang baseline
 
 Baseline terakhir ada di `BASELINE-<tanggal>.md` + `baseline-<tanggal>.json`.
-Untuk mereproduksi: pastikan binary runtime dan DB pada kondisi yang sama,
-lalu `python3 scripts/recall-bench/bench.py`. Hash binary dan mtime DB
-tercantum di bagian meta tiap hasil.
+Untuk mereproduksi: pastikan container runtime dan DB pada kondisi yang sama,
+lalu `python3 scripts/recall-bench/bench.py`. Hash/version CLI dari container,
+mode eksekusi, dan mtime DB tercantum di metadata hasil.

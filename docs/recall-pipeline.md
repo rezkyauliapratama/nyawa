@@ -306,17 +306,19 @@ This is the A/B escape hatch that reproduces the pre-v2 behaviour exactly:
 
 ## 9. Benchmark harness
 
-`scripts/recall-bench/` measures recall against a live database. It runs a
-fixed query set through a `nyawa` binary, parses the ranked output, and
-computes recall@1, recall@3, recall@5 and MRR. It opens the database read-only
-and never writes. It also probes the FTS5 leg directly, including a `ftsprobe`
-Go helper that reproduces the runtime driver's raw `MATCH` behaviour.
+`scripts/recall-bench/` measures recall from a consistent temporary SQLite/HNSW
+snapshot of the database. By default it runs the `nyawa` CLI in the
+`nyawa-dashboard` container, parses the ranked output, and computes recall@1,
+recall@3, recall@5 and MRR. The source DB is opened read-only; recall can update
+`access_count`, so those updates stay confined to the throwaway snapshot. It also
+probes the FTS5 leg directly, including a `ftsprobe` Go helper that reproduces
+the runtime driver's raw `MATCH` behaviour.
 
 ```bash
-# baseline against the runtime binary
+# default: run the CLI inside nyawa-dashboard
 python3 scripts/recall-bench/bench.py
 
-# a candidate binary, under a separate label so results do not overwrite
+# explicit local candidate binary, under a separate label
 python3 scripts/recall-bench/bench.py --binary ./nyawa-candidate --label candidate
 ```
 
