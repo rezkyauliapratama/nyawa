@@ -874,7 +874,7 @@ func cmdGraph() {
 // reloads the on-disk index, merges vectors written by a running gateway while
 // the reindex was in flight, and writes the union once, atomically.
 func cmdReindex() {
-	dbPath, batchSize, err := parseReindexArgs(os.Args[2:])
+	dbPath, batchSize, maxBatchChars, err := parseReindexArgs(os.Args[2:])
 	if err != nil {
 		log.Fatalf("reindex arguments: %v", err)
 	}
@@ -891,7 +891,7 @@ func cmdReindex() {
 
 	hnsw := s.GetHNSW()
 	before := hnsw.Size()
-	already, reindexed, failed, requests, err := reindexMemoriesBatch(emb, hnsw, mems, batchSize)
+	already, reindexed, failed, requests, err := reindexMemoriesBatch(emb, hnsw, mems, batchSize, maxBatchChars)
 	if err != nil {
 		log.Fatalf("reindex refused: %v", err)
 	}
@@ -915,20 +915,27 @@ func cmdReindex() {
 	fmt.Printf("Reindexed %d memories (%d already indexed, %d failed; %d embedding requests)\n", reindexed, already, failed, requests)
 }
 
-func parseReindexArgs(args []string) (string, int, error) {
+func parseReindexArgs(args []string) (string, int, int, error) {
 	fs := flag.NewFlagSet("reindex", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	batchSize := fs.Int("batch-size", 32, "maximum memories per provider request (1-64)")
+	// Characters per request matter more than item count: a batch of 32 long
+	// memories measured 27.5s against a 30s client timeout, so the default budget
+	// keeps a request well inside it even when every item is at the token cap.
+	maxBatchChars := fs.Int("max-batch-chars", 120000, "maximum characters per provider request (1000-2000000)")
 	if err := fs.Parse(args); err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
 	if fs.NArg() != 1 {
-		return "", 0, fmt.Errorf("usage: nyawa reindex [--batch-size N] <db>")
+		return "", 0, 0, fmt.Errorf("usage: nyawa reindex [--batch-size N] [--max-batch-chars N] <db>")
 	}
 	if *batchSize < 1 || *batchSize > 64 {
-		return "", 0, fmt.Errorf("reindex requires batch-size 1-64")
+		return "", 0, 0, fmt.Errorf("reindex requires batch-size 1-64")
 	}
-	return fs.Arg(0), *batchSize, nil
+	if *maxBatchChars < 1000 || *maxBatchChars > 2_000_000 {
+		return "", 0, 0, fmt.Errorf("reindex requires max-batch-chars 1000-2000000")
+	}
+	return fs.Arg(0), *batchSize, *maxBatchChars, nil
 }
 
 type memoryReindexIndex interface {
@@ -941,12 +948,18 @@ type passageBatchEmbedder interface {
 }
 
 // reindexMemoriesBatch returns already, reindexed, failed and embedding request
-// counts. Non-batch embedders retain the original per-memory behavior.
+// counts. Non-batch embedders retain the original per-memory behavior. A batch is
+// bounded by both item count and character budget, because provider latency scales
+// with tokens rather than items: 32 long memories took 27.5s against a 30s client
+// timeout, while 32 short ones took 0.4s.
 func reindexMemoriesBatch(emb interface {
 	Embed(string) ([]float32, error)
-}, idx memoryReindexIndex, mems []*types.Memory, batchSize int) (already, reindexed, failed, requests int, err error) {
+}, idx memoryReindexIndex, mems []*types.Memory, batchSize, maxBatchChars int) (already, reindexed, failed, requests int, err error) {
 	if batchSize < 1 || batchSize > 64 {
 		return 0, 0, 0, 0, fmt.Errorf("batch size must be 1-64")
+	}
+	if maxBatchChars <= 0 {
+		return 0, 0, 0, 0, fmt.Errorf("max batch chars must be positive")
 	}
 	pending := make([]*types.Memory, 0, len(mems))
 	for _, m := range mems {
@@ -958,12 +971,20 @@ func reindexMemoriesBatch(emb interface {
 	}
 
 	batcher, supportsBatch := emb.(passageBatchEmbedder)
-	for start := 0; start < len(pending); start += batchSize {
-		end := start + batchSize
-		if end > len(pending) {
-			end = len(pending)
+	for start := 0; start < len(pending); {
+		end, chars := start, 0
+		for end < len(pending) && end-start < batchSize {
+			size := len(pending[end].Content)
+			// An oversized single memory is still sent alone: skipping it would
+			// silently leave a hole in the index.
+			if end > start && chars+size > maxBatchChars {
+				break
+			}
+			chars += size
+			end++
 		}
 		batch := pending[start:end]
+		start = end
 		if supportsBatch {
 			texts := make([]string, len(batch))
 			for i, m := range batch {
