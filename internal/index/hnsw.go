@@ -951,6 +951,62 @@ func (h *HNSW) Delete(id string) {
 	}
 }
 
+// IDs returns every node id in the graph, sorted. Callers use it to compare the
+// index against the active memory set without mutating the graph.
+func (h *HNSW) IDs() []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	ids := make([]string, 0, len(h.nodes))
+	for id := range h.nodes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// Compact rebuilds the graph keeping only the nodes accepted by keep and reports
+// how many were dropped.
+//
+// MergeAndSave unions the on-disk graph with memory, so a vector whose memory was
+// superseded survives every reindex indefinitely. Because vectors live only in
+// this file, dropping them means rebuilding from the surviving vectors: no
+// embedding calls, no provider traffic, and a deterministic insert order.
+func (h *HNSW) Compact(keep func(string) bool) (removed, kept int, err error) {
+	if keep == nil {
+		return 0, 0, fmt.Errorf("compact requires a keep predicate")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	ids := make([]string, 0, len(h.nodes))
+	for id := range h.nodes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	rebuilt := NewHNSW(h.config)
+	rebuilt.ragBoundedDegree = h.ragBoundedDegree
+	for _, id := range ids {
+		node := h.nodes[id]
+		if !keep(id) {
+			removed++
+			continue
+		}
+		if err := rebuilt.insertLocked(id, node.Vec); err != nil {
+			return 0, 0, fmt.Errorf("rebuild vector %q: %w", id, err)
+		}
+	}
+	h.nodes = rebuilt.nodes
+	h.graph = rebuilt.graph
+	h.entryPoint = rebuilt.entryPoint
+	h.maxLevel = rebuilt.maxLevel
+	h.rng = rebuilt.rng
+	if h.ragBoundedDegree {
+		h.ragGraphVersion = currentRAGGraphVersion
+	}
+	return removed, len(h.nodes), nil
+}
+
 func (h *HNSW) Size() int { h.mu.RLock(); defer h.mu.RUnlock(); return len(h.nodes) }
 
 // Contains reports whether a node with the given id is already indexed.

@@ -68,6 +68,8 @@ func main() {
 		cmdGraph()
 	case "reindex":
 		cmdReindex()
+	case "hnsw-compact":
+		cmdHNSWCompact()
 	case "rag-reindex":
 		cmdRAGReindex()
 	case "version":
@@ -98,6 +100,7 @@ Usage:
   nyawa dream <db>                        Run Dream Cycle
   nyawa graph <db> <query> [--depth 2] [--limit 10]  Traverse entity graph
   nyawa reindex <db>                      Re-embed memories missing from HNSW
+  nyawa hnsw-compact [--apply] <db>       Drop vectors whose memory is no longer active
   nyawa rag-reindex [--apply] [--batch-size N] [--max-input-chars N] <db>  Backfill dedicated RAG HNSW
   nyawa version                           Show version
 `, version.Number())
@@ -913,6 +916,77 @@ func cmdReindex() {
 			before, coveragePct(before, total), total)
 	}
 	fmt.Printf("Reindexed %d memories (%d already indexed, %d failed; %d embedding requests)\n", reindexed, already, failed, requests)
+}
+
+// cmdHNSWCompact drops vectors whose memory is no longer active.
+//
+// A memory vector exists only inside the HNSW file, so nothing else can reclaim
+// it. MergeAndSave unions the on-disk graph with memory on every reindex, which
+// means a superseded memory keeps its vector indefinitely: the index grows past
+// the active memory count and coverage reports above 100 percent. Rebuilding from
+// the surviving vectors fixes that without embedding anything again.
+func cmdHNSWCompact() {
+	args := os.Args[2:]
+	apply := false
+	dbPath := ""
+	for _, arg := range args {
+		switch {
+		case arg == "--apply":
+			apply = true
+		case strings.HasPrefix(arg, "-"):
+			log.Fatalf("hnsw-compact arguments: unknown flag %q", arg)
+		case dbPath == "":
+			dbPath = arg
+		default:
+			log.Fatalf("hnsw-compact arguments: expected exactly one database path")
+		}
+	}
+	if dbPath == "" {
+		log.Fatalf("hnsw-compact arguments: usage: nyawa hnsw-compact [--apply] <db>")
+	}
+
+	s := getStore(dbPath, nil)
+	defer s.Close()
+
+	mems, err := s.ListAllMemories()
+	if err != nil {
+		log.Fatalf("list memories: %v", err)
+	}
+	active := make(map[string]struct{}, len(mems))
+	for _, m := range mems {
+		active[m.ID] = struct{}{}
+	}
+
+	hnsw := s.GetHNSW()
+	before := hnsw.Size()
+	orphans := 0
+	for _, id := range hnsw.IDs() {
+		if _, ok := active[id]; !ok {
+			orphans++
+		}
+	}
+	if orphans == 0 {
+		fmt.Printf("hnsw-compact: nothing to drop, %d vectors cover %d active memories\n", before, len(active))
+		return
+	}
+	if !apply {
+		fmt.Printf("hnsw-compact: would drop %d of %d vectors, leaving %d for %d active memories; re-run with --apply\n",
+			orphans, before, before-orphans, len(active))
+		return
+	}
+
+	removed, kept, err := hnsw.Compact(func(id string) bool {
+		_, ok := active[id]
+		return ok
+	})
+	if err != nil {
+		log.Fatalf("compact: %v", err)
+	}
+	if err := hnsw.Save(s.GetHNSWPath()); err != nil {
+		log.Fatalf("persist hnsw: %v", err)
+	}
+	log.Printf("hnsw-compact: dropped %d vectors, kept %d", removed, kept)
+	fmt.Printf("Dropped %d vectors (%d kept, %d persisted)\n", removed, kept, kept)
 }
 
 func parseReindexArgs(args []string) (string, int, int, error) {
