@@ -899,3 +899,74 @@ func TestHNSWMergeAndSaveRecoversDiskOnlyNodes(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactDropsVectorsForInactiveIDs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "compact.hnsw")
+	h := NewHNSW(DefaultHNSWConfig(4))
+	for i, id := range []string{"orphan-1", "keep-1", "orphan-2", "keep-2"} {
+		vec := []float32{float32(i), 1, 0, 0}
+		if err := h.Insert(id, vec); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+	if err := h.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded := NewHNSW(DefaultHNSWConfig(4))
+	if err := loaded.Load(path); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	removed, kept, err := loaded.Compact(func(id string) bool {
+		return id == "keep-1" || id == "keep-2"
+	})
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if removed != 2 || kept != 2 {
+		t.Fatalf("expected removed=2 kept=2, got removed=%d kept=%d", removed, kept)
+	}
+	if loaded.Contains("orphan-1") || loaded.Contains("orphan-2") {
+		t.Fatal("inactive vectors survived compaction in memory")
+	}
+	if results := loaded.Search([]float32{1, 1, 0, 0}, 3); len(results) == 0 {
+		t.Fatal("search returned nothing after compaction")
+	}
+
+	// Save must overwrite, not union: a reload has to see exactly the kept set.
+	if err := loaded.Save(path); err != nil {
+		t.Fatalf("save after compact: %v", err)
+	}
+	reloaded := NewHNSW(DefaultHNSWConfig(4))
+	if err := reloaded.Load(path); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if reloaded.Size() != 2 {
+		t.Fatalf("expected 2 persisted vectors, got %d", reloaded.Size())
+	}
+	if reloaded.Contains("orphan-1") {
+		t.Fatal("dropped vector came back after save and reload")
+	}
+}
+
+func TestCompactKeepsEverythingWhenAllIDsAreActive(t *testing.T) {
+	h := NewHNSW(DefaultHNSWConfig(3))
+	for i, id := range []string{"a", "b", "c"} {
+		if err := h.Insert(id, []float32{float32(i), 1, 0}); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+	removed, kept, err := h.Compact(func(string) bool { return true })
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if removed != 0 || kept != 3 {
+		t.Fatalf("expected removed=0 kept=3, got removed=%d kept=%d", removed, kept)
+	}
+}
+
+func TestCompactRequiresKeepPredicate(t *testing.T) {
+	if _, _, err := NewHNSW(DefaultHNSWConfig(3)).Compact(nil); err == nil {
+		t.Fatal("expected an error for a nil keep predicate")
+	}
+}
