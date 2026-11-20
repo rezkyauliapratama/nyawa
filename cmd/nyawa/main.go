@@ -868,19 +868,19 @@ func cmdGraph() {
 }
 
 // cmdReindex embeds every active memory that is missing a vector in the HNSW
-// index and persists the updated index. Existing vectors are left untouched
-// (HNSW.Contains guards against duplicates).
+// index and persists the updated index. Existing vectors are left untouched.
 //
 // Persisting goes through HNSW.MergeAndSave: under the cross-process lock it
 // reloads the on-disk index, merges vectors written by a running gateway while
 // the reindex was in flight, and writes the union once, atomically.
 func cmdReindex() {
-	if len(os.Args) < 3 {
-		log.Fatal("usage: nyawa reindex <db>")
+	dbPath, batchSize, err := parseReindexArgs(os.Args[2:])
+	if err != nil {
+		log.Fatalf("reindex arguments: %v", err)
 	}
 	emb := mustGetEmbedder()
 	defer emb.StopAll()
-	s := getStore(os.Args[2], emb)
+	s := getStore(dbPath, emb)
 	defer s.Close()
 
 	mems, err := s.ListAllMemories()
@@ -891,24 +891,9 @@ func cmdReindex() {
 
 	hnsw := s.GetHNSW()
 	before := hnsw.Size()
-	already, reindexed, failed := 0, 0, 0
-	for _, m := range mems {
-		if hnsw.Contains(m.ID) {
-			already++
-			continue
-		}
-		v, e := emb.Embed(m.Content)
-		if e != nil || len(v) == 0 {
-			if errors.Is(e, embedder.ErrEmbeddingDimensionMismatch) {
-				log.Fatalf("reindex refused: %v", e)
-			}
-			failed++
-			continue
-		}
-		if err := hnsw.Insert(m.ID, v); err != nil {
-			log.Fatalf("reindex refused: %v", err)
-		}
-		reindexed++
+	already, reindexed, failed, requests, err := reindexMemoriesBatch(emb, hnsw, mems, batchSize)
+	if err != nil {
+		log.Fatalf("reindex refused: %v", err)
 	}
 	after := hnsw.Size()
 
@@ -927,7 +912,106 @@ func cmdReindex() {
 		log.Printf("hnsw: nothing to reindex, %d vectors in memory (coverage %.1f%% of %d active memories)",
 			before, coveragePct(before, total), total)
 	}
-	fmt.Printf("Reindexed %d memories (%d already indexed, %d failed)\n", reindexed, already, failed)
+	fmt.Printf("Reindexed %d memories (%d already indexed, %d failed; %d embedding requests)\n", reindexed, already, failed, requests)
+}
+
+func parseReindexArgs(args []string) (string, int, error) {
+	fs := flag.NewFlagSet("reindex", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	batchSize := fs.Int("batch-size", 32, "maximum memories per provider request (1-64)")
+	if err := fs.Parse(args); err != nil {
+		return "", 0, err
+	}
+	if fs.NArg() != 1 {
+		return "", 0, fmt.Errorf("usage: nyawa reindex [--batch-size N] <db>")
+	}
+	if *batchSize < 1 || *batchSize > 64 {
+		return "", 0, fmt.Errorf("reindex requires batch-size 1-64")
+	}
+	return fs.Arg(0), *batchSize, nil
+}
+
+type memoryReindexIndex interface {
+	Contains(string) bool
+	Insert(string, []float32) error
+}
+
+type passageBatchEmbedder interface {
+	EmbedPassages([]string) ([][]float32, error)
+}
+
+// reindexMemoriesBatch returns already, reindexed, failed and embedding request
+// counts. Non-batch embedders retain the original per-memory behavior.
+func reindexMemoriesBatch(emb interface {
+	Embed(string) ([]float32, error)
+}, idx memoryReindexIndex, mems []*types.Memory, batchSize int) (already, reindexed, failed, requests int, err error) {
+	if batchSize < 1 || batchSize > 64 {
+		return 0, 0, 0, 0, fmt.Errorf("batch size must be 1-64")
+	}
+	pending := make([]*types.Memory, 0, len(mems))
+	for _, m := range mems {
+		if idx.Contains(m.ID) {
+			already++
+			continue
+		}
+		pending = append(pending, m)
+	}
+
+	batcher, supportsBatch := emb.(passageBatchEmbedder)
+	for start := 0; start < len(pending); start += batchSize {
+		end := start + batchSize
+		if end > len(pending) {
+			end = len(pending)
+		}
+		batch := pending[start:end]
+		if supportsBatch {
+			texts := make([]string, len(batch))
+			for i, m := range batch {
+				texts[i] = m.Content
+			}
+			vectors, batchErr := batcher.EmbedPassages(texts)
+			requests++
+			if batchErr != nil {
+				if errors.Is(batchErr, embedder.ErrEmbeddingDimensionMismatch) {
+					return already, reindexed, failed, requests, batchErr
+				}
+				failed += len(batch)
+				continue
+			}
+			if len(vectors) != len(batch) {
+				failed += len(batch)
+				continue
+			}
+			for i, vector := range vectors {
+				if len(vector) == 0 {
+					failed++
+					continue
+				}
+				if insertErr := idx.Insert(batch[i].ID, vector); insertErr != nil {
+					return already, reindexed, failed, requests, insertErr
+				}
+				reindexed++
+			}
+			continue
+		}
+
+		for _, m := range batch {
+			vector, embedErr := emb.Embed(m.Content)
+			requests++
+			if embedErr != nil || len(vector) == 0 {
+				if errors.Is(embedErr, embedder.ErrEmbeddingDimensionMismatch) {
+					return already, reindexed, failed, requests, embedErr
+				}
+				failed++
+				continue
+			}
+			if insertErr := idx.Insert(m.ID, vector); insertErr != nil {
+				return already, reindexed, failed, requests, insertErr
+			}
+			reindexed++
+		}
+	}
+	return already, reindexed, failed, requests, nil
 }
 
 func cmdRAGReindex() {
