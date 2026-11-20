@@ -1000,16 +1000,29 @@ func cmdRAGReindex() {
 	if err != nil || ragMode != ragEmbedderAPI {
 		log.Fatal("rag-reindex --apply requires RAG_EMBEDDER=api")
 	}
-	if model != ragDefaultAPIModel || baseURL != ragDefaultAPIBaseURL || !tasks {
-		log.Fatal("rag-reindex --apply requires the approved Jina v3 endpoint and retrieval task profile")
+	// Validate the profile that is actually configured instead of hardcoding the
+	// hosted Jina v3 endpoint. A self-hosted OpenAI-compatible embedder (for
+	// example a sidecar on the private network) is a legitimate backfill target,
+	// so the authoritative check is that the embedder the reindex builds matches
+	// the model, base URL, and dimensions the database will be queried with.
+	wantDims, err := strconv.Atoi(dimensions)
+	if err != nil || wantDims <= 0 {
+		log.Fatalf("rag-reindex requires a positive EMBEDDING_DIMS, got %q", dimensions)
 	}
 	emb, profile, err := newRAGAPIEmbedder(os.Getenv)
 	if err != nil {
 		log.Fatalf("initialize RAG API embedder: %v", err)
 	}
 	defer emb.StopAll()
-	if profile.Model != ragDefaultAPIModel || profile.Dimensions != ragDefaultAPIDims || profile.QueryTask != embedder.TaskRetrievalQuery || profile.PassageTask != embedder.TaskRetrievalPassage {
-		log.Fatalf("rag-reindex profile mismatch: model=%s dimensions=%d query_task=%q passage_task=%q", profile.Model, profile.Dimensions, profile.QueryTask, profile.PassageTask)
+	expectation := ragReindexProfileExpectation{
+		Model:      model,
+		BaseURL:    baseURL,
+		Dimensions: wantDims,
+		Tasks:      tasks,
+		TaskMode:   mode,
+	}
+	if err := expectation.validate(profile); err != nil {
+		log.Fatalf("rag-reindex profile mismatch: %v", err)
 	}
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
@@ -1032,6 +1045,34 @@ func cmdRAGReindex() {
 	}
 	fmt.Printf("RAG backfill complete: chunks=%d indexed=%d input_chars=%d provider_batches=%d index_vectors=%d\n",
 		result.TotalChunks, result.IndexedChunks, result.InputCharacters, result.ProviderBatches, ragStore.Stats()["rag_index_vectors"])
+}
+
+// ragReindexProfileExpectation is the profile the operator configured for this
+// backfill. It is compared against the profile the embedder actually reports so
+// the index can never be built with a shape the serving path will not use.
+type ragReindexProfileExpectation struct {
+	Model      string
+	BaseURL    string
+	Dimensions int
+	Tasks      bool
+	TaskMode   string
+}
+
+func (e ragReindexProfileExpectation) validate(profile rag.EmbeddingProfile) error {
+	if profile.Model != e.Model {
+		return fmt.Errorf("model=%s expected=%s", profile.Model, e.Model)
+	}
+	if strings.TrimRight(profile.BaseURL, "/") != strings.TrimRight(e.BaseURL, "/") {
+		return fmt.Errorf("base_url=%s expected=%s", profile.BaseURL, e.BaseURL)
+	}
+	if profile.Dimensions != e.Dimensions {
+		return fmt.Errorf("dimensions=%d expected=%d", profile.Dimensions, e.Dimensions)
+	}
+	if e.Tasks && (profile.QueryTask != embedder.TaskRetrievalQuery || profile.PassageTask != embedder.TaskRetrievalPassage) {
+		return fmt.Errorf("task_mode=%s requires retrieval query/passage tasks, got %q/%q",
+			e.TaskMode, profile.QueryTask, profile.PassageTask)
+	}
+	return nil
 }
 
 func sqliteReadOnlyDSN(dbPath string) string {
