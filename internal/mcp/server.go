@@ -94,6 +94,7 @@ func (s *Server) tools() []toolDefinition {
 				"limit":         {Type: "number", Description: "Max results after filtering (default 10)."},
 				"min_score":     {Type: "number", Description: "Drop results scoring below this threshold; 0 disables."},
 				"exclude_types": {Type: "array", Items: &propertySchema{Type: "string"}, Description: "Memory types to omit, e.g. [\"note\",\"conversation\"]."},
+				"at":            {Type: "string", Description: "Point-in-time recall: RFC3339 timestamp. Only memories that already existed and were still valid at that instant."},
 			}, Required: []string{"query"}}},
 		{Name: "nyawa_stats", Description: "Memory statistics.",
 			InputSchema: inputSchema{Type: "object", Properties: map[string]propertySchema{}}},
@@ -302,6 +303,7 @@ type recallArgs struct {
 	Limit        float64  `json:"limit"`
 	MinScore     float64  `json:"min_score"`
 	ExcludeTypes []string `json:"exclude_types"`
+	At           string   `json:"at"`
 }
 
 func (s *Server) handleRecall(id any, raw json.RawMessage) {
@@ -324,6 +326,18 @@ func (s *Server) handleRecall(id any, raw json.RawMessage) {
 		Limit:        limit,
 		MinScore:     args.MinScore,
 		ExcludeTypes: args.ExcludeTypes,
+	}
+	// Point-in-time recall. The store already filters on created_at and
+	// superseded_at; this only exposes it. An unparsable value is rejected
+	// rather than ignored, because silently returning present-day memories for a
+	// past instant is worse than an error.
+	if args.At != "" {
+		at, atErr := time.Parse(time.RFC3339, args.At)
+		if atErr != nil {
+			s.writeError(id, -32602, "at must be an RFC3339 timestamp such as 2026-11-01T00:00:00Z")
+			return
+		}
+		q.TimeTravel = &at
 	}
 	results, err := s.pipeline.Search(q)
 	if err != nil {
