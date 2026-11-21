@@ -247,9 +247,32 @@ func (e *Engine) phaseLink() int {
 	return linked
 }
 
+// phasePriority nudges importance up for memories that keep being used and down
+// for memories nobody touches, so phaseEvict has a value it can act on.
+//
+// It previously read `LEAST(...)`/`GREATEST(...)`, which are MySQL/Postgres
+// functions. SQLite has neither - its scalar equivalents are `min()`/`max()` -
+// so both statements failed with "no such function: LEAST". The errors were
+// discarded (`r1, _ :=`) and a failed Exec leaves a nil Result, so both counters
+// stayed zero and every cycle logged `pr=0`. Nothing surfaced the failure.
+//
+// The damage was not cosmetic: importance never decayed, the old cohort stayed at
+// 0.5, and phaseEvict's `importance < ImportanceThreshold` never matched. That is
+// why every cycle also logged `ev=0`, and why stale memories were never evicted.
+//
+// Two smaller defects are fixed here too:
+//   - the decay cutoff was compared against `datetime('now','-7 days')`, which
+//     renders as "2026-11-14 11:02:09" (space) while created_at is RFC3339
+//     "2026-11-14T11:02:09Z" ('T'). On the boundary day 'T' > ' ', so rows on the
+//     cutoff day sorted the wrong way. Both sides now use RFC3339.
+//   - rows already sitting on a clamp were rewritten every cycle. The boundary
+//     guards keep thousands of no-op updates per cycle out of the write path.
 func (e *Engine) phasePriority() int {
-	r1, _ := e.db.Exec(`UPDATE memories SET importance=LEAST(1.0,importance+0.05) WHERE superseded_at IS NULL AND access_count>5 AND pinned=0`)
-	r2, _ := e.db.Exec(`UPDATE memories SET importance=GREATEST(0.1,importance-0.02) WHERE superseded_at IS NULL AND access_count=0 AND created_at<datetime('now','-7 days') AND pinned=0`)
+	decayCutoff := time.Now().AddDate(0, 0, -7).UTC().Format(time.RFC3339)
+	r1, err1 := e.db.Exec(`UPDATE memories SET importance=min(1.0,importance+0.05) WHERE superseded_at IS NULL AND access_count>5 AND pinned=0 AND importance<1.0`)
+	if err1 != nil { log.Printf("Dream priority: boost failed: %v", err1) }
+	r2, err2 := e.db.Exec(`UPDATE memories SET importance=max(0.1,importance-0.02) WHERE superseded_at IS NULL AND access_count=0 AND created_at<? AND pinned=0 AND importance>0.1`, decayCutoff)
+	if err2 != nil { log.Printf("Dream priority: decay failed: %v", err2) }
 	var n1, n2 int64
 	if r1 != nil { n1, _ = r1.RowsAffected() }
 	if r2 != nil { n2, _ = r2.RowsAffected() }
